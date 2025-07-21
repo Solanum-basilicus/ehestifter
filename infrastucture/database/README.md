@@ -25,16 +25,4 @@ sqlcmd -S <server>.database.windows.net -d <dbname> -U <user> -P <pass> -i deplo
 ```
 Ensure sqlcmd is installed and your IP is whitelisted in Azure SQL Firewall.
 
-Alternatively use az:
-```bash
-az sql db query \
-  --resource-group <your-resource-group> \
-  --server <your-sql-server> \
-  --name <your-database-name> \
-  --query-text "@deploy.sql"
-```  
-
-Note: This requires the SQL extension for Azure CLI:
-```bash
-az extension add --name sql
-```
+Or just run each script individually over your DB connection.
