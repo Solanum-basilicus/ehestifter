@@ -11,8 +11,7 @@ on:
   workflow_dispatch:
 
 env:
-  AZURE_FUNCTIONAPP_PACKAGE_PATH: './backend/job_api' # set this to the path to your web app project, defaults to the repository root
-  PYTHON_VERSION: '3.11' # set this to the python version to use (supports 3.6, 3.7, 3.8)
+  PYTHON_VERSION: '3.11'
 
 jobs:
   build:
@@ -30,24 +29,21 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Create and activate virtual environment
-        working-directory: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
+        working-directory: backend/job_api
         run: |
           python -m venv venv
           source venv/bin/activate
           pip install -r requirements.txt
 
-      - name: Zip artifact for deployment
-        working-directory: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
-        run: |
-          zip -r ../../release.zip .
+      - name: Zip Function App contents
+        working-directory: backend/job_api
+        run: zip -r ../../release.zip .
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
         with:
           name: python-app
-          path: |
-            release.zip
-            !venv/
+          path: release.zip
 
   deploy:
     runs-on: ubuntu-latest
@@ -74,9 +70,7 @@ jobs:
 
       - name: 'Deploy to Azure Functions'
         uses: Azure/functions-action@v1
-        id: deploy-to-function
         with:
           app-name: 'ehestiftercrud'
           slot-name: 'Production'
-          package: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
-          
+          package: release.zip
