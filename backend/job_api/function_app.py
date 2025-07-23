@@ -26,6 +26,10 @@ async def handle_update_job(req: func.HttpRequest) -> func.HttpResponse:
 async def handle_delete_job(req: func.HttpRequest) -> func.HttpResponse:
     return await delete_job.delete_job(req)
 
+@app.route(route="ping", methods=["GET"])
+async def ping(req: func.HttpRequest) -> func.HttpResponse:
+    return func.HttpResponse("pong")
+
 @app.route(route="pharaoh", auth_level=func.AuthLevel.FUNCTION)
 def post_job(req: func.HttpRequest) -> func.HttpResponse:
     logging.info('Python HTTP trigger function processed a request.')
