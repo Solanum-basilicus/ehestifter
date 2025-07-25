@@ -56,12 +56,10 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          
+
       - name: Zip and upload for manual inspection
-        run: |
-          cd ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
-          zip -r ../../debug-release.zip .
-        working-directory: ./backend/job_api
+        working-directory: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
+        run: zip -r ../../debug-release.zip .
 
       - name: Upload zipped content
         uses: actions/upload-artifact@v4
