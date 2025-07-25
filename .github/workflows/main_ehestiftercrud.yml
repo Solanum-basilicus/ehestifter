@@ -42,6 +42,8 @@ jobs:
           scm-do-build-during-deployment: true
           enable-oryx-build: true
           remote-build: true
+
+          
   arciver-for-debug:
     runs-on: ubuntu-latest
     permissions:
@@ -57,12 +59,8 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Zip and upload for manual inspection
-        working-directory: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
-        run: zip -r ../../debug-release.zip .
-
       - name: Upload zipped content
         uses: actions/upload-artifact@v4
         with:
           name: debug-release
-          path: debug-release.zip    
+          path: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}  
