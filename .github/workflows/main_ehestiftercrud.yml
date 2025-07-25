@@ -40,3 +40,31 @@ jobs:
           slot-name: 'Production'
           package: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
           scm-do-build-during-deployment: true
+          enable-oryx-build: true
+          remote-build: true
+  arciver-for-debug:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python version
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          
+      - name: Zip and upload for manual inspection
+        run: |
+          cd ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
+          zip -r ../../debug-release.zip .
+        working-directory: ./backend/job_api
+
+      - name: Upload zipped content
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-release
+          path: debug-release.zip    
