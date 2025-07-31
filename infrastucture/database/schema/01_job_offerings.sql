@@ -32,7 +32,8 @@ BEGIN
 
         -- Maintenance
         CreatedAt DATETIME2 DEFAULT SYSDATETIME(),
-        UpdatedAt DATETIME2 NULL
+        UpdatedAt DATETIME2 NULL,
+        IsDeleted BIT DEFAULT 0
     );
 END
 
