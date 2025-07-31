@@ -3,7 +3,7 @@ name: Build and deploy to Azure Function App - ehestiftercrud
 on:
   push:
     branches:
-      - main
+      - ignored
   workflow_dispatch:
 
 env:
