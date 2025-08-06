@@ -1,0 +1,5 @@
+<!doctype html>
+<title>My Info</title>
+<h1>Your Info</h1>
+<pre>{{ user | tojson(indent=2) }}</pre>
+<a href="{{ url_for('logout') }}">Logout</a>
