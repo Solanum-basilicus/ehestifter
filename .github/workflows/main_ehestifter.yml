@@ -7,7 +7,7 @@ name: Build and deploy Python app to Azure Web App - ehestifter
 on:
   push:
     branches:
-      - main
+      - ignored
   workflow_dispatch:
 
 jobs:
