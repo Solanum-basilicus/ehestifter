@@ -1,0 +1,41 @@
+name: Deploy Users Function via Oryx (Python v1-decorators)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'backend/users/**'
+  workflow_dispatch:
+
+env:
+  AZURE_FUNCTIONAPP_PACKAGE_PATH: './backend/users' # must be root where host.json is
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_AB84C430D6E94FEC8E29C68C1EC1AD8F }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_5F8A2B156FE340E98DE291A274392AF1 }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_8A86749148424B63AD5A8913658C2A7A }}
+
+      - name: Deploy to Azure Functions using Oryx
+        uses: Azure/functions-action@v1
+        with:
+          app-name: 'ehestifter-users'
+          slot-name: 'Production'
+          package: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
+          scm-do-build-during-deployment: true
+          remote-build: true
+          enable-oryx-build: true

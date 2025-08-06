@@ -7,7 +7,7 @@ name: Build and deploy Python project to Azure Function App - ehestifter-users
 on:
   push:
     branches:
-      - main
+      - ignored
   workflow_dispatch:
 
 env:
