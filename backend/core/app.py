@@ -40,12 +40,14 @@ def build_auth_url():
 
 @app.route("/")
 def index():
+    logging.info(f"User hit root giving index or redirecting to /me if logged in.")
     if not session.get("user"):
         return render_template("index.html")
     return redirect(url_for("me"))
 
 @app.route("/login")
 def login():
+    logging.info(f"User hit /login, redirecting to the auth flow.")
     return redirect(build_auth_url())
 
 @app.route(auth_config["REDIRECT_PATH"])
