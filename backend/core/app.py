@@ -23,7 +23,7 @@ auth_config = {
     "MICROSOFT_PROVIDER_AUTHENTICATION_SECRET": os.environ["MICROSOFT_PROVIDER_AUTHENTICATION_SECRET"],
     "AUTHORITY": os.environ["AUTHORITY"],
     #"REDIRECT_PATH": "/getAToken",
-    "REDIRECT_PATH": ".auth/login/aad/callback",
+    "REDIRECT_PATH": "/.auth/login/aad/callback",
     "SCOPE": os.environ["SCOPE"].split()
 }
 
