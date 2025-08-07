@@ -43,9 +43,8 @@ def build_auth_url():
 @app.route("/")
 def index():
     logging.info(f"User hit root giving index or redirecting to /me if logged in.")
-    if not session.get("user"):
-        return render_template("index.html")
-    return redirect(url_for("me"))
+    user = session.get("user")
+    return render_template("index.html", user=user, now=datetime.utcnow())
 
 @app.route("/login")
 def login():
@@ -75,11 +74,10 @@ def authorized():
 
 @app.route("/me")
 def me():
-    if not session.get("user"):
-        return redirect(url_for("index"))
-    else:
-        return f"Login failed: {result.get('error')}<br>{result.get('error_description')}"
-    return render_template("me.html", user=session["user"])
+    user = session.get("user")
+    if not user:
+        return render_template("me.html", user=None, now=datetime.utcnow())
+    return render_template("me.html", user=user, now=datetime.utcnow())
 
 @app.route("/logout")
 def logout():
@@ -95,6 +93,7 @@ def debug_env():
         "AUTHORITY": os.environ.get("AUTHORITY"),
         "CLIENT_ID": os.environ.get("CLIENT_ID"),
         "SCOPE": os.environ.get("SCOPE"),
+        "SESSION": dict(session),
     }
 
 if __name__ == '__main__':

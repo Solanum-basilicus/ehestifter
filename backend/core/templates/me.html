@@ -1,5 +1,12 @@
 <!doctype html>
-<title>My Info</title>
-<h1>Your Info</h1>
-<pre>{{ user | tojson(indent=2) }}</pre>
-<a href="{{ url_for('logout') }}">Logout</a>
+<title>User Info</title>
+<h1>User Info</h1>
+{% if user %}
+  <pre>{{ user | tojson(indent=2) }}</pre>
+  <a href="{{ url_for('logout') }}">Logout</a>
+{% else %}
+  <p>No user in session.</p>
+  <a href="{{ url_for('index') }}">Back to home</a>
+{% endif %}
+<p> </p>
+<p>Time: {{ now }}</p>
