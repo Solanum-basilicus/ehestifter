@@ -17,7 +17,7 @@ auth_config = {
     "CLIENT_SECRET": os.environ["CLIENT_SECRET"],
     "AUTHORITY": os.environ["AUTHORITY"],
     "REDIRECT_PATH": "/getAToken",
-    "SCOPE": ["User.Read"],  # Or whatever your app exposes
+    "SCOPE": os.environ["SCOPE"].split()
 }
 
 def build_msal_app(cache=None):
