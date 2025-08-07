@@ -20,9 +20,10 @@ Session(app)
 # MSAL / Entra ID Config
 auth_config = {
     "CLIENT_ID": os.environ["CLIENT_ID"],
-    "CLIENT_SECRET": os.environ["CLIENT_SECRET"],
+    "MICROSOFT_PROVIDER_AUTHENTICATION_SECRET": os.environ["MICROSOFT_PROVIDER_AUTHENTICATION_SECRET"],
     "AUTHORITY": os.environ["AUTHORITY"],
-    "REDIRECT_PATH": "/getAToken",
+    #"REDIRECT_PATH": "/getAToken",
+    "REDIRECT_PATH": ".auth/login/aad/callback",
     "SCOPE": os.environ["SCOPE"].split()
 }
 
@@ -30,7 +31,7 @@ def build_msal_app(cache=None):
     return msal.ConfidentialClientApplication(
         auth_config["CLIENT_ID"],
         authority=auth_config["AUTHORITY"],
-        client_credential=auth_config["CLIENT_SECRET"],
+        client_credential=auth_config["MICROSOFT_PROVIDER_AUTHENTICATION_SECRET"],
         token_cache=cache
     )
 
