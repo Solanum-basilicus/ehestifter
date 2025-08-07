@@ -4,6 +4,7 @@ from flask_session import Session
 import msal
 import uuid
 import logging
+from datetime import datetime
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
