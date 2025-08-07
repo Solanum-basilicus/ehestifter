@@ -61,6 +61,8 @@ def authorized():
 def me():
     if not session.get("user"):
         return redirect(url_for("index"))
+    else:
+        return f"Login failed: {result.get('error')}<br>{result.get('error_description')}"
     return render_template("me.html", user=session["user"])
 
 @app.route("/logout")
