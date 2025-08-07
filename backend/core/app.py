@@ -3,6 +3,9 @@ from flask import Flask, session, redirect, url_for, render_template, request
 from flask_session import Session
 import msal
 import uuid
+import logging
+
+logging.basicConfig(level=logging.DEBUG)
 
 app = Flask(__name__)
 
@@ -55,6 +58,10 @@ def authorized():
     )
     if "id_token_claims" in result:
         session["user"] = result["id_token_claims"]
+    else:
+        logging.error(f"MSAL login error: {result}")
+        return f"Login failed: {result.get('error')}<br>{result.get('error_description')}"
+
     return redirect(url_for("me"))
 
 @app.route("/me")
