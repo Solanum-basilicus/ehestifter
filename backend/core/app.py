@@ -1,3 +1,4 @@
+import os
 from flask import Flask, session, redirect, url_for, render_template, request
 from flask_session import Session
 import msal
