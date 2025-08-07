@@ -6,6 +6,8 @@ import uuid
 import logging
 
 logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.StreamHandler())
 
 app = Flask(__name__)
 
@@ -47,8 +49,13 @@ def index():
 
 @app.route("/login")
 def login():
-    logging.info(f"User hit /login, redirecting to the auth flow.")
-    return redirect(build_auth_url())
+    try:
+        login_url = build_auth_url()
+        logging.debug(f"Redirecting to login URL: {login_url}")
+        return redirect(login_url)
+    except Exception as e:
+        logging.exception("Failed to build login URL")
+        return f"Internal error during login. Exception: {e}"
 
 @app.route(auth_config["REDIRECT_PATH"])
 def authorized():
@@ -81,6 +88,14 @@ def logout():
         auth_config["AUTHORITY"] + "/oauth2/v2.0/logout" +
         f"?post_logout_redirect_uri={url_for('index', _external=True)}"
     )
+
+@app.route("/debug/env")
+def debug_env():
+    return {
+        "AUTHORITY": os.environ.get("AUTHORITY"),
+        "CLIENT_ID": os.environ.get("CLIENT_ID"),
+        "SCOPE": os.environ.get("SCOPE"),
+    }
 
 if __name__ == '__main__':
     app.run(debug=True)
