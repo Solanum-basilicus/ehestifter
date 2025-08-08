@@ -35,27 +35,43 @@ def get_or_create_user(req: func.HttpRequest) -> func.HttpResponse:
     logging.info('USERS/ME processed a request.')
 
     try:
-        # Extract B2CObjectId from request header
-        b2c_object_id = req.headers.get("x-user-sub")  # Injected by proxy
+        b2c_object_id = req.headers.get("x-user-sub")
         if not b2c_object_id:
             return func.HttpResponse("Unauthorized", status_code=401)
+
+        email = req.headers.get("x-user-email", None)
+        username = req.headers.get("x-user-name", None)
 
         conn = get_connection()
         cursor = conn.cursor()
 
-        cursor.execute("SELECT Id FROM Users WHERE B2CObjectId = ?", b2c_object_id)
+        cursor.execute("""
+            SELECT Id, Email, Username, Role 
+            FROM Users 
+            WHERE B2CObjectId = ?
+        """, b2c_object_id)
         row = cursor.fetchone()
 
         if row:
-            user_id = str(row[0])
+            user_id, email, username, role = row
         else:
             cursor.execute("""
-                INSERT INTO Users (B2CObjectId) OUTPUT inserted.Id VALUES (?)
-            """, b2c_object_id)
-            user_id = str(cursor.fetchone()[0])
+                INSERT INTO Users (B2CObjectId, Email, Username)
+                OUTPUT inserted.Id, inserted.Email, inserted.Username, inserted.Role
+                VALUES (?, ?, ?)
+            """, b2c_object_id, email, username)
+            user_id, email, username, role = cursor.fetchone()
             conn.commit()
 
-        return func.HttpResponse(json.dumps({"userId": user_id}), status_code=200, mimetype="application/json")
+        user_data = {
+            "userId": str(user_id),
+            "email": email,
+            "username": username,
+            "role": role
+        }
+
+        return func.HttpResponse(json.dumps(user_data), status_code=200, mimetype="application/json")
+
     except ValueError:
         return func.HttpResponse("Invalid JSON", status_code=400)        
     except Exception as e:

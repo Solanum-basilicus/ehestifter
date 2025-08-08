@@ -9,5 +9,12 @@
   <a href="{{ url_for('identity.login') }}">Login</a>
   <a href="{{ url_for('index') }}">Back to home</a>
 {% endif %}
+{% if in_app_user %}
+  <h2>Hello {{ in_app_user.name }}</h2>
+  <p>Email: {{ in_app_user.email }}</p>
+  <p>Created At: {{ in_app_user.created_at }}</p>
+{% else %}
+  <p>App know you not, interloper.</p>
+{% endif %}
 <p> </p>
 <p>Time: {{ now }}</p>
