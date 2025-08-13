@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>{{ title }}</title>
+  <style>
+    dt { font-weight: 600; }
+    dd { margin: 0 0 8px 0; }
+    .kv { display: grid; grid-template-columns: 220px 1fr; gap: 6px 14px; }
+    .muted { opacity:.8; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+  </style>
+</head>
+<body>
+  <div id="user-bar" style="text-align: right; padding: 10px;">
+    <span id="user-link" style="opacity:.6">Loading user…</span>
+    <p>Updated at: {{ now }}</p>
+    <a href="{{ url_for('identity.logout') }}">Logout</a>
+  </div>
+
+  <div id="job-offering-details" aria-busy="true">
+    <h2 id="job-title">Loading job…</h2>
+    <p class="muted">Job ID: <span id="job-id">{{ job_id }}</span></p>
+
+    <div class="kv" id="job-dl"></div>
+
+    <p id="job-error" class="muted" hidden></p>
+  </div>
+
+  <br>
+  <a href="{{ url_for('index') }}">Back to list</a>
+
+  <details>
+    <summary><p style="display:inline">Debug info</p></summary>
+    <h3>MSAL claims (server)</h3>
+    <pre>{{ user | tojson(indent=2) }}</pre>
+
+    <h3>Raw job (API)</h3>
+    <pre id="dbg-job" style="min-height:4rem; opacity:.7">Loading...</pre>
+  </details>
+  <hr>
+  <footer style="text-align: right">{{ title }}</footer>
+</body>
+</html>
+
+<script>
+(function(){
+  // Tiny time helpers (same as index; can be shared via /static/js/time.js)
+  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+  const dfHM = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+  const dfDM = new Intl.DateTimeFormat(undefined, { day: '2-digit', month: 'short' });
+  const dfDMY = new Intl.DateTimeFormat(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
+  function formatWhen(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d)) return iso;
+    const now = new Date();
+    const absMin = Math.abs(d - now) / 60000;
+    if (absMin < 15) return 'just now';
+    if (d.toDateString() === now.toDateString()) return dfHM.format(d);
+    const absDays = Math.abs(d - now) / 86400000;
+    if (absDays < 7) return `${dfDM.format(d)} at ${dfHM.format(d)}`;
+    if (d.getFullYear() === now.getFullYear()) return dfDM.format(d);
+    return dfDMY.format(d);
+  }
+
+  const userLink = document.getElementById('user-link');
+  const dbgJob = document.getElementById('dbg-job');
+  const box = document.getElementById('job-offering-details');
+  const titleEl = document.getElementById('job-title');
+  const dl = document.getElementById('job-dl');
+  const errEl = document.getElementById('job-error');
+  const jobId = document.getElementById('job-id').textContent.trim();
+
+  function setBusy(b){ box?.setAttribute('aria-busy', b ? 'true' : 'false'); }
+
+  async function fetchWithRetry(url, attempts = 4) {
+    let delay = 500;
+    for (let i = 1; i <= attempts; i++) {
+      try {
+        const resp = await fetch(url, { credentials:'same-origin' });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        return await resp.json();
+      } catch (err) {
+        if (i === attempts) throw err;
+        await new Promise(r => setTimeout(r, delay));
+        delay *= 2;
+      }
+    }
+  }
+
+  function renderKV(obj) {
+    dl.innerHTML = '';
+    const entries = Object.entries(obj || {});
+    if (entries.length === 0) {
+      dl.innerHTML = `<div class="muted">No data</div>`;
+      return;
+    }
+    for (const [k, v] of entries) {
+      const dt = document.createElement('div');
+      dt.innerHTML = `<dt>${k}</dt>`;
+      const dd = document.createElement('div');
+      let val = v;
+      if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v)) {
+        dd.innerHTML = `<dd><span class="mono" title="${v}">${formatWhen(v)}</span></dd>`;
+      } else if (typeof v === 'string' && v.length > 300) {
+        dd.innerHTML = `<dd><span class="mono" title="${v.replaceAll('"','&quot;')}">${v.slice(0,300)}…</span></dd>`;
+      } else {
+        dd.innerHTML = `<dd><span class="mono">${(v ?? '').toString()}</span></dd>`;
+      }
+      dl.appendChild(dt);
+      dl.appendChild(dd);
+    }
+  }
+
+  async function init() {
+    try {
+      const data = await fetchWithRetry(`/ui/users/me`, 4).catch(()=>null);
+      if (data && !data.error) {
+        const username = (data.username || data.email || 'me');
+        userLink.outerHTML = `<a href="{{ url_for('me') }}">To profile: ${username}</a>`;
+      } else {
+        userLink.outerHTML = `<span style="opacity:.8">User info unavailable</span>`;
+      }
+    } catch { /* no-op */ }
+
+    try {
+      const job = await fetchWithRetry(`/ui/jobs/${encodeURIComponent(jobId)}`, 4);
+      if (dbgJob) { dbgJob.style.opacity = 1; dbgJob.textContent = JSON.stringify(job, null, 2); }
+
+      if (job?.error === 'not_found') {
+        errEl.hidden = false;
+        errEl.textContent = 'Job not found';
+        titleEl.textContent = 'Not found';
+        return;
+      }
+
+      titleEl.textContent = job?.Title || '(no title)';
+      renderKV(job);
+    } catch (e) {
+      console.error('job load error', e);
+      errEl.hidden = false;
+      errEl.textContent = e?.message || 'Failed to load';
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', init);
+})();
+</script>

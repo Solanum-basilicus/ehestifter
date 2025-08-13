@@ -3,9 +3,23 @@
 <head>
     <meta charset="UTF-8">
     <title>{{ title }}</title>
+    <style>
+      table { border-collapse: collapse; width: 100%; }
+      th, td { border: 1px solid #ddd; padding: 8px; vertical-align: top; }
+      th { background: #f7f7f7; text-align: left; position: sticky; top: 0; }
+      .toolbar { display:flex; justify-content: space-between; align-items: center; margin: 10px 0; gap: 10px; }
+      .pager { display:flex; align-items:center; gap:6px; }
+      .muted { opacity:.7 }
+      .truncate { max-width: 48ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; vertical-align: bottom; }
+      .hidden { display:none; }
+      .title-link { font-weight: 600; text-decoration: none; }
+      .title-link:hover { text-decoration: underline; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    </style>
 </head>
+
 <body>
-  <h2>Welcome to Ehestifter, {{ user.get("name") }}!</h2>
+  <h2>Welcome to {{ title }}, {{ user.get("name") }}!</h2>
 
   <div id="user-bar" style="text-align: right; padding: 10px;">
     <span id="user-link" style="opacity:.6">Loading user…</span>
@@ -13,17 +27,47 @@
     <a href="{{ url_for('identity.logout') }}">Logout</a>
   </div>
 
-  
+  <hr>
 
-<details>
-  <summary><p style="display:inline">Debug info</p></summary>
+  <h3>Job offerings</h3>
+  <div class="toolbar">
+    <div>
+      <label for="page-size">Rows per page:</label>
+      <select id="page-size">
+        <option value="10">10</option>
+        <option value="25" selected>25</option>
+        <option value="50">50</option>
+        <option value="100">100</option>
+      </select>
+      <span class="muted" id="jobs-status">Loading…</span>
+    </div>
+    <div class="pager">
+      <button id="prev" disabled>&larr; Prev</button>
+      <span class="nowrap">Page <span id="page-num">1</span></span>
+      <button id="next" disabled>Next &rarr;</button>
+      <button id="refresh">Refresh</button>
+    </div>
+  </div>
 
-  <h3>MSAL claims (server)</h3>
-  <pre>{{ user | tojson(indent=2) }}</pre>
+  <div id="jobs-error" class="hidden"></div>
 
-  <h3>In-app user (API)</h3>
-  <pre id="dbg-inapp" style="min-height:4rem; opacity:.7">Loading user…</pre>
-</details>
+  <div style="overflow:auto">
+    <table id="jobs-table">
+      <thead></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+
+  <details>
+    <summary><p style="display:inline">Debug info</p></summary>
+
+    <h3>MSAL claims (server)</h3>
+    <pre>{{ user | tojson(indent=2) }}</pre>
+
+    <h3>In-app user (API)</h3>
+    <pre id="dbg-inapp" style="min-height:4rem; opacity:.7">Loading user…</pre>
+  </details>
 
   <hr>
   <footer style="text-align: right">{{ title }}</footer>
@@ -32,8 +76,43 @@
 
 <script>
   (function(){
-    const userLink = document.getElementById('user-link');
-    const dbgBlock = document.getElementById('dbg-inapp');
+    // ---------------------------
+    // Shared tiny time helpers (can be moved to /static/js/time.js later)
+    // ---------------------------    
+    const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+    const dfHM = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+    const dfDM = new Intl.DateTimeFormat(undefined, { day: '2-digit', month: 'short' });
+    const dfDMY = new Intl.DateTimeFormat(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
+
+    function formatWhen(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      if (isNaN(d)) return iso;
+      const now = new Date();
+      const diffMs = d - now;
+      const absMin = Math.abs(diffMs) / 60000;
+
+      // just now
+      if (absMin < 15) return 'just now';
+
+      // today -> HH:MM
+      const sameDay = d.toDateString() === now.toDateString();
+      if (sameDay) return dfHM.format(d);
+
+      // less than week -> "DD Mon at HH:MM"
+      const absDays = Math.abs(d - now) / 86400000;
+      if (absDays < 7) return `${dfDM.format(d)} at ${dfHM.format(d)}`;
+
+      // this year -> "DD Mon"
+      if (d.getFullYear() === now.getFullYear()) return dfDM.format(d);
+
+      // last year or older -> "DD Mon YYYY"
+      return dfDMY.format(d);
+    }
+
+    // ---------------------------
+    // async data fetch with progresive retry timeout
+    // ---------------------------    
 
     async function fetchWithRetry(url, attempts = 4) {
       let delay = 500; // ms
@@ -50,6 +129,12 @@
       }
     }
 
+    // ---------------------------
+    // User info
+    // ---------------------------    
+    const userLink = document.getElementById('user-link');
+    const dbgBlock = document.getElementById('dbg-inapp');
+
     function renderUser(u) {
       // defensive defaults
       const username = (u && (u.username || u.email)) || 'me';
@@ -65,7 +150,7 @@
       document.getElementById('retry-user').addEventListener('click', init);
     }
 
-    async function init() {
+    async function initUser() {
       try {
         const data = await fetchWithRetry("/ui/users/me", 4);
         if (data && !data.error) {
@@ -79,6 +164,169 @@
       } catch (e) {
         renderError('please try again');
       }
+    }
+
+    // ---------------------------
+    // Jobs table
+    // ---------------------------
+    const TBL = document.getElementById('jobs-table');
+    const THEAD = TBL.querySelector('thead');
+    const TBODY = TBL.querySelector('tbody');
+    const statusEl = document.getElementById('jobs-status');
+    const errEl = document.getElementById('jobs-error');
+    const dbgJobs = document.getElementById('dbg-jobs');
+    const pageSizeSel = document.getElementById('page-size');
+    const prevBtn = document.getElementById('prev');
+    const nextBtn = document.getElementById('next');
+    const refreshBtn = document.getElementById('refresh');
+    const pageNumEl = document.getElementById('page-num');
+
+    let pageSize = Number(sessionStorage.getItem('jobs.pageSize') || 25);
+    if (![10,25,50,100].includes(pageSize)) pageSize = 25;
+    pageSizeSel.value = String(pageSize);
+
+    let page = 1; // 1-based
+    let lastReceived = 0;
+
+    const COLS = [
+      { key: 'Title', label: 'Title' },
+      { key: 'HiringCompanyName', label: 'Company' },
+      { key: 'RemoteType', label: 'Remote' },
+      { key: 'Location', label: 'Location' },   // virtual: Country (Locality)
+      { key: 'FirstSeenAt', label: 'First Seen At' }
+    ];
+
+    function buildHeader() {
+      THEAD.innerHTML = '';
+      const tr = document.createElement('tr');
+      for (const c of COLS) {
+        const th = document.createElement('th');
+        th.textContent = c.label;
+        tr.appendChild(th);
+      }
+      THEAD.appendChild(tr);
+    }
+
+    function locationFrom(row) {
+      const country = row.Country || '';
+      const loc = row.Locality || '';
+      if (!country && !loc) return '';
+      if (country && !loc) return country;
+      if (!country && loc) return loc;
+      return `${country} (${loc})`;
+    }
+
+    function tdTitle(row) {
+      const td = document.createElement('td');
+      const a = document.createElement('a');
+      a.className = 'title-link';
+      a.href = `/jobs/${encodeURIComponent(row.Id)}`;
+      a.textContent = row.Title || '(no title)';
+      td.appendChild(a);
+      return td;
+    }
+
+    function tdText(text) {
+      const td = document.createElement('td');
+      if (typeof text === 'string' && text.length > 200) {
+        td.innerHTML = `<span class="truncate" title="${text.replaceAll('"','&quot;')}">${text}</span>`;
+      } else {
+        td.textContent = text || '';
+      }
+      return td;
+    }
+
+    function tdWhen(iso) {
+      const td = document.createElement('td');
+      td.dataset.iso = iso || ''; // keep ISO available for later sorting/filtering
+      td.textContent = formatWhen(iso);
+      return td;
+    }
+
+    function buildRows(items) {
+      TBODY.innerHTML = '';
+      for (const row of items) {
+        const tr = document.createElement('tr');
+        tr.appendChild(tdTitle(row));
+        tr.appendChild(tdText(row.HiringCompanyName || ''));
+        tr.appendChild(tdText(row.RemoteType || ''));
+        tr.appendChild(tdText(locationFrom(row)));
+        tr.appendChild(tdWhen(row.FirstSeenAt || row.PostedDate || ''));
+        TBODY.appendChild(tr);
+      }
+    }
+
+    function setLoading(loading, note='') {
+      if (loading) {
+        statusEl.textContent = note || 'Loading…';
+        errEl?.classList.add('hidden');
+      } else {
+        statusEl.textContent = note || `Showing ${lastReceived} row(s)`;
+      }
+    }
+
+    function setPagerState() {
+      pageNumEl.textContent = String(page);
+      prevBtn.disabled = page <= 1;
+      nextBtn.disabled = lastReceived < pageSize;
+    }
+
+    async function loadPage() {
+      const offset = (page - 1) * pageSize;
+      setLoading(true, `Loading page ${page}…`);
+      try {
+        const url = `/ui/jobs?limit=${pageSize}&offset=${offset}`;
+        const data = await fetchWithRetry(url, 4);
+        if (data && !data.error) {
+          const items = Array.isArray(data.items) ? data.items : [];
+          lastReceived = data.received || items.length;
+          if (dbgJobs) { dbgJobs.style.opacity = 1; dbgJobs.textContent = JSON.stringify(data, null, 2); }
+
+          buildHeader();
+          if (items.length === 0) {
+            TBODY.innerHTML = `<tr><td class="muted" colspan="${COLS.length}">No data</td></tr>`;
+            setLoading(false, 'No rows');
+            setPagerState();
+            return;
+          }
+
+          buildRows(items);
+          setLoading(false);
+          setPagerState();
+        } else {
+          throw new Error((data && data.message) || 'Jobs service is warming up');
+        }
+      } catch (e) {
+        console.error('loadPage error', e);
+        if (errEl) {
+          errEl.classList.remove('hidden');
+          errEl.innerHTML = `
+            <span class="muted">Jobs unavailable - ${e.message || e}</span>
+            <button id="retry-jobs" type="button" style="margin-left:.5rem">Retry</button>
+          `;
+          document.getElementById('retry-jobs').addEventListener('click', () => {
+            errEl.classList.add('hidden');
+            loadPage();
+          });
+        }
+        setLoading(false, 'Failed to load');
+      }
+    }
+
+    pageSizeSel.addEventListener('change', () => {
+      pageSize = Number(pageSizeSel.value);
+      sessionStorage.setItem('jobs.pageSize', String(pageSize));
+      page = 1;
+      loadPage();
+    });
+
+    prevBtn.addEventListener('click', () => { if (page > 1) { page -= 1; loadPage(); } });
+    nextBtn.addEventListener('click', () => { if (!nextBtn.disabled) { page += 1; loadPage(); } });
+    refreshBtn.addEventListener('click', loadPage);
+
+    async function init() {
+      await initUser();
+      await loadPage();
     }
 
     document.addEventListener('DOMContentLoaded', init);
