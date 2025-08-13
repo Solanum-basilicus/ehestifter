@@ -30,6 +30,12 @@ auth = Auth(
 )
 bp = Blueprint("ui_api", __name__)
 
+JOB_FIELDS = [
+    "Source", "ExternalId", "Url", "ApplyUrl",
+    "HiringCompanyName", "PostingCompanyName", "Title",
+    "Country", "Locality", "RemoteType", "Description", "PostedDate"
+]
+
 # -----------------------------
 # Helpers
 # -----------------------------
@@ -46,6 +52,29 @@ def _retry_until_ready(fn, *, attempts=4, base_delay=0.75):
                             i, attempts, e, sleep_s)
             time.sleep(sleep_s)
     raise last_exc
+
+def _clean_payload(d: dict) -> dict:
+    """
+    Lightweight sanitation: keep only known fields, coerce to str where expected,
+    trim whitespace, and normalize PostedDate if provided.
+    Authoritative validation still happens in the Azure Function.
+    """
+    out = {}
+    for k in JOB_FIELDS:
+        if k not in d:
+            continue
+        v = d[k]
+        if v is None:
+            out[k] = None
+            continue
+        if k == "PostedDate":
+            # Accept ISO-like strings; leave as-is and let upstream validate
+            # If datetime-local (no zone) arrives, frontend should send proper ISO.
+            out[k] = str(v).strip()
+        else:
+            out[k] = str(v).strip()
+    return out
+
 
 # -----------------------------
 # In-app user bootstrap 
@@ -221,6 +250,47 @@ def ui_job_details(job_id: str, *, context):
         logging.exception("Job details proxy failure")
         return jsonify({"error":"server_error", "message":"Unexpected error"}), 500
 
+@bp.route("/ui/jobs", methods=["POST"])
+@auth.login_required
+def ui_jobs_create(*, context):
+    """Same-origin proxy to POST /jobs with light sanitation."""
+    try:
+        data = request.get_json(force=True, silent=False)
+        if not isinstance(data, dict):
+            return jsonify({"error":"bad_request","message":"JSON object required"}), 400
+
+        payload = _clean_payload(data)
+        # basic presence check for required fields (avoid roundtrip if obviously missing)
+        required = ["Source","ExternalId","Url","HiringCompanyName","Title","Country"]
+        missing = [f for f in required if not payload.get(f)]
+        if missing:
+            return jsonify({"error":"bad_request","message":"Missing required: " + ", ".join(missing)}), 400
+
+        base_url = os.getenv("EHESTIFTER_JOBS_API_BASE_URL")
+        if not base_url:
+            return jsonify({"error":"server_misconfig","message":"EHESTIFTER_JOBS_API_BASE_URL is not set"}), 500
+
+        function_key = os.getenv("EHESTIFTER_JOBS_FUNCTION_KEY")
+        headers = {"Content-Type":"application/json"}
+        if function_key:
+            headers["x-functions-key"] = function_key
+
+        resp = requests.post(f"{base_url}/jobs", headers=headers, json=payload, timeout=15)
+        if resp.status_code == 201:
+            body = resp.json()
+            return jsonify({"id": body.get("id")}), 201
+        # surface upstream validation errors as-is
+        return jsonify({"error":"upstream_error","status":resp.status_code,"message":resp.text}), resp.status_code
+
+    except requests.exceptions.RequestException as e:
+        logging.warning("Jobs create upstream issue: %s", e)
+        return jsonify({"error":"upstream_warming","message":"Jobs service is warming up. Please try again."}), 503
+    except Exception:
+        logging.exception("Jobs create proxy failure")
+        return jsonify({"error":"server_error","message":"Unexpected error"}), 500
+
+
+
 app.register_blueprint(bp)
 
 # -----------------------------
@@ -247,6 +317,16 @@ def job_details(job_id: str, *, context):
         user=context['user'],
         title=f"Job {job_id}",
         job_id=job_id,
+        now=datetime.utcnow()
+    )
+
+@app.route("/jobs/new")
+@auth.login_required
+def job_new(*, context):
+    return render_template(
+        "job_new.html",
+        user=context['user'],
+        title="Create job offering",
         now=datetime.utcnow()
     )
 

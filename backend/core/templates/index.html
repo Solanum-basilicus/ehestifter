@@ -29,7 +29,13 @@
 
   <hr>
 
-  <h3>Job offerings</h3>
+  <h3 style="display:flex; align-items:center; gap:10px;">
+    Job offerings
+    <a href="{{ url_for('job_new') }}"
+      style="font-size:.95rem; padding:6px 10px; border:1px solid #bbb; border-radius:6px; text-decoration:none;">
+      + Add offering
+    </a>
+  </h3>
   <div class="toolbar">
     <div>
       <label for="page-size">Rows per page:</label>
