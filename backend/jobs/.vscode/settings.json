@@ -1,0 +1,44 @@
+{
+    "azureFunctions.deploySubpath": ".",
+    "azureFunctions.scmDoBuildDuringDeployment": true,
+    "azureFunctions.pythonVenv": ".venv",
+    "azureFunctions.projectLanguage": "Python",
+    "azureFunctions.projectRuntime": "~4",
+    "debug.internalConsoleOptions": "neverOpen",
+    "sqltools.connections": [
+        {
+            "connectionTimeout": 15,
+            "mssqlOptions": {
+                "appName": "SQLTools",
+                "useUTC": true,
+                "encrypt": true,
+                "trustServerCertificate": false
+            },
+            "previewLimit": 50,
+            "server": "eperidbserver.database.windows.net",
+            "port": 1433,
+            "askForPassword": true,
+            "driver": "MSSQL",
+            "name": "eperidbADMIN",
+            "database": "eperidb",
+            "username": "dbuserxxxonoefiy"
+        },
+        {
+            "connectionTimeout": 15,
+            "mssqlOptions": {
+                "appName": "SQLTools",
+                "useUTC": true,
+                "encrypt": true,
+                "trustServerCertificate": false
+            },
+            "previewLimit": 50,
+            "server": "eperidbserver.database.windows.net",
+            "port": 1433,
+            "askForPassword": true,
+            "driver": "MSSQL",
+            "name": "eperidbLIMITED",
+            "username": "limiteddbuseroooonoefiy",
+            "database": "eperidb"
+        }
+    ]
+}

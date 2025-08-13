@@ -3,6 +3,10 @@ eperidb.session.sql
 
 cheetsheet.md
 
+# DEV python venv requirements
+requirements-dev.txt
+
+
 # flask session files
 flask_session/
 
