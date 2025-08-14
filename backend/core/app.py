@@ -1,7 +1,7 @@
 import os
 import uuid
 import requests
-from flask import Flask, render_template, Blueprint, jsonify, session, request
+from flask import Flask, render_template, Blueprint, jsonify, session, request, current_app
 from identity.flask import Auth
 import app_config
 import logging
@@ -177,6 +177,50 @@ def create_or_get_user(msal_user: dict):
     except requests.exceptions.RequestException as e:
         logging.error("Failed to create or retrieve user from API: %s", e)
         raise
+
+# For user's status for a job offering
+def call_jobs_status(job_ids, context, timeout=6):
+    """
+    POST /jobs/status with body {"jobIds": [...]}.
+    - Adds X-User-Id from your in-app context
+    - Adds x-functions-key if configured
+    """
+    base_url = os.getenv("EHESTIFTER_JOBS_API_BASE_URL", "").rstrip("/")
+    function_key = os.getenv("EHESTIFTER_JOBS_FUNCTION_KEY")
+    if not base_url:
+        raise RuntimeError("EHESTIFTER_JOBS_API_BASE_URL is not configured")
+
+    url = f"{base_url}/jobs/status"
+    headers = {
+        "X-User-Id": context["user"]["userId"],  # GUID from /ui/users/me
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    if function_key:
+        headers["x-functions-key"] = function_key
+
+    resp = requests.post(url, headers=headers, json={"jobIds": job_ids}, timeout=timeout)
+    resp.raise_for_status()
+    return resp.json()
+
+def set_job_status(job_id, status, context, timeout=6):
+    base_url = os.getenv("EHESTIFTER_JOBS_API_BASE_URL", "").rstrip("/")
+    function_key = os.getenv("EHESTIFTER_JOBS_FUNCTION_KEY")
+    if not base_url:
+        raise RuntimeError("EHESTIFTER_JOBS_API_BASE_URL is not configured")
+
+    url = f"{base_url}/jobs/{job_id}/status"
+    headers = {
+        "X-User-Id": context["user"]["userId"],
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    if function_key:
+        headers["x-functions-key"] = function_key
+
+    resp = requests.put(url, headers=headers, json={"status": status}, timeout=timeout)
+    resp.raise_for_status()
+    return resp.json()
 
 @bp.route("/ui/users/me", methods=["GET"])
 @auth.login_required

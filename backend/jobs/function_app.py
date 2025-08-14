@@ -5,6 +5,8 @@ import logging
 import os
 import pyodbc
 from validation import validate_job_payload
+import re
+import uuid
 
 SQL_CONN_STR = os.getenv("SQLConnectionString")
 
@@ -21,12 +23,62 @@ def get_connection():
         logging.exception("Unhandled database connection error")
         raise Exception("Unexpected error while connecting to the database.")
 
-
+# otherwise JSON fails to serialize
 class DatetimeEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, datetime):
             return obj.isoformat()
         return super().default(obj)
+
+# user job status helpers
+GUID_REGEX = re.compile(
+    r"^[{]?[0-9a-fA-F]{8}[-]?[0-9a-fA-F]{4}[-]?[0-9a-fA-F]{4}[-]?[0-9a-fA-F]{4}[-]?[0-9a-fA-F]{12}[}]?$"
+)
+
+def is_guid(s: str) -> bool:
+    if not isinstance(s, str):
+        return False
+    if not GUID_REGEX.match(s):
+        return False
+    try:
+        _ = uuid.UUID(s)
+        return True
+    except Exception:
+        return False
+
+def normalize_guid(s: str) -> str:
+    # Return canonical 8-4-4-4-12 lowercase form
+    return str(uuid.UUID(s))
+
+class UnauthorizedError(Exception):
+    pass
+
+def get_current_user_id(req: func.HttpRequest) -> str:
+    """
+    Minimal, explicit auth context:
+    - Expect X-User-Id header carrying the in-app user GUID (from your web core).
+    - Validate and normalize to canonical GUID string.
+    - Raise UnauthorizedError for missing/invalid values -> handled as 401.
+    Later: replace with AAD B2C JWT parsing (prefer oid or sub) and keep the return contract.
+    """
+    user_id = req.headers.get("X-User-Id")
+    if not user_id or not is_guid(user_id):
+        raise UnauthorizedError("Missing or invalid X-User-Id")
+    return normalize_guid(user_id)
+
+def clean_status(value: str) -> str:
+    if value is None:
+        raise ValueError("Missing 'status'")
+    if not isinstance(value, str):
+        raise ValueError("Invalid 'status' type")
+    s = " ".join(value.strip().split())  # trim + collapse whitespace
+    if not s:
+        raise ValueError("Empty 'status'")
+    if len(s) > 100:
+        raise ValueError("Status too long (max 100)")
+    return s
+
+# Endpoints
 
 app = func.FunctionApp()
 
@@ -229,4 +281,150 @@ def handle_delete_job(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse("Job marked as deleted", status_code=200)
     except Exception as e:
         logging.exception("DELETE job: Error: d10001")
+        return func.HttpResponse(f"Error: {str(e)}", status_code=500)
+
+@app.route(route="jobs/{jobId}/status", methods=["PUT"])
+def put_job_status(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        user_id = get_current_user_id(req)
+        job_id_raw = req.route_params.get("jobId")
+        logging.info(f"PUT jobs/{job_id_raw}/status")
+        try:
+            if not is_guid(job_id_raw):
+                return func.HttpResponse("Invalid jobId", status_code=400)
+            job_id = normalize_guid(job_id_raw)
+
+            user_id = get_current_user_id(req)
+
+            try:
+                payload = req.get_json()
+            except ValueError:
+                return func.HttpResponse("Invalid JSON", status_code=400)
+
+            status = clean_status(payload.get("status"))
+
+            conn = get_connection()
+            cursor = conn.cursor()
+
+            # Ensure the referenced JobOffering exists (optional but nice safety)
+            cursor.execute("SELECT 1 FROM JobOfferings WHERE Id = ? AND IsDeleted = 0", job_id)
+            if cursor.fetchone() is None:
+                return func.HttpResponse("Job not found", status_code=404)
+
+            # Upsert via MERGE; ignore Comment by design; set LastUpdated
+            cursor.execute("""
+                MERGE dbo.UserJobStatus AS target
+                USING (SELECT ? AS JobOfferingId, ? AS UserId) AS src
+                ON target.JobOfferingId = src.JobOfferingId AND target.UserId = src.UserId
+                WHEN MATCHED THEN
+                UPDATE SET Status = ?, LastUpdated = SYSDATETIME()
+                WHEN NOT MATCHED THEN
+                INSERT (JobOfferingId, UserId, Status, LastUpdated)
+                VALUES (src.JobOfferingId, src.UserId, ?, SYSDATETIME());
+            """, (job_id, user_id, status, status))
+
+            conn.commit()
+
+            return func.HttpResponse(
+                json.dumps({"jobId": job_id, "userId": user_id, "status": status}),
+                mimetype="application/json",
+                status_code=200
+            )
+
+        except ValueError as ve:
+            return func.HttpResponse(str(ve), status_code=400)
+        except Exception as e:
+            logging.exception("PUT job status: Error js10001")
+            return func.HttpResponse(f"Error: {str(e)}", status_code=500)
+    except UnauthorizedError as ue:
+        return func.HttpResponse(str(ue), status_code=401)
+    except ValueError as ve:
+        return func.HttpResponse(str(ve), status_code=400)
+    except Exception as e:
+        logging.exception("PUT job status: Error js10001")
+        return func.HttpResponse(f"Error: {str(e)}", status_code=500)
+
+
+@app.route(route="jobs/status", methods=["POST"])
+def post_job_statuses(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    POST /api/jobs/status
+    Body: { "jobIds": ["<guid1>", "<guid2>", ...] }
+    Returns: { "userId": "...", "statuses": { "<jobId>": "<Status or Unset>", ... } }
+    """
+    try:
+        user_id = get_current_user_id(req)
+        try:
+            user_id = get_current_user_id(req)
+
+            try:
+                body = req.get_json()
+            except ValueError:
+                return func.HttpResponse("Invalid JSON", status_code=400)
+
+            if not isinstance(body, dict) or "jobIds" not in body:
+                return func.HttpResponse("Body must include 'jobIds' array", status_code=400)
+
+            raw_ids = body["jobIds"]
+            if not isinstance(raw_ids, list):
+                return func.HttpResponse("'jobIds' must be an array", status_code=400)
+
+            # Validate and normalize GUIDs; reuse parse_job_ids_param for consistent behavior
+            job_ids = []
+            for item in raw_ids:
+                if not isinstance(item, str):
+                    return func.HttpResponse("All jobIds must be strings", status_code=400)
+                # parse_job_ids_param expects a comma-separated string; we want per-item validation here
+                if not is_guid(item):
+                    return func.HttpResponse(f"Invalid jobId GUID: {item}", status_code=400)
+                job_ids.append(normalize_guid(item))
+
+            # De-duplicate while preserving order
+            seen = set()
+            job_ids = [jid for jid in job_ids if not (jid in seen or seen.add(jid))]
+
+            # Guardrail to avoid excessively large IN() lists; tune as you like
+            if len(job_ids) > 500:
+                return func.HttpResponse("Too many jobIds (max 500)", status_code=400)
+
+            if not job_ids:
+                return func.HttpResponse(
+                    json.dumps({"userId": user_id, "statuses": {}}),
+                    mimetype="application/json",
+                    status_code=200
+                )
+
+            conn = get_connection()
+            cursor = conn.cursor()
+
+            placeholders = ",".join(["?"] * len(job_ids))
+            params = [user_id] + job_ids
+
+            cursor.execute(
+                f"""
+                SELECT JobOfferingId, Status
+                FROM dbo.UserJobStatus
+                WHERE UserId = ? AND JobOfferingId IN ({placeholders})
+                """,
+                params
+            )
+
+            found = {normalize_guid(str(row[0])): row[1] for row in cursor.fetchall()}
+            result = {jid: found.get(jid, "Unset") for jid in job_ids}
+
+            return func.HttpResponse(
+                json.dumps({"userId": user_id, "statuses": result}),
+                mimetype="application/json",
+                status_code=200
+            )
+
+        except Exception as e:
+            logging.exception("POST job statuses: Error js20002")
+            return func.HttpResponse(f"Error: {str(e)}", status_code=500)
+    except UnauthorizedError as ue:
+        return func.HttpResponse(str(ue), status_code=401)
+    except ValueError as ve:
+        return func.HttpResponse(str(ve), status_code=400)
+    except Exception as e:
+        logging.exception("POST job statuses: Error js20002")
         return func.HttpResponse(f"Error: {str(e)}", status_code=500)
