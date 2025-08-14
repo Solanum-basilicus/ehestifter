@@ -1,20 +1,34 @@
 import os
 import uuid
 import requests
-from flask import Flask, render_template, Blueprint, jsonify, session, g, request
+from flask import Flask, render_template, Blueprint, jsonify, session, request
 from identity.flask import Auth
 import app_config
 import logging
 import time,random
 from werkzeug.exceptions import Unauthorized
 from datetime import datetime
+import bleach
+from bs4 import BeautifulSoup
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.StreamHandler())
 
+# cache 
+_MEMO = {}  # key -> {"data": ..., "ts": float}
 
-app = Flask(__name__)
+def memo_get(key, ttl):
+    item = _MEMO.get(key)
+    if item and time.time() - item["ts"] < ttl:
+        return item["data"]
+    return None
+
+def memo_put(key, data):
+    _MEMO[key] = {"data": data, "ts": time.time()}
+
+
+app = Flask(__name__, static_folder="static", template_folder="templates")
 app.config.from_object(app_config)
 auth = Auth(
     app,
@@ -35,6 +49,27 @@ JOB_FIELDS = [
     "HiringCompanyName", "PostingCompanyName", "Title",
     "Country", "Locality", "RemoteType", "Description", "PostedDate"
 ]
+
+# --- Bleach config ---
+ALLOWED_TAGS = [
+    # basic text
+    "p", "br", "hr", "span", "div",
+    # emphasis
+    "b", "strong", "i", "em", "u", "code", "pre", "blockquote",
+    # lists
+    "ul", "ol", "li",
+    # headings
+    "h1", "h2", "h3", "h4",
+    # links + images (images limited to data: via post-pass)
+    "a", "img",
+]
+ALLOWED_ATTRS = {
+    "a": ["href", "title"],
+    "img": ["src", "alt"],
+    # allow class for prose styling if you use it server-side
+    "*": ["class"],
+}
+ALLOWED_PROTOCOLS = ["http", "https", "mailto", "data"]
 
 # -----------------------------
 # Helpers
@@ -75,6 +110,36 @@ def _clean_payload(d: dict) -> dict:
             out[k] = str(v).strip()
     return out
 
+def sanitize_description_html(html: str) -> str:
+    """
+    1) Bleach-clean to drop scripts/iframes/unsafe tags/attrs.
+    2) Remove <img> whose src is NOT data: (block external loads server-side).
+    3) Force a/ links to open in new tab with safe rel.
+    """
+    if not html:
+        return ""
+    cleaned = bleach.clean(
+        html,
+        tags=ALLOWED_TAGS,
+        attributes=ALLOWED_ATTRS,
+        protocols=ALLOWED_PROTOCOLS,
+        strip=True,
+    )
+    soup = BeautifulSoup(cleaned, "html.parser")
+
+    # Drop non-data images (external requests blocked)
+    for img in soup.find_all("img"):
+        src = (img.get("src") or "").strip()
+        if not src.startswith("data:"):
+            img.decompose()
+
+    # Normalize links (always new window, safe rel)
+    for a in soup.find_all("a"):
+        a["target"] = "_blank"
+        # include nofollow per your spec
+        a["rel"] = "noopener noreferrer nofollow"
+
+    return str(soup)
 
 # -----------------------------
 # In-app user bootstrap 
@@ -197,9 +262,9 @@ def ui_jobs(*, context):
 
         # tiny 30s cache keyed by limit+offset to cushion repeated navigations
         cache_key = f"jobs:{limit}:{offset}"
-        cached = session.get(cache_key)
-        if cached and time.time() - cached.get("ts", 0) < 30:
-            return jsonify(cached["data"]), 200
+        cached = memo_get(cache_key, ttl=30)
+        if cached:
+            return jsonify(cached), 200
 
         def call():
             items = _fetch_jobs_from_api(limit=limit, offset=offset)
@@ -211,7 +276,8 @@ def ui_jobs(*, context):
             }
 
         data = _retry_until_ready(call, attempts=4, base_delay=0.75)
-        session[cache_key] = {"data": data, "ts": time.time()}
+        if not data.get("error"):
+            memo_put(cache_key, data)
         return jsonify(data), 200
 
     except requests.exceptions.RequestException as e:
@@ -227,9 +293,9 @@ def ui_job_details(job_id: str, *, context):
     """Same-origin proxy to GET /jobs/{id}."""
     try:
         cache_key = f"job:{job_id}"
-        cached = session.get(cache_key)
-        if cached and time.time() - cached.get("ts", 0) < 60:
-            return jsonify(cached["data"]), 200
+        cached = memo_get(cache_key, ttl=60)
+        if cached:
+            return jsonify(cached), 200
 
         def call():
             job = _fetch_job_by_id_from_api(job_id)
@@ -238,8 +304,35 @@ def ui_job_details(job_id: str, *, context):
             return job
 
         data = _retry_until_ready(call, attempts=4, base_delay=0.75)
+        # --- server-side sanitize description HTML (recommended) ---
+        try:
+            desc = data.get("descriptionHtml") or data.get("DescriptionHtml") or data.get("Description") or ""
+            if desc:
+                data["descriptionHtml"] = sanitize_description_html(desc)
+        except Exception:
+            logging.exception("Description sanitize failed; returning raw")
+        # -----------------------------------------------------------
+
+        # normalizing to save headache. possibly
+        data = {
+            "Title": data.get("Title"),
+            "HiringCompanyName": data.get("HiringCompanyName"),
+            "PostingCompanyName": data.get("PostingCompanyName"),
+            "Country": data.get("Country"),
+            "Locality": data.get("Locality"),
+            "RemoteType": data.get("RemoteType"),
+            "FirstSeenAt": data.get("FirstSeenAt") or data.get("PostedDate") or data.get("CreatedAt"),
+            "LastSeenAt": data.get("LastSeenAt") or data.get("UpdatedAt"),
+            "RepostCount": data.get("RepostCount") or 0,
+            "Url": data.get("Url"),
+            "ApplyUrl": data.get("ApplyUrl"),
+            "descriptionHtml": sanitize_description_html(
+                data.get("descriptionHtml") or data.get("Description") or ""
+            ),
+        }        
+
         if not data.get("error"):
-            session[cache_key] = {"data": data, "ts": time.time()}
+            memo_put(cache_key, data)
         status = 404 if data.get("error") == "not_found" else 200
         return jsonify(data), status
 
@@ -260,6 +353,8 @@ def ui_jobs_create(*, context):
             return jsonify({"error":"bad_request","message":"JSON object required"}), 400
 
         payload = _clean_payload(data)
+        if payload.get("Description"):
+            payload["Description"] = sanitize_description_html(payload["Description"])        
         # basic presence check for required fields (avoid roundtrip if obviously missing)
         required = ["Source","ExternalId","Url","HiringCompanyName","Title","Country"]
         missing = [f for f in required if not payload.get(f)]
@@ -305,7 +400,7 @@ def index(*, context):
         edit_profile_url=auth.get_edit_profile_url(),
         api_endpoint=os.getenv("ENDPOINT"),
         title=f"Ehestifter application tracking app",
-        now=datetime.utcnow()
+        now=datetime.utcnow(),
     )
 
 @app.route("/jobs/<job_id>")
@@ -317,7 +412,7 @@ def job_details(job_id: str, *, context):
         user=context['user'],
         title=f"Job {job_id}",
         job_id=job_id,
-        now=datetime.utcnow()
+        now=datetime.utcnow(),
     )
 
 @app.route("/jobs/new")
@@ -327,7 +422,7 @@ def job_new(*, context):
         "job_new.html",
         user=context['user'],
         title="Create job offering",
-        now=datetime.utcnow()
+        now=datetime.utcnow(),
     )
 
 @app.route("/me")
@@ -337,7 +432,8 @@ def me(*, context):
         "me.html", 
         user=context['user'], 
         title="Your profile",
-        now=datetime.utcnow())
+        now=datetime.utcnow(),
+    )
 
 if __name__ == '__main__':
     app.run(debug=True)

@@ -4,3 +4,5 @@ Flask>=2.2
 requests>=2,<3
 ms_identity_python[flask] @ https://github.com/azure-samples/ms-identity-python/archive/refs/heads/0.9.zip
 python-dotenv<0.22
+bleach==6.1.0
+beautifulsoup4==4.12.3
