@@ -81,12 +81,13 @@ def clean_status(value: str) -> str:
     return s
 
 # --- Job History related helpers ---
-def insert_history(cursor, job_id: str, action: str, details_obj: Optional[Dict[str, Any]], actor_type: str, actor_id: Optional[str]):
+def insert_history(cursor, job_id: str, action: str, details_obj, actor_type: str, actor_id: Optional[str]):
+    # ensure we can serialize nested datetimes, UUIDs, etc.
     payload = {"v": 1, "kind": action, "data": details_obj or {}}
     cursor.execute("""
         INSERT INTO dbo.JobOfferingHistory (JobOfferingId, ActorType, ActorId, Action, Details, Timestamp)
         VALUES (?, ?, ?, ?, ?, SYSDATETIME())
-    """, (job_id, actor_type, actor_id, action, json.dumps(payload)))
+    """, (job_id, actor_type, actor_id, action, json.dumps(payload, cls=DatetimeEncoder)))
 
 def detect_actor(req: func.HttpRequest) -> (str, Optional[str]):
     """
