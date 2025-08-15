@@ -4,7 +4,6 @@ import requests
 
 STATUS_TO_SET = "Applied"  # pick any of your UI-allowed statuses
 
-@pytest.mark.order(5)
 def test_05_set_job_status(base_url, auth_headers, shared_state):
     user_guid = os.getenv("TEST_USER_GUID")
     if not user_guid:

@@ -3,6 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  <script src="{{ url_for('static', filename='js/status-utils.js') }}"></script>  
   <title>{{ title or "Ehestifter" }}</title>
   {% block head_extra %}{% endblock %}
   <style>

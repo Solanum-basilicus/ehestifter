@@ -2,7 +2,6 @@ import os
 import pytest
 import requests
 
-@pytest.mark.order(6)
 def test_06_get_job_status(base_url, auth_headers, shared_state):
     user_guid = os.getenv("TEST_USER_GUID")
     if not user_guid:

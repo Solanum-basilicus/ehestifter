@@ -83,37 +83,74 @@
   </div>
 
   <!-- App controls -->
-  <div class="card" style="padding:12px 16px; margin-top:12px;">
-    <div class="flex-between">
-      <div class="flex" style="min-width:0; flex-wrap:wrap;">
-        <span class="badge">Current state</span>
-        <div style="font-weight:500;" class="truncate-1" x-text="app.state || 'New'"></div>
+  <div class="card private-block"
+      style="padding:12px 16px; margin-top:12px;"
+      x-data="jobStatusComponent({ jobId: '{{ job_id }}' })"
+      x-init="init()">
+
+    <div class="flex-between" style="align-items:center;">
+      <!-- LEFT: label + status text + time + buttons (inline) -->
+      <div class="flex" style="min-width:0; flex-wrap:wrap; gap:10px; align-items:center;">
+        <!-- label styled like your section headers -->
+        <div style="font-weight:600;">This position and you:</div>
+
+        <!-- status text (unchanged logic, no pill) -->
+        <span class="status-badge"
+              :data-k="pending ? 'unset' : statusKey(app.state)"
+              x-text="pending ? 'loading…' : (app.state || 'Unset')"></span>
+
+        <!-- relative time, if you later surface changedAtUtc -->
         <template x-if="app.changedAtUtc">
           <div class="flex muted" style="font-size:14px;">
             ⏱ <span x-text="relativeFromUtc(app.changedAtUtc)"></span>
           </div>
         </template>
+
+        <!-- buttons inline next to status -->
+        <div class="flex" style="gap:.5rem;">
+          <button class="btn"
+                  x-show="!editing"
+                  @click="startEditing()"
+                  :disabled="pending"
+                  :aria-disabled="pending ? 'true' : 'false'">change</button>
+
+          <button class="btn primary"
+                  x-show="editing"
+                  @click="save()"
+                  :disabled="pending"
+                  :aria-disabled="pending ? 'true' : 'false'">
+            <span x-show="!pending">save</span>
+            <span x-show="pending">saving…</span>
+          </button>
+
+          <button class="btn"
+                  x-show="editing"
+                  @click="cancelEditing()"
+                  :disabled="pending"
+                  :aria-disabled="pending ? 'true' : 'false'">cancel</button>
+        </div>
       </div>
-      <button class="btn" @click="editing = !editing" aria-disabled="false">change</button>
+
+      <!-- RIGHT: private chip -->
+      <div class="flex" style="gap:.5rem;">
+        <span class="chip-private">🔒 Only you</span>
+      </div>
     </div>
 
-    <template x-if="editing">
-      <div class="grid" style="margin-top:10px;">
-        <div class="flex">
-          <select class="btn" x-model="draft.state" disabled>
-            <template x-for="s in states" :key="s"><option x-text="s"></option></template>
-          </select>
-          <span class="badge">disabled - API not wired yet</span>
-        </div>
-        <div class="flex" style="flex-wrap:wrap;">
-          <label class="flex"><input type="checkbox" x-model="draft.useNow" disabled><span>with current timestamp</span></label>
-          <template x-if="!draft.useNow">
-            <div class="flex">🗓 <input type="datetime-local" class="btn" x-model="draft.customDt" disabled></div>
-          </template>
-          <button class="btn primary" disabled>Save (async)</button>
-        </div>
-      </div>
-    </template>
+    <!-- Editor row -->
+    <div x-show="editing" style="margin-top:10px;">
+      <label for="statusSelect" class="muted" style="display:block; font-size:14px; margin-bottom:6px;">Select status</label>
+      <select id="statusSelect"
+              x-model="selected"
+              @change="selected = $event.target.value"
+              :disabled="pending"
+              style="min-width:260px;">
+        <template x-for="opt in statusOptions" :key="opt">
+          <option :value="opt" x-text="opt"></option>
+        </template>
+      </select>
+      <p class="muted" x-show="error" x-text="error" style="margin-top:8px; color:#a00;"></p>
+    </div>
   </div>
 
   <!-- Main grid -->
@@ -135,10 +172,13 @@
       </div>
 
       <!-- Personal comments -->
-      <div class="card" style="padding:14px; margin-top:12px;">
+      <div class="card private-block" style="padding:14px; margin-top:12px;">
         <div class="flex-between">
-          <div style="font-weight:600;">Your thoughts on this job (only you can see them)</div>
-          <button class="btn" :aria-disabled="!descLoaded" :disabled="!descLoaded">Add</button>
+          <div style="font-weight:600;">Your thoughts on this job</div>
+          <div class="flex" style="gap:.5rem;">
+            <span class="chip-private">🔒 Only you</span>
+            <button class="btn" :aria-disabled="!descLoaded" :disabled="!descLoaded">Add</button>
+          </div>
         </div>
         <hr style="border:none; border-top:1px solid #f3f4f6; margin:10px 0;">
         <div class="muted" style="font-size:14px;">Nothing saved yet</div>
@@ -154,19 +194,20 @@
     <!-- Right rail: Enrichers -->
     <aside class="right-rail" style="position:sticky; top:80px; height:fit-content;">
       <div class="grid">
-        <div class="card" style="padding:12px;">
+
+        <div class="card private-block" style="padding:12px;">
           <div class="flex-between">
             <div><div style="font-weight:600;">Compatibility Score</div><div class="muted" style="font-size:12px;">no autorun</div></div>
-            <span class="badge">widget</span>
+            <div class="flex" style="gap:.5rem;"><span class="chip-private">🔒 Only you</span></div>
           </div>
           <div style="font-family:monospace; margin:8px 0;">⬡⬡⬡⬡⬡⬡⬡⬡⬡⬡ ?.??</div>
           <div class="flex"><button class="btn" disabled>▶ run</button><button class="btn" disabled>🔎 inspect</button></div>
         </div>
 
-        <div class="card" style="padding:12px;">
+        <div class="card private-block" style="padding:12px;">
           <div class="flex-between">
             <div><div style="font-weight:600;">CV composer</div><div class="muted" style="font-size:12px;">no autorun</div></div>
-            <span class="badge">widget</span>
+            <div class="flex" style="gap:.5rem;"><span class="chip-private">🔒 Only you</span></div>
           </div>
           <div style="font-family:monospace; margin:8px 0;">no file to download</div>
           <div class="flex"><button class="btn" disabled>▶ run</button><button class="btn" disabled>🔎 inspect</button></div>
@@ -177,160 +218,220 @@
 </div>
 
 <script>
-function jobDetailPage(jobId) {
-  return {
-    jobId,
-    _inited: false,
-    // defaults (empty; will be hydrated)
-    meta: {
-      title: "", company: "", postingCompany: "", country: "", locality: "",
-      remoteType: "", firstSeenUtc: "", lastSeenUtc: "", repostCount: 0, url: "", applyUrl: ""
-    },
-    app: { state: "New", changedAtUtc: null },
-    safeDescription: "",
-    descLoaded: false,
-    editing: false,
-    states: [
-      "Applied","Screening Booked","Screening Done","HM interview Booked","HM interview Done",
-      "More interviews Booked","More interview Done","Rejected with Filled","Rejected with Unfortunately",
-      "Got Offer","Accepted Offer","Turned down Offer"
-    ],
-    draft: { state: "Applied", useNow: true, customDt: new Date().toISOString().slice(0,16) },
+  // Alpine components must be registered inside alpine:init
+  document.addEventListener('alpine:init', () => {
+    Alpine.data('jobStatusComponent', ({ jobId }) => ({
+      app: { state: null, changedAtUtc: null },
+      statusOptions: window.Status.STATUS_OPTIONS,
+      selected: null,
+      editing: false,
+      pending: true, 
+      error: "",
 
-    async init() {
-      if (this._inited) return;      // prevent double runs
-      this._inited = true;
+      statusKey: window.Status.statusKey,
 
-      // show cold-start message immediately; keep article visible
-      this.safeDescription = `
-        <p class="muted">
-          System hibernates if unused for half an hour. It takes about 40 seconds to wake up little backend goblins.
-        </p>`;
-      this.descLoaded = true;
+      startEditing(){
+        if (this.pending) return;
+        this.editing = true;
+        const next = window.Status.suggestNext(this.app.state || "Unset");
+        this.selected = this.statusOptions.includes(next) ? next : this.statusOptions[0];
+      },
+      cancelEditing(){
+        this.editing = false;
+        this.selected = this.statusOptions.includes(this.app.state)
+          ? this.app.state
+          : this.statusOptions[0];
+      },
 
-      const tryFetch = async () => {
-        const r = await fetch(`/ui/jobs/${this.jobId}`, { credentials: 'same-origin' });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      };
+      async init() { await this.refresh(); },
 
-      try {
-        let payload;
+      async refresh(){
+        this.pending = true; this.error = "";
+        try{
+          const resp = await fetch(`/ui/jobs/${jobId}/status`, { credentials: 'same-origin' });
+          if(!resp.ok) throw new Error('HTTP '+resp.status);
+          const data = await resp.json();
+          this.app.state = data.status || "Unset";
+          // if we’re currently editing, keep the predictive selection; otherwise, align to current
+          if (!this.editing){
+            this.selected = this.statusOptions.includes(this.app.state) ? this.app.state : this.statusOptions[0];
+          }
+        }catch(e){
+          this.error = "Could not load status - please try again.";
+        }finally{
+          this.pending = false;
+        }
+      },
+
+      async save() {
+        if (this.pending) return;
+        this.pending = true;
+        this.error = "";
         try {
-          payload = await tryFetch();
-        } catch {
-          // single retry after short delay
-          await new Promise(res => setTimeout(res, 1200));
-          payload = await tryFetch();
+          // Guard against Unset
+          const toSend = this.statusOptions.includes(this.selected)
+                        ? this.selected
+                        : this.statusOptions[0];
+
+          const resp = await fetch(`/ui/jobs/${jobId}/status`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ status: toSend })
+          });
+          if (!resp.ok) throw new Error('HTTP ' + resp.status);
+          const data = await resp.json();
+
+          this.app.state = data.status || toSend;
+          this.editing = false;
+        } catch (e) {
+          this.error = "Could not set status - please try again.";
+        } finally {
+          this.pending = false;
         }
-        window.__lastJobPayload = payload; // optional debug
-        this.hydrateFromPayload(payload);
-      } catch (e) {
-        // only show error if both attempts failed
-        this.safeDescription = `<p class="muted">Unable to load description.</p>`;
-      }
-    },
+      },
 
-    // helper to read first present key, preserving case and readability
-    get(obj, keys) {
-      for (const k of keys) if (obj && obj[k] != null) return obj[k];
-      return undefined;
-    },
+      // Reuse outer helper if present
+      relativeFromUtc(iso){ return window.__relativeFromUtc?.(iso) ?? ''; }
+    }));
 
-    hydrateFromPayload(p) {
-      // --- exact-case mapping for your current API shape, with sensible fallbacks ---
-      const title          = this.get(p, ["Title", "title", "JobTitle"]) || "";
-      const company        = this.get(p, ["HiringCompanyName", "Company", "CompanyName"]) || "";
-      const postingCompany = this.get(p, ["PostingCompanyName", "PostingCompany", "PostedBy"]) || "";
-      const country        = this.get(p, ["Country"]) || "";
-      const locality       = this.get(p, ["Locality", "City"]) || "";
-      const remoteType     = this.get(p, ["RemoteType", "remote_type"]) || "";
+    Alpine.data('jobDetailPage', (jobId) => ({
+      jobId,
+      _inited: false,
+      meta: {
+        title: "", company: "", postingCompany: "", country: "", locality: "",
+        remoteType: "", firstSeenUtc: "", lastSeenUtc: "", repostCount: 0, url: "", applyUrl: ""
+      },
+      app: { state: "New", changedAtUtc: null },
+      safeDescription: "",
+      descLoaded: false,
 
-      const firstSeenUtc   = this.get(p, ["FirstSeenAt", "PostedDate", "CreatedAt"]) || "";
-      const lastSeenUtc    = this.get(p, ["LastSeenAt", "UpdatedAt"]) || firstSeenUtc || "";
+      async init() {
+        if (this._inited) return;
+        this._inited = true;
 
-      let repostCount      = this.get(p, ["RepostCount", "repostCount"]) || 0;
-      repostCount = Number.parseInt(repostCount, 10);
-      if (!Number.isFinite(repostCount)) repostCount = 0;
+        const tryFetch = async () => {
+          const r = await fetch(`/ui/jobs/${this.jobId}`, { credentials: 'same-origin' });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          return r.json();
+        };
 
-      const url            = this.get(p, ["Url", "OriginalUrl"]) || "";
-      const applyUrl       = this.get(p, ["ApplyUrl", "ApplyLink"]) || "";
-
-      this.meta = { title, company, postingCompany, country, locality, remoteType,
-                    firstSeenUtc, lastSeenUtc, repostCount, url, applyUrl };
-
-      // description: server may already expose descriptionHtml; fall back to Description
-      const raw = this.get(p, ["descriptionHtml", "Description", "Html"]) || "";
-      this.safeDescription = this.sanitizeDescription(raw);
-
-      // optional application state container (none in your payload yet)
-      const appState = this.get(p, ["appState", "Application"]) || {};
-      this.app = {
-        state: this.get(appState, ["state", "State"]) || this.app.state,
-        changedAtUtc: this.get(appState, ["changedAtUtc", "ChangedAtUtc", "changed_at_utc"]) || null
-      };
-    },
-
-    sanitizeDescription(html) {
-      if (!html) return "";
-      const tmp = document.createElement('div');
-      tmp.innerHTML = html;
-
-      tmp.querySelectorAll('script,iframe,style,link,object,embed').forEach(el => el.remove());
-
-      tmp.querySelectorAll('a[href]').forEach(a => {
-        a.setAttribute('target','_blank');
-        a.setAttribute('rel','noopener noreferrer nofollow');
-      });
-
-      tmp.querySelectorAll('img[src]').forEach(img => {
-        const src = (img.getAttribute('src') || '').trim();
-        if (!src.startsWith('data:')) {
-          const ph = document.createElement('div');
-          ph.className = 'placeholder-img';
-          ph.textContent = 'External image blocked';
-          img.replaceWith(ph);
-        } else {
-          img.loading = 'lazy'; img.decoding = 'async';
-          img.classList.add('max-w-full'); // harmless
+        try {
+          let payload;
+          try {
+            payload = await tryFetch();
+          } catch {
+            await new Promise(res => setTimeout(res, 1200));
+            payload = await tryFetch();
+          }
+          window.__lastJobPayload = payload;
+          this.hydrateFromPayload(payload);
+          this.descLoaded = true;
+        } catch (e) {
+          this.safeDescription = `<p class="muted">Unable to load description right now.</p>`;
+          this.descLoaded = true;
         }
-      });
+      },
 
-      return tmp.innerHTML;
-    },
+      get(obj, keys) {
+        for (const k of keys) if (obj && obj[k] != null) return obj[k];
+        return undefined;
+      },
 
-    companyLine() {
-      return this.meta.postingCompany
-        ? `${this.meta.company}, through ${this.meta.postingCompany}`
-        : this.meta.company || "";
-    },
-    geoLine() {
-      const parts = [];
-      if (this.meta.country) parts.push(this.meta.country);
-      if (this.meta.locality) parts.push(`(${this.meta.locality})`);
-      if (this.meta.remoteType) parts.push(this.meta.remoteType);
-      return parts.join(', ');
-    },
-    seenPrefix() {
-      return (this.meta.repostCount || 0) === 0 ? 'First seen' : 'Last seen';
-    },
-    relativeSeen() {
-      const ref = (this.meta.repostCount || 0) === 0 ? this.meta.firstSeenUtc : this.meta.lastSeenUtc;
-      return this.relativeFromUtc(ref);
-    },
-    relativeFromUtc(iso) {
-      if (!iso) return '';
-      const now = new Date();
-      const todayUTC = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-      const d = new Date(iso);
-      const targetUTC = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-      const diff = Math.floor((todayUTC - targetUTC) / (24*3600*1000));
-      if (diff <= 0) return 'Today';
-      if (diff === 1) return 'Yesterday';
-      return `${diff} days ago`;
-    },
-    copy(text) { navigator.clipboard?.writeText(text).catch(()=>{}); }
-  }
-}
+      hydrateFromPayload(p) {
+        const title          = this.get(p, ["Title","title","JobTitle"]) || "";
+        const company        = this.get(p, ["HiringCompanyName","Company","CompanyName"]) || "";
+        const postingCompany = this.get(p, ["PostingCompanyName","PostingCompany","PostedBy"]) || "";
+        const country        = this.get(p, ["Country"]) || "";
+        const locality       = this.get(p, ["Locality","City"]) || "";
+        const remoteType     = this.get(p, ["RemoteType","remote_type"]) || "";
+
+        const firstSeenUtc   = this.get(p, ["FirstSeenAt","PostedDate","CreatedAt"]) || "";
+        const lastSeenUtc    = this.get(p, ["LastSeenAt","UpdatedAt"]) || firstSeenUtc || "";
+
+        let repostCount = Number.parseInt(this.get(p, ["RepostCount","repostCount"]) || 0, 10);
+        if (!Number.isFinite(repostCount)) repostCount = 0;
+
+        const url      = this.get(p, ["Url","OriginalUrl"]) || "";
+        const applyUrl = this.get(p, ["ApplyUrl","ApplyLink"]) || "";
+
+        this.meta = { title, company, postingCompany, country, locality, remoteType,
+                      firstSeenUtc, lastSeenUtc, repostCount, url, applyUrl };
+
+        const raw = this.get(p, ["descriptionHtml","Description","Html"]) || "";
+        this.safeDescription = this.sanitizeDescription(raw);
+
+        const appState = this.get(p, ["appState","Application"]) || {};
+        this.app = {
+          state: this.get(appState, ["state","State"]) || this.app.state,
+          changedAtUtc: this.get(appState, ["changedAtUtc","ChangedAtUtc","changed_at_utc"]) || null
+        };
+      },
+
+      sanitizeDescription(html) {
+        if (!html) return "";
+        const tmp = document.createElement('div');
+        tmp.innerHTML = html;
+        tmp.querySelectorAll('script,iframe,style,link,object,embed').forEach(el => el.remove());
+        tmp.querySelectorAll('a[href]').forEach(a => { a.target = '_blank'; a.rel = 'noopener noreferrer nofollow'; });
+        tmp.querySelectorAll('img[src]').forEach(img => {
+          const src = (img.getAttribute('src') || '').trim();
+          if (!src.startsWith('data:')) {
+            const ph = document.createElement('div');
+            ph.className = 'placeholder-img';
+            ph.textContent = 'External image blocked';
+            img.replaceWith(ph);
+          } else {
+            img.loading = 'lazy'; img.decoding = 'async';
+          }
+        });
+        return tmp.innerHTML;
+      },
+
+      companyLine() {
+        return this.meta.postingCompany
+          ? `${this.meta.company}, through ${this.meta.postingCompany}`
+          : this.meta.company || "";
+      },
+      geoLine() {
+        const parts = [];
+        if (this.meta.country) parts.push(this.meta.country);
+        if (this.meta.locality) parts.push(`(${this.meta.locality})`);
+        if (this.meta.remoteType) parts.push(this.meta.remoteType);
+        return parts.join(', ');
+      },
+      seenPrefix() { return (this.meta.repostCount || 0) === 0 ? 'First seen' : 'Last seen'; },
+      relativeSeen() { return this.relativeFromUtc((this.meta.repostCount||0)===0 ? this.meta.firstSeenUtc : this.meta.lastSeenUtc); },
+
+      relativeFromUtc(iso) {
+        if (!iso) return '';
+        const now = new Date();
+        const todayUTC = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+        const d = new Date(iso);
+        const targetUTC = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+        const diff = Math.floor((todayUTC - targetUTC) / (24*3600*1000));
+        if (diff <= 0) return 'Today';
+        if (diff === 1) return 'Yesterday';
+        return `${diff} days ago`;
+      },
+
+      copy(text) { navigator.clipboard?.writeText(text).catch(()=>{}); }
+    }));
+  });
+
+  // Expose helper so jobStatusComponent can reuse it
+  window.__relativeFromUtc = (iso) => {
+    if (!iso) return '';
+    const now = new Date();
+    const todayUTC = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    const d = new Date(iso);
+    const targetUTC = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+    const diff = Math.floor((todayUTC - targetUTC) / (24*3600*1000));
+    if (diff <= 0) return 'Today';
+    if (diff === 1) return 'Yesterday';
+    return `${diff} days ago`;
+  };
 </script>
+
+
 {% endblock %}

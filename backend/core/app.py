@@ -6,7 +6,7 @@ from identity.flask import Auth
 import app_config
 import logging
 import time,random
-from werkzeug.exceptions import Unauthorized
+from werkzeug.exceptions import Unauthorized, BadRequest
 from datetime import datetime
 import bleach
 from bs4 import BeautifulSoup
@@ -178,6 +178,26 @@ def create_or_get_user(msal_user: dict):
         logging.error("Failed to create or retrieve user from API: %s", e)
         raise
 
+def _get_in_app_user(context, *, ttl_seconds=600):
+    """Return in-app user (with userId) from session cache or create it."""
+    cached = session.get("in_app_user_cache")
+    if cached and time.time() - cached.get("ts", 0) < ttl_seconds:
+        return cached["data"]
+
+    def call():
+        return create_or_get_user(context['user'])
+
+    data = _retry_until_ready(call, attempts=3, base_delay=0.5)
+    session["in_app_user_cache"] = {"data": data, "ts": time.time()}
+    return data
+
+def _get_in_app_user_id(context) -> str:
+    u = _get_in_app_user(context)
+    uid = (u or {}).get("userId")
+    if not uid:
+        raise ValueError("In-app user is missing userId")
+    return uid
+
 # For user's status for a job offering
 def call_jobs_status(job_ids, context, timeout=6):
     """
@@ -190,18 +210,25 @@ def call_jobs_status(job_ids, context, timeout=6):
     if not base_url:
         raise RuntimeError("EHESTIFTER_JOBS_API_BASE_URL is not configured")
 
+    user_id = _get_in_app_user_id(context)
+
     url = f"{base_url}/jobs/status"
     headers = {
-        "X-User-Id": context["user"]["userId"],  # GUID from /ui/users/me
+        "X-User-Id": user_id,
         "Accept": "application/json",
         "Content-Type": "application/json",
     }
     if function_key:
         headers["x-functions-key"] = function_key
 
-    resp = requests.post(url, headers=headers, json={"jobIds": job_ids}, timeout=timeout)
-    resp.raise_for_status()
-    return resp.json()
+    try:
+        resp = requests.post(url, headers=headers, json={"jobIds": job_ids}, timeout=timeout)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.HTTPError as e:
+        # bubble useful info into logs
+        logging.warning("call_jobs_status failed: %s - %s", getattr(e.response, "status_code", "?"), getattr(e.response, "text", ""))
+        raise
 
 def set_job_status(job_id, status, context, timeout=6):
     base_url = os.getenv("EHESTIFTER_JOBS_API_BASE_URL", "").rstrip("/")
@@ -209,18 +236,68 @@ def set_job_status(job_id, status, context, timeout=6):
     if not base_url:
         raise RuntimeError("EHESTIFTER_JOBS_API_BASE_URL is not configured")
 
+    user_id = _get_in_app_user_id(context)
+
     url = f"{base_url}/jobs/{job_id}/status"
     headers = {
-        "X-User-Id": context["user"]["userId"],
+        "X-User-Id": user_id,
         "Accept": "application/json",
         "Content-Type": "application/json",
     }
     if function_key:
         headers["x-functions-key"] = function_key
 
-    resp = requests.put(url, headers=headers, json={"status": status}, timeout=timeout)
-    resp.raise_for_status()
-    return resp.json()
+    try:
+        resp = requests.put(url, headers=headers, json={"status": status}, timeout=timeout)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.HTTPError as e:
+        logging.warning("set_job_status failed: %s - %s", getattr(e.response, "status_code", "?"), getattr(e.response, "text", ""))
+        raise
+
+@bp.route("/ui/jobs/<job_id>/status", methods=["GET"])
+@auth.login_required
+def ui_job_status_get(job_id, *, context):
+    """
+    Returns {"jobId": ..., "status": "<value or Unset>"} for current user.
+    """
+    try:
+        data = call_jobs_status([job_id], context=context)
+        statuses = data.get("statuses", {})
+        status = statuses.get(job_id) or {k.lower(): v for k, v in statuses.items()}.get(job_id.lower(), "Unset")
+        return jsonify({"jobId": job_id, "status": status}), 200
+    except requests.HTTPError as e:
+        code = e.response.status_code if e.response is not None else 502
+        msg  = e.response.text if e.response is not None else "upstream error"
+        return jsonify({"error": "upstream_error", "message": msg}), code
+    except Exception:
+        return jsonify({"error": "upstream_warming", "message": "Status service is warming up. Please try again."}), 503
+
+
+@bp.route("/ui/jobs/<job_id>/status", methods=["POST"])
+@auth.login_required
+def ui_job_status_set(job_id, *, context):
+    """
+    Body: {"status": "<string up to 100 chars>"}
+    Returns {"jobId": ..., "status": "..."} (mirrors Function response, simplified).
+    """
+    body = request.get_json(silent=True) or {}
+    status = (body.get("status") or "").strip()
+    if not status: raise BadRequest("Missing 'status'")
+    if len(status) > 100: raise BadRequest("Status too long (max 100)")
+
+    try:
+        data = set_job_status(job_id, status=status, context=context)
+        return jsonify({"jobId": data.get("jobId", job_id), "status": data.get("status", status)}), 200
+    except requests.HTTPError as e:
+        code = e.response.status_code if e.response is not None else 502
+        msg  = e.response.text if e.response is not None else "upstream error"
+        return jsonify({"error": "upstream_error", "message": msg}), code
+    except Exception:
+        return jsonify({"error": "upstream_warming", "message": "Could not update status. Please try again."}), 503
+
+
+
 
 @bp.route("/ui/users/me", methods=["GET"])
 @auth.login_required

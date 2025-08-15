@@ -1,0 +1,61 @@
+/* ===== Shared tokens for statuses (color-blind friendly, high contrast) ===== */
+:root{
+  --st-unset-fg:#6b7280;  --st-unset-bg:#f3f4f6;  --st-unset-br:#e5e7eb;
+  --st-default-fg:#111827;--st-default-bg:#f0f0f0;--st-default-br:#d1d5db;
+
+  /* Applied = dark blue */
+  --st-applied-fg:#1f4b99;   --st-applied-bg:#e8eefb;   --st-applied-br:#c7d2fe;
+
+  /* Booked (planned actions) = dark gold */
+  --st-booked-fg:#7a6000;    --st-booked-bg:#f7f2d2;    --st-booked-br:#e8d596;
+
+  /* Done (waiting) = sea-blue/teal */
+  --st-done-fg:#0f766e;      --st-done-bg:#e0f5f6;      --st-done-br:#b5e3e5;
+
+  /* Offer incoming = hot orange (not red) */
+  --st-offer-fg:#a23c00;     --st-offer-bg:#ffe8d9;     --st-offer-br:#ffd0b3;
+
+  /* Accepted = pastoral green */
+  --st-accepted-fg:#1b5e20;  --st-accepted-bg:#e6f4ea;  --st-accepted-br:#c6e9d0;
+
+  /* Finished (rejected/declined) = dark gray */
+  --st-finished-fg:#374151;  --st-finished-bg:#ececec;  --st-finished-br:#d1d5db;
+
+  /* Private section accent (lavender lane) */
+  --private-bg:#faf5ff;      --private-br:#ede9fe;      --private-accent:#7c3aed;
+}
+
+/* Status pill */
+.status-badge{
+  display:inline-block; padding:2px 10px; border-radius:999px;
+  border:1px solid var(--st-default-br);
+  font-size:12px; font-weight:600;
+  background:var(--st-default-bg); color:var(--st-default-fg);
+}
+/* Map canonical keys to tokens */
+.status-badge[data-k="unset"]         { color:var(--st-unset-fg);    background:var(--st-unset-bg);    border-color:var(--st-unset-br); }
+.status-badge[data-k="applied"]       { color:var(--st-applied-fg);  background:var(--st-applied-bg);  border-color:var(--st-applied-br); }
+
+.status-badge[data-k="booked-screen"],
+.status-badge[data-k="booked-hm"],
+.status-badge[data-k="booked-more"]   { color:var(--st-booked-fg);   background:var(--st-booked-bg);   border-color:var(--st-booked-br); }
+
+.status-badge[data-k="done-screen"],
+.status-badge[data-k="done-hm"],
+.status-badge[data-k="done-more"]     { color:var(--st-done-fg);     background:var(--st-done-bg);     border-color:var(--st-done-br); }
+
+.status-badge[data-k="offer"]         { color:var(--st-offer-fg);    background:var(--st-offer-bg);    border-color:var(--st-offer-br); }
+.status-badge[data-k="accepted"]      { color:var(--st-accepted-fg); background:var(--st-accepted-bg); border-color:var(--st-accepted-br); }
+
+.status-badge[data-k="finished"]      { color:var(--st-finished-fg); background:var(--st-finished-bg); border-color:var(--st-finished-br); }
+.status-badge[data-k="default"]       { color:#111827; background:#fff; border-color:#111827; }
+
+/* Private blocks: subtle, ever-present, not clashing with status colors */
+.private-block{
+  border-color:var(--private-br) !important;
+  background:linear-gradient(90deg, rgba(124,58,237,.08) 0, rgba(124,58,237,.03) 8px, #fff 8px) !important;
+}
+.chip-private{
+  display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px;
+  background:#f5f3ff; color:#5b42c3; border:1px solid var(--private-br);
+}
