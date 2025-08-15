@@ -13,18 +13,22 @@
   .title-link { font-weight: 600; text-decoration: none; }
   .title-link:hover { text-decoration: underline; }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+  /* Reserve space so rows don't jump when pills arrive */
+  .col-status { min-width: 26ch; } /* fits "Rejected with Unfortunately" + pill padding */
+  /* A subtle private cue on the whole column (matches private-block theme) */
+  thead th.th-status { background: linear-gradient(90deg, rgba(124,58,237,.08), #f7f7f7 36px) }
+  tbody td.col-status { background: linear-gradient(90deg, rgba(124,58,237,.05), transparent 12px); }
+
 </style>
 {% endblock %}
 
 {% block content %}
   <div style="max-width:1100px; margin:0 auto; padding:16px;">
-    <h2 style="margin:0 0 12px;">Welcome to {{ title }}, {{ user.get("name") }}!</h2>
-
     <h3 style="display:flex; align-items:center; gap:10px; margin: 14px 0;">
-      Job offerings
+      I have those jobs for you
       <a href="{{ url_for('job_new') }}"
         style="font-size:.95rem; padding:6px 10px; border:1px solid #bbb; border-radius:6px; text-decoration:none;">
-        + Add offering
+        + Add new
       </a>
     </h3>
 
@@ -49,12 +53,8 @@
 
     <div id="jobs-error" class="hidden"></div>
 
-    <div style="overflow:auto">
-      <table id="jobs-table">
-        <thead></thead>
-        <tbody></tbody>
-      </table>
-    </div>
+    <!-- Cards list -->
+    <div id="jobs-list" class="cards" aria-busy="true"></div>
 
     <details style="margin-top:16px;">
       <summary><p style="display:inline">Debug: Jobs API</p></summary>
@@ -72,6 +72,8 @@
     const dfDM = new Intl.DateTimeFormat(undefined, { day: '2-digit', month: 'short' });
     const dfDMY = new Intl.DateTimeFormat(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
 
+    
+    
     function formatWhen(iso) {
       if (!iso) return '';
       const d = new Date(iso);
@@ -108,13 +110,27 @@
         }
       }
     }
-
-    // ---------------------------
-    // Jobs table
-    // ---------------------------
-    const TBL = document.getElementById('jobs-table');
-    const THEAD = TBL.querySelector('thead');
-    const TBODY = TBL.querySelector('tbody');
+    async function postWithRetry(url, body, attempts = 4) {
+      let delay = 500;
+      for (let i = 1; i <= attempts; i++) {
+        try {
+          const resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify(body)
+          });
+          if (!resp.ok) throw new Error('HTTP ' + resp.status);
+          return await resp.json();
+        } catch (err) {
+          if (i === attempts) throw err;
+          await new Promise(r => setTimeout(r, delay));
+          delay *= 2;
+        }
+      }
+    }
+    // ---------- DOM refs ----------
+    const listEl = document.getElementById('jobs-list');
     const statusEl = document.getElementById('jobs-status');
     const errEl = document.getElementById('jobs-error');
     const dbgJobs = document.getElementById('dbg-jobs');
@@ -124,88 +140,18 @@
     const refreshBtn = document.getElementById('refresh');
     const pageNumEl = document.getElementById('page-num');
 
+    // ---------- Paging state ----------
     let pageSize = Number(sessionStorage.getItem('jobs.pageSize') || 25);
     if (![10,25,50,100].includes(pageSize)) pageSize = 25;
     pageSizeSel.value = String(pageSize);
 
-    let page = 1; // 1-based
+    let page = 1;
     let lastReceived = 0;
 
-    const COLS = [
-      { key: 'Title', label: 'Title' },
-      { key: 'HiringCompanyName', label: 'Company' },
-      { key: 'RemoteType', label: 'Remote' },
-      { key: 'Location', label: 'Location' },   // virtual: Country (Locality)
-      { key: 'FirstSeenAt', label: 'First Seen At' }
-    ];
-
-    function buildHeader() {
-      THEAD.innerHTML = '';
-      const tr = document.createElement('tr');
-      for (const c of COLS) {
-        const th = document.createElement('th');
-        th.textContent = c.label;
-        tr.appendChild(th);
-      }
-      THEAD.appendChild(tr);
-    }
-
-    function locationFrom(row) {
-      const country = row.Country || '';
-      const loc = row.Locality || '';
-      if (!country && !loc) return '';
-      if (country && !loc) return country;
-      if (!country && loc) return loc;
-      return `${country} (${loc})`;
-    }
-
-    function tdTitle(row) {
-      const td = document.createElement('td');
-      const a = document.createElement('a');
-      a.className = 'title-link';
-      a.href = `/jobs/${encodeURIComponent(row.Id)}`;
-      a.textContent = row.Title || '(no title)';
-      td.appendChild(a);
-      return td;
-    }
-
-    function tdText(text) {
-      const td = document.createElement('td');
-      if (typeof text === 'string' && text.length > 200) {
-        td.innerHTML = `<span class="truncate" title="${text.replaceAll('"','&quot;')}">${text}</span>`;
-      } else {
-        td.textContent = text || '';
-      }
-      return td;
-    }
-
-    function tdWhen(iso) {
-      const td = document.createElement('td');
-      td.dataset.iso = iso || ''; // keep ISO available for later sorting/filtering
-      td.textContent = formatWhen(iso);
-      return td;
-    }
-
-    function buildRows(items) {
-      TBODY.innerHTML = '';
-      for (const row of items) {
-        const tr = document.createElement('tr');
-        tr.appendChild(tdTitle(row));
-        tr.appendChild(tdText(row.HiringCompanyName || ''));
-        tr.appendChild(tdText(row.RemoteType || ''));
-        tr.appendChild(tdText(locationFrom(row)));
-        tr.appendChild(tdWhen(row.FirstSeenAt || row.PostedDate || ''));
-        TBODY.appendChild(tr);
-      }
-    }
-
     function setLoading(loading, note='') {
-      if (loading) {
-        statusEl.textContent = note || 'Loading…';
-        errEl?.classList.add('hidden');
-      } else {
-        statusEl.textContent = note || `Showing ${lastReceived} row(s)`;
-      }
+      listEl?.setAttribute('aria-busy', loading ? 'true' : 'false');
+      statusEl.textContent = loading ? (note || 'Loading…') : (note || `Showing ${lastReceived} row(s)`);
+      if (loading) errEl?.setAttribute('hidden', 'hidden');
     }
 
     function setPagerState() {
@@ -214,61 +160,139 @@
       nextBtn.disabled = lastReceived < pageSize;
     }
 
+    function locationFrom(row) {
+      const country = row.Country || '';
+      const loc = row.Locality || '';
+      const remote = row.RemoteType || '';
+      const parts = [];
+      if (country) parts.push(country);
+      if (loc) parts.push(`(${loc})`);
+      if (remote) parts.push(remote);
+      return parts.join(', ');
+    }
+
+    // ---------- Card rendering ----------
+    function cardHTML(row) {
+      // Note: list API has FirstSeenAt only; we show "First seen".
+      const title = row.Title || '(no title)';
+      const company = row.HiringCompanyName || '';
+      const geo = locationFrom(row);
+      const firstSeen = row.FirstSeenAt || row.PostedDate || '';
+
+      // status placeholder id
+      const sid = `ust_${row.Id}`;
+
+      return `
+        <article class="card" style="padding:12px 16px;">
+          <div class="flex-between">
+            <div style="min-width:0;">
+              <h4 class="truncate-1" style="font-size:18px; margin:0 0 4px 0;">
+                <a class="title-link" href="/jobs/${encodeURIComponent(row.Id)}" title="${title.replaceAll('"','&quot;')}">${title}</a>
+              </h4>
+              <div class="flex muted" style="flex-wrap:wrap; font-size:14px;">
+                ${company ? `<span class="truncate-1" style="max-width:36ch;" title="${company.replaceAll('"','&quot;')}">${company}</span>` : ''}
+                ${geo ? `<span class="truncate-1" style="max-width:28ch; margin-left:8px;" title="${geo.replaceAll('"','&quot;')}">${geo}</span>` : ''}
+              </div>
+            </div>
+            <div style="text-align:right;">
+              <div class="muted" style="font-size:11px; text-transform:uppercase; letter-spacing:.04em;">First seen</div>
+              <div style="font-size:14px;">${formatWhen(firstSeen)}</div>
+            </div>
+          </div>
+
+          <!-- status row under seen info -->
+          <div class="flex" style="margin-top:8px; flex-wrap:wrap; gap:10px; align-items:center;">
+            <div class="muted" style="font-size:14px;">Your status</div>
+            <span class="chip-private">🔒 Only you</span>
+            <span class="status-slot">
+              <span class="status-badge" data-k="unset" id="${sid}">loading…</span>
+            </span>
+          </div>
+        </article>
+      `;
+    }
+
+    function renderCards(items) {
+      listEl.innerHTML = items.map(cardHTML).join('');
+    }
+
+    async function loadStatusesFor(ids) {
+      if (!ids || !ids.length) return;
+      try {
+        const data = await postWithRetry('/ui/jobs/status', { jobIds: ids }, 4);
+        const map = (data && data.statuses) || {};
+        for (const id of ids) {
+          const el = document.getElementById(`ust_${id}`);
+          if (!el) continue;
+          const raw = map[id] ?? map[id?.toLowerCase?.()] ?? 'Unset';
+          el.textContent = raw || 'Unset';
+          el.dataset.k = window.Status.statusKey(raw);
+        }
+      } catch (e) {
+        // graceful degrade
+        for (const id of ids) {
+          const el = document.getElementById(`ust_${id}`);
+          if (!el) continue;
+          el.textContent = 'unavailable';
+          el.dataset.k = 'unset';
+        }
+      }
+    }
+
+    // ---------- Page load ----------
     async function loadPage() {
       const offset = (page - 1) * pageSize;
       setLoading(true, `Loading page ${page}…`);
       try {
-        const url = `/ui/jobs?limit=${pageSize}&offset=${offset}`;
-        const data = await fetchWithRetry(url, 4);
+        const data = await fetchWithRetry(`/ui/jobs?limit=${pageSize}&offset=${offset}`, 4);
         if (data && !data.error) {
           const items = Array.isArray(data.items) ? data.items : [];
           lastReceived = data.received || items.length;
           if (dbgJobs) { dbgJobs.style.opacity = 1; dbgJobs.textContent = JSON.stringify(data, null, 2); }
 
-          buildHeader();
           if (items.length === 0) {
-            TBODY.innerHTML = `<tr><td class="text-dim" colspan="${COLS.length}">No data</td></tr>`;
+            listEl.innerHTML = `<div class="card" style="padding:12px 16px;"><span class="muted">No data</span></div>`;
             setLoading(false, 'No rows');
             setPagerState();
             return;
           }
 
-          buildRows(items);
+          renderCards(items);
           setLoading(false);
           setPagerState();
+
+          // Fetch statuses asynchronously
+          loadStatusesFor(items.map(x => x.Id).filter(Boolean));
         } else {
           throw new Error((data && data.message) || 'Jobs service is warming up');
         }
       } catch (e) {
         console.error('loadPage error', e);
-        if (errEl) {
-          errEl.classList.remove('hidden');
-          errEl.innerHTML = `
-            <span class="text-dim">Jobs unavailable - ${e.message || e}</span>
-            <button id="retry-jobs" type="button" style="margin-left:.5rem">Retry</button>
-          `;
-          document.getElementById('retry-jobs').addEventListener('click', () => {
-            errEl.classList.add('hidden');
-            loadPage();
-          });
-        }
+        errEl.style.display = 'block';
+        errEl.innerHTML = `
+          <span class="text-dim">Jobs unavailable - ${e.message || e}</span>
+          <button id="retry-jobs" type="button" style="margin-left:.5rem">Retry</button>
+        `;
+        document.getElementById('retry-jobs').addEventListener('click', () => {
+          errEl.style.display = 'none';
+          loadPage();
+        });
         setLoading(false, 'Failed to load');
       }
     }
 
+    // ---------- Wiring ----------
     pageSizeSel.addEventListener('change', () => {
       pageSize = Number(pageSizeSel.value);
       sessionStorage.setItem('jobs.pageSize', String(pageSize));
       page = 1;
       loadPage();
     });
-
     prevBtn.addEventListener('click', () => { if (page > 1) { page -= 1; loadPage(); } });
     nextBtn.addEventListener('click', () => { if (!nextBtn.disabled) { page += 1; loadPage(); } });
     refreshBtn.addEventListener('click', loadPage);
 
-    // single init (user bar handled by base.html)
     document.addEventListener('DOMContentLoaded', loadPage);
   })();
-  </script>
+</script>
 {% endblock %}

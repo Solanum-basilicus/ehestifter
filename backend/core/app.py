@@ -296,6 +296,36 @@ def ui_job_status_set(job_id, *, context):
     except Exception:
         return jsonify({"error": "upstream_warming", "message": "Could not update status. Please try again."}), 503
 
+@bp.route("/ui/jobs/status", methods=["POST"])
+@auth.login_required
+def ui_jobs_status_bulk(*, context):
+    """
+    Body: {"jobIds": ["GUID", ...]}
+    Returns: {"userId": "...", "statuses": { jobId: "Status|Unset", ... }}
+    """
+    body = request.get_json(silent=True) or {}
+    job_ids = body.get("jobIds") or []
+    # basic trimming + de-dupe; keep original casing as function returns exact keys
+    job_ids = [str(x).strip() for x in job_ids if x]
+    job_ids = list(dict.fromkeys(job_ids))
+    if not job_ids:
+        return jsonify({"error":"bad_request","message":"jobIds required"}), 400
+
+    try:
+        data = call_jobs_status(job_ids, context=context)  # uses your existing helper
+        # Safety: ensure Unset is returned when missing
+        m = data.get("statuses") or {}
+        for jid in job_ids:
+            if jid not in m and jid.lower() not in m:
+                m[jid] = "Unset"
+        data["statuses"] = m
+        return jsonify(data), 200
+    except requests.HTTPError as e:
+        code = e.response.status_code if e.response is not None else 502
+        msg  = e.response.text if e.response is not None else "upstream error"
+        return jsonify({"error":"upstream_error","message":msg}), code
+    except Exception:
+        return jsonify({"error":"upstream_warming","message":"Status service is warming up. Please try again."}), 503
 
 
 

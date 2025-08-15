@@ -59,3 +59,20 @@
   display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px;
   background:#f5f3ff; color:#5b42c3; border:1px solid var(--private-br);
 }
+
+/* --- Reusable UI bits (cards, layout, text) --- */
+.card { border:1px solid #e5e7eb; border-radius:12px; background:#fff; }
+.flex { display:flex; gap:8px; align-items:center; }
+.flex-between { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
+.truncate-1 { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.muted { color:#6b7280; }
+
+/* Meta-card list layout */
+.cards { display:grid; gap:12px; }
+
+/* Title link */
+.title-link { font-weight:600; text-decoration:none; color:#111827; }
+.title-link:hover { text-decoration:underline; }
+
+/* Status slot width — prevents layout shift when pill arrives */
+.status-slot { min-width:26ch; display:inline-block; }
