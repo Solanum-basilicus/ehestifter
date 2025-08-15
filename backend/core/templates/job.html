@@ -23,6 +23,23 @@
   .sep-vert { width:1px; height:16px; background:#e5e7eb; margin:0 6px; }
   .placeholder-img { width:100%; height:128px; border-radius:8px; background:#f3f4f6; color:#6b7280;
     display:flex; align-items:center; justify-content:center; font-size:12px; }
+  /* History */
+  .hist-list { display:grid; gap:10px; }
+  .hist-item { display:flex; align-items:flex-start; gap:10px; }
+  .hist-ts { width:140px; flex:0 0 140px; color:#6b7280; font-size:12px; line-height:1.3; }
+  .hist-body { flex:1; min-width:0; }
+  .hist-kind { font-weight:600; }
+  .hist-deltas { margin:6px 0 0; padding:0; list-style:none; }
+  .hist-deltas li { margin:2px 0; font-size:14px; }
+  .hist-pills { display:inline-flex; gap:6px; align-items:center; }
+
+  .chip { display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid #e5e7eb; background:#f9fafb; }
+  .chip.info { background:#eef2ff; border-color:#c7d2fe; }
+
+  .hist-skeleton .line { height:14px; border-radius:6px; }
+  .hist-skeleton .line.w40 { width:40%; } .hist-skeleton .line.w60 { width:60%; }
+  .hist-skeleton .line.w80 { width:80%; } .hist-skeleton .line.w100 { width:100%; }
+  .hist-footer { margin-top:10px; display:flex; gap:8px; }
 </style>
 
 <!-- self-hosted scripts -->
@@ -102,7 +119,7 @@
         <!-- relative time, if you later surface changedAtUtc -->
         <template x-if="app.changedAtUtc">
           <div class="flex muted" style="font-size:14px;">
-            ⏱ <span x-text="relativeFromUtc(app.changedAtUtc)"></span>
+             <span x-text="relativeFromLocal(app.changedAtUtc)"></span>
           </div>
         </template>
 
@@ -187,8 +204,119 @@
       <!-- History -->
       <div class="card" style="padding:14px; margin-top:12px;">
         <div style="font-weight:600; margin-bottom:6px;">History</div>
-        <div class="muted" style="font-size:14px;">No events yet</div>
+
+        <!-- Loading skeleton -->
+        <div x-show="!history.loaded && !history.error" class="hist-skeleton">
+          <div class="skeleton line w60" style="margin:6px 0;"></div>
+          <div class="skeleton line w80" style="margin:6px 0;"></div>
+          <div class="skeleton line w40" style="margin:6px 0;"></div>
+        </div>
+
+        <!-- Error + retry -->
+        <template x-if="history.error">
+          <div class="muted" style="font-size:14px;">
+            Could not load history.
+            <button class="btn" @click="loadHistory()" aria-disabled="false">Retry</button>
+          </div>
+        </template>
+
+        <!-- Empty state -->
+        <template x-if="history.loaded && history.items.length === 0 && !history.error">
+          <div class="muted" style="font-size:14px;">No events yet</div>
+        </template>
+
+        <!-- List -->
+        <div class="hist-list" x-show="history.items.length > 0">
+          <template x-for="item in history.items" :key="item.id">
+            <div class="hist-item">
+              <div class="hist-ts">
+                <div x-text="relativeFromLocal(item.timestamp)"></div>
+                <div :title="new Date(item.timestamp).toLocaleString()" class="muted" style="font-size:11px;">
+                  <span x-text="formatLocalHM(item.timestamp)"></span>
+                  <span x-text="localTzAbbr(item.timestamp)"></span>
+                </div>
+              </div>
+
+              <div class="hist-body">
+                <!-- status_changed -->
+                <template x-if="item.kind === 'status_changed'">
+                  <div>
+                    <span class="hist-kind">Status updated</span>
+                    <div class="hist-pills" style="margin-top:4px;">
+                      <span class="status-badge" :data-k="Status.statusKey(item.data?.from || 'Unset')" x-text="item.data?.from || 'Unset'"></span>
+                      <span style="font-size:12px; color:#6b7280;">→</span>
+                      <span class="status-badge" :data-k="Status.statusKey(item.data?.to || 'Unset')" x-text="item.data?.to || 'Unset'"></span>
+                    </div>
+                  </div>
+                </template>
+
+                <!-- job_updated -->
+                <template x-if="item.kind === 'job_updated'">
+                  <div>
+                    <span class="hist-kind">Job updated</span>
+                    <ul class="hist-deltas">
+                      <template x-for="(chg, field) in (item.data?.changed || {})" :key="field">
+                        <li>
+                          <span style="font-weight:600;" x-text="field"></span>:
+                          <span class="muted" x-text="safeStr(chg.from)"></span>
+                          <span style="color:#6b7280;">→</span>
+                          <span x-text="safeStr(chg.to)"></span>
+                        </li>
+                      </template>
+                      <li x-show="item.data?.descriptionChanged">
+                        <span class="chip info">Description updated</span>
+                      </li>
+                    </ul>
+                  </div>
+                </template>
+
+                <!-- job_created -->
+                <template x-if="item.kind === 'job_created'">
+                  <div><span class="hist-kind">Job was created</span></div>
+                </template>
+
+                <!-- job_deleted -->
+                <template x-if="item.kind === 'job_deleted'">
+                  <div><span class="hist-kind">Job was deleted</span></div>
+                </template>
+
+                <!-- enrichment_requested / enrichment_finished (simple text for now) -->
+                <template x-if="item.kind === 'enrichment_requested'">
+                  <div>
+                    <span class="hist-kind">Enrichment requested</span>
+                    <span class="muted" x-text="`(${item.data?.enricher || 'Unknown'})`"></span>
+                  </div>
+                </template>
+                <template x-if="item.kind === 'enrichment_finished'">
+                  <div>
+                    <span class="hist-kind">Enrichment finished</span>
+                    <span class="muted" x-text="`(${item.data?.enricher || 'Unknown'})`"></span>
+                  </div>
+                </template>
+
+                <!-- Fallback -->
+                <template x-if="!['status_changed','job_updated','job_created','job_deleted','enrichment_requested','enrichment_finished'].includes(item.kind)">
+                  <div>
+                    <span class="hist-kind" x-text="item.kind || 'event'"></span>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <!-- Footer: pagination controls -->
+        <div class="hist-footer" x-show="history.loaded && (history.nextCursor || history.loadingMore)">
+          <button class="btn" @click="loadMore()" :aria-disabled="history.loadingMore ? 'true' : 'false'" :disabled="history.loadingMore">
+            <span x-show="!history.loadingMore">Load more</span>
+            <span x-show="history.loadingMore">Loading…</span>
+          </button>
+        </div>
       </div>
+
+
+
+
     </div>
 
     <!-- Right rail: Enrichers -->
@@ -217,10 +345,27 @@
   </div>
 </div>
 
+
+
+
+
+
+
+
+
+
+
+
+
+
 <script>
   // Alpine components must be registered inside alpine:init
   document.addEventListener('alpine:init', () => {
+
+    
+    // That one is for user's job status manipulations
     Alpine.data('jobStatusComponent', ({ jobId }) => ({
+      jobId,
       app: { state: null, changedAtUtc: null },
       statusOptions: window.Status.STATUS_OPTIONS,
       selected: null,
@@ -284,6 +429,8 @@
 
           this.app.state = data.status || toSend;
           this.editing = false;
+          // notify parent to refresh history
+          window.dispatchEvent(new CustomEvent('job-history-refresh', { detail: { jobId: this.jobId } }));
         } catch (e) {
           this.error = "Could not set status - please try again.";
         } finally {
@@ -292,9 +439,13 @@
       },
 
       // Reuse outer helper if present
-      relativeFromUtc(iso){ return window.__relativeFromUtc?.(iso) ?? ''; }
+      relativeFromLocal(iso){ return window.__relativeFromLocal?.(iso) ?? ''; }
     }));
 
+
+
+
+    // That one is for pretty much everything on the page
     Alpine.data('jobDetailPage', (jobId) => ({
       jobId,
       _inited: false,
@@ -306,10 +457,20 @@
       safeDescription: "",
       descLoaded: false,
 
+      /* history state */
+      history: {
+        items: [],
+        nextCursor: null,
+        loaded: false,
+        loadingMore: false,
+        error: ""
+      },
+
       async init() {
         if (this._inited) return;
         this._inited = true;
 
+        // Load main job payload (with cold-start retry)
         const tryFetch = async () => {
           const r = await fetch(`/ui/jobs/${this.jobId}`, { credentials: 'same-origin' });
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -331,8 +492,19 @@
           this.safeDescription = `<p class="muted">Unable to load description right now.</p>`;
           this.descLoaded = true;
         }
+
+        // Kick off history load (don’t block page)
+        this.loadHistory();       
+        // listen for status changes to refresh history
+         window.addEventListener('job-history-refresh', (e) => {
+          if (!e.detail || e.detail.jobId === this.jobId) {
+            this.loadHistory();
+          }
+        }, { once: false });
       },
 
+
+      // A full bucket of helpers follows...
       get(obj, keys) {
         for (const k of keys) if (obj && obj[k] != null) return obj[k];
         return undefined;
@@ -401,36 +573,71 @@
         return parts.join(', ');
       },
       seenPrefix() { return (this.meta.repostCount || 0) === 0 ? 'First seen' : 'Last seen'; },
-      relativeSeen() { return this.relativeFromUtc((this.meta.repostCount||0)===0 ? this.meta.firstSeenUtc : this.meta.lastSeenUtc); },
+      relativeSeen() { return this.relativeFromLocal((this.meta.repostCount||0)===0 ? this.meta.firstSeenUtc : this.meta.lastSeenUtc); },
 
-      relativeFromUtc(iso) {
+
+      // Time related
+      formatLocalHM(iso){
         if (!iso) return '';
-        const now = new Date();
-        const todayUTC = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
         const d = new Date(iso);
-        const targetUTC = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-        const diff = Math.floor((todayUTC - targetUTC) / (24*3600*1000));
-        if (diff <= 0) return 'Today';
-        if (diff === 1) return 'Yesterday';
-        return `${diff} days ago`;
+        const hh = String(d.getHours()).padStart(2,'0');
+        const mm = String(d.getMinutes()).padStart(2,'0');
+        return `${hh}:${mm}`;
       },
+      localTzAbbr(iso){
+        try {
+          const d = new Date(iso);
+          const parts = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short', hour: '2-digit' }).formatToParts(d);
+          return parts.find(p => p.type === 'timeZoneName')?.value || '';
+        } catch { return ''; }
+      },
+
+      // replace any usage of relativeFromUtc with this:
+      relativeFromLocal(iso){ return window.__relativeFromLocal?.(iso) ?? ''; },
+
+      /* that one is old, for compatibility */
+      relativeFromUtc(iso){ return window.__relativeFromUtc?.(iso) ?? ''; },
+
+
+      safeStr(v){ return (v === null || v === undefined) ? '∅' : String(v); },
+
+      async loadHistory(limit=10) {
+        this.history.error = "";
+        try {
+          const qs = new URLSearchParams({ limit: String(limit) }).toString();
+          const url = `/ui/jobs/${this.jobId}/history?` + qs;
+          const data = await window.fetchWithRetry(url, 4, 900);
+          this.history.items = Array.isArray(data.items) ? data.items : [];
+          this.history.nextCursor = data.nextCursor || null;
+          this.history.loaded = true;
+        } catch (e) {
+          this.history.error = "please try again";
+          this.history.loaded = false;
+        }
+      },
+
+      async loadMore(limit=10) {
+        if (!this.history.nextCursor || this.history.loadingMore) return;
+        this.history.loadingMore = true;
+        try {
+          const qs = new URLSearchParams({ limit: String(limit), cursor: this.history.nextCursor }).toString();
+          const url = `/ui/jobs/${this.jobId}/history?` + qs;
+          const data = await window.fetchWithRetry(url, 3, 900);
+          const more = Array.isArray(data.items) ? data.items : [];
+          this.history.items = this.history.items.concat(more);
+          this.history.nextCursor = data.nextCursor || null;
+        } catch (e) {
+          // keep existing list; expose a soft error on footer if you like
+        } finally {
+          this.history.loadingMore = false;
+          this.history.loaded = true;
+        }
+      },      
 
       copy(text) { navigator.clipboard?.writeText(text).catch(()=>{}); }
     }));
   });
 
-  // Expose helper so jobStatusComponent can reuse it
-  window.__relativeFromUtc = (iso) => {
-    if (!iso) return '';
-    const now = new Date();
-    const todayUTC = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-    const d = new Date(iso);
-    const targetUTC = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-    const diff = Math.floor((todayUTC - targetUTC) / (24*3600*1000));
-    if (diff <= 0) return 'Today';
-    if (diff === 1) return 'Yesterday';
-    return `${diff} days ago`;
-  };
 </script>
 
 

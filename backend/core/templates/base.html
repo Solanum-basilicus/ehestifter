@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
   <script src="{{ url_for('static', filename='js/status-utils.js') }}"></script>  
+  <script src="{{ url_for('static', filename='js/net-utils.js') }}"></script>
   <title>{{ title or "Ehestifter" }}</title>
   {% block head_extra %}{% endblock %}
   <style>
@@ -36,8 +37,13 @@
     © {{ now.strftime("%Y") if now else "" }} Ehestifter
   </footer>
 
+
+
+
+
   <!-- User-bar cold-start helper -->
   <script>
+
   (function(){
     const userLink = document.getElementById('user-link');
     let inited = false;
@@ -47,6 +53,7 @@
       if (href) userLink.href = href;
       userLink.classList.remove('muted');
     }
+
     function showError(msg) {
       userLink.textContent = 'User info unavailable - ' + msg;
       userLink.removeAttribute('href');
@@ -63,28 +70,11 @@
       btn.onclick = initUser;
     }
 
-    async function fetchWithRetry(url, attempts=4, baseDelay=750) {
-      let lastErr;
-      for (let i=0; i<attempts; i++) {
-        try {
-          const r = await fetch(url, { credentials: 'same-origin' });
-          if (!r.ok) throw new Error('HTTP ' + r.status);
-          return await r.json();
-        } catch (e) {
-          lastErr = e;
-          const jitter = Math.random() * 250;
-          const delay = baseDelay * Math.pow(2, i) + jitter;
-          await new Promise(res => setTimeout(res, delay));
-        }
-      }
-      throw lastErr;
-    }
-
     async function initUser() {
       if (inited) return;
       inited = true;
       try {
-        const data = await fetchWithRetry('/ui/users/me', 4);
+        const data = await window.fetchWithRetry('/ui/users/me', 4);
         if (data && !data.error) {
           const username = data.name || data.preferred_username || data.email || data.username || 'me';
           setUser('To profile: ' + username, "{{ url_for('me') }}");
@@ -101,6 +91,24 @@
 
     document.addEventListener('DOMContentLoaded', initUser);
   })();
+
+    // Local "Today / Yesterday / N days ago" based on browser time
+  window.__relativeFromLocal = (iso) => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    const now = new Date();
+
+    // Truncate to local midnight
+    const startOfDay = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
+    const diffDays = Math.floor((startOfDay(now) - startOfDay(d)) / (24*3600*1000));
+
+    if (diffDays <= 0) return 'Today';
+    if (diffDays === 1) return 'Yesterday';
+    return `${diffDays} days ago`;
+  };
+
+  // Back-compat alias (safe to keep for a while)
+  window.__relativeFromUtc = window.__relativeFromLocal;
   </script>
 </body>
 </html>

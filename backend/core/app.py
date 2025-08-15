@@ -535,7 +535,41 @@ def ui_jobs_create(*, context):
         logging.exception("Jobs create proxy failure")
         return jsonify({"error":"server_error","message":"Unexpected error"}), 500
 
+@bp.route("/ui/jobs/<job_id>/history", methods=["GET"])
+@auth.login_required
+def ui_job_history(job_id: str, *, context):
 
+    base_url = os.getenv("EHESTIFTER_JOBS_API_BASE_URL")
+    if not base_url:
+        return jsonify({"error":"server_misconfig","message":"EHESTIFTER_JOBS_API_BASE_URL is not set"}), 500
+
+    function_key = os.getenv("EHESTIFTER_JOBS_FUNCTION_KEY")
+    headers = {"Content-Type":"application/json"}
+    if function_key:
+        headers["x-functions-key"] = function_key
+
+    params = {"limit": request.args.get("limit", "10")}
+    cursor = request.args.get("cursor")
+    if cursor:
+        params["cursor"] = cursor
+
+    try:
+        r = requests.get(
+            f"{base_url}/jobs/{job_id}/history",
+            headers=headers,
+            params=params,
+            timeout=10,
+        )
+    except requests.RequestException as e:
+        return jsonify({"error": "upstream-failed", "message": str(e)}), 502
+
+    # Pass through upstream status + JSON
+    try:
+        payload = r.json()
+    except ValueError:
+        payload = {"error": "bad-upstream", "body": r.text[:400]}
+
+    return jsonify(payload), r.status_code
 
 app.register_blueprint(bp)
 
