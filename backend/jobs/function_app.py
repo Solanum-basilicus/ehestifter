@@ -7,6 +7,8 @@ import pyodbc
 from validation import validate_job_payload
 import re
 import uuid
+from typing import Optional, Dict, Any
+import base64
 
 SQL_CONN_STR = os.getenv("SQLConnectionString")
 
@@ -78,30 +80,50 @@ def clean_status(value: str) -> str:
         raise ValueError("Status too long (max 100)")
     return s
 
+# --- Job History related helpers ---
+def insert_history(cursor, job_id: str, action: str, details_obj: Optional[Dict[str, Any]], actor_type: str, actor_id: Optional[str]):
+    payload = {"v": 1, "kind": action, "data": details_obj or {}}
+    cursor.execute("""
+        INSERT INTO dbo.JobOfferingHistory (JobOfferingId, ActorType, ActorId, Action, Details, Timestamp)
+        VALUES (?, ?, ?, ?, ?, SYSDATETIME())
+    """, (job_id, actor_type, actor_id, action, json.dumps(payload)))
+
+def detect_actor(req: func.HttpRequest) -> (str, Optional[str]):
+    """
+    Prefer user context when available; otherwise allow external/system writers to set X-Actor-Type: system.
+    """
+    try:
+        uid = get_current_user_id(req)
+        return "user", uid
+    except UnauthorizedError:
+        # external/system processes may not have a user; allow "system"
+        at = (req.headers.get("X-Actor-Type") or "").lower()
+        if at == "system":
+            # optional: X-Actor-Id may be a GUID of a service principal or null
+            aid = req.headers.get("X-Actor-Id")
+            if aid and not is_guid(aid):
+                aid = None
+            return "system", aid
+        # default to system with no id
+        return "system", None
+
+def make_history_cursor(ts: datetime, row_id: str) -> str:
+    # keyset cursor: Timestamp + Id to break ties
+    raw = f"{ts.isoformat()}|{row_id}"
+    return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
+
+def parse_history_cursor(cursor: str) -> (datetime, str):
+    try:
+        raw = base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8")
+        ts_str, rid = raw.split("|", 1)
+        return datetime.fromisoformat(ts_str), rid
+    except Exception:
+        raise ValueError("Invalid cursor")
+
 # Endpoints
 
 app = func.FunctionApp()
 
-@app.route(route="HttpExample", auth_level=func.AuthLevel.ANONYMOUS)
-def HttpExample(req: func.HttpRequest) -> func.HttpResponse:
-    logging.info('HttpExample processed a request.')
-
-    name = req.params.get('name')
-    if not name:
-        try:
-            req_body = req.get_json()
-        except ValueError:
-            pass
-        else:
-            name = req_body.get('name')
-
-    if name:
-        return func.HttpResponse(f"Hello, {name}!!! This HTTP triggered function executed successfully.")
-    else:
-        return func.HttpResponse(
-             "This HTTP triggered function executed successfully. Pass a name in the query string or in the request body for a personalized response.",
-             status_code=200
-        )
 
 @app.route(route="pingX", methods=["GET"])
 def pingX(req: func.HttpRequest) -> func.HttpResponse:
@@ -121,6 +143,9 @@ def handle_post_job(req: func.HttpRequest) -> func.HttpResponse:
         conn = get_connection()
         cursor = conn.cursor()
 
+        actor_type, actor_id = detect_actor(req)
+
+        # domain write
         cursor.execute("""
             INSERT INTO JobOfferings (
                 Source, ExternalId, Url, ApplyUrl,
@@ -144,8 +169,12 @@ def handle_post_job(req: func.HttpRequest) -> func.HttpResponse:
             data.get("Description"),
             data.get("PostedDate")
         ))
+        inserted_id = str(cursor.fetchone()[0])
 
-        inserted_id = cursor.fetchone()[0]
+        # history
+        details = {"jobId": inserted_id}
+        insert_history(cursor, inserted_id, "job_created", details, actor_type, actor_id)
+
         conn.commit()
         return func.HttpResponse(
             json.dumps({"id": str(inserted_id)}),
@@ -157,6 +186,10 @@ def handle_post_job(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse("Invalid JSON", status_code=400)
     except Exception as e:
         logging.exception("POST jobs: Error p10001")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         return func.HttpResponse(f"Server error: {str(e)}", status_code=500)
 
 @app.route(route="jobs", methods=["GET"])
@@ -224,124 +257,169 @@ def handle_get_job(req: func.HttpRequest) -> func.HttpResponse:
 @app.route(route="jobs/{id}", methods=["PUT"])
 def handle_update_job(req: func.HttpRequest) -> func.HttpResponse:
     job_id = req.route_params.get("id")
-    logging.info("PUT jobs processed a request with ID={job_id}")
+    logging.info(f"PUT jobs processed a request with ID={job_id}")
+    conn = None
     try:
-        
         data = req.get_json()
-
         is_valid, error = validate_job_payload(data, for_update=True)
         if not is_valid:
             return func.HttpResponse(error, status_code=400)
 
         fields = [
-            "Source", "ExternalId", "Url", "ApplyUrl", "HiringCompanyName",
-            "PostingCompanyName", "Title", "Country", "Locality",
-            "RemoteType", "Description", "PostedDate"
+            "Source","ExternalId","Url","ApplyUrl","HiringCompanyName",
+            "PostingCompanyName","Title","Country","Locality",
+            "RemoteType","Description","PostedDate"
         ]
-
-        updates = ", ".join(f"{f} = ?" for f in fields) + ", UpdatedAt = SYSDATETIME()"
-        values = [data.get(f) for f in fields]
 
         conn = get_connection()
         cursor = conn.cursor()
+        actor_type, actor_id = detect_actor(req)
 
+        # snapshot before
+        cursor.execute("SELECT " + ",".join(fields) + " FROM JobOfferings WHERE Id = ?", job_id)
+        row_before = cursor.fetchone()
+        if not row_before:
+            return func.HttpResponse("Job not found", status_code=404)
+        before = dict(zip(fields, row_before))
+
+        # domain write
+        updates = ", ".join(f"{f} = ?" for f in fields) + ", UpdatedAt = SYSDATETIME()"
+        values = [data.get(f) for f in fields]
         cursor.execute(f"UPDATE JobOfferings SET {updates} WHERE Id = ?", *values, job_id)
-        
         if cursor.rowcount == 0:
-            return func.HttpResponse("Job not found", status_code=404)        
-        
-        conn.commit()
+            return func.HttpResponse("Job not found", status_code=404)
 
+        # compute trimmed diff
+        after = {f: data.get(f) for f in fields}
+        changed = {}
+        desc_changed = False
+
+        for f in fields:
+            if f == "Description":
+                if before.get(f) != after.get(f):
+                    desc_changed = True
+                continue  # never include Description values
+            if before.get(f) != after.get(f):
+                changed[f] = {"from": before.get(f), "to": after.get(f)}
+
+        if changed or desc_changed:
+            details = {"changed": changed}
+            if desc_changed:
+                details["descriptionChanged"] = True
+            insert_history(cursor, job_id, "job_updated", details, actor_type, actor_id)
+
+        conn.commit()
         return func.HttpResponse("Job updated", status_code=200)
 
     except ValueError:
-        return func.HttpResponse("Invalid JSON", status_code=400)        
+        return func.HttpResponse("Invalid JSON", status_code=400)
     except Exception as e:
         logging.exception("PUT job: Error p10001")
+        try:
+            if conn: conn.rollback()
+        except Exception:
+            pass
         return func.HttpResponse(f"Error: {str(e)}", status_code=500)
 
 @app.route(route="jobs/{id}", methods=["DELETE"])
 def handle_delete_job(req: func.HttpRequest) -> func.HttpResponse:
     job_id = req.route_params.get("id")
     logging.info(f"DELETE jobs processed a request with ID={job_id}")
+    conn = None
     try:
         conn = get_connection()
         cursor = conn.cursor()
+        actor_type, actor_id = detect_actor(req)
 
         cursor.execute("UPDATE JobOfferings SET IsDeleted = 1, UpdatedAt = SYSDATETIME() WHERE Id = ?", job_id)
         rows_affected = cursor.rowcount
-        conn.commit()
-        
         if rows_affected == 0:
+            conn.rollback()
             return func.HttpResponse("No job found or already deleted", status_code=404)
         elif rows_affected > 1:
+            conn.rollback()
             logging.error(f"DELETE job: More than one row affected for ID={job_id}")
             return func.HttpResponse("Error: multiple jobs affected", status_code=500)
 
+        insert_history(cursor, job_id, "job_deleted", {"softDelete": True}, actor_type, actor_id)
+
+        conn.commit()
         return func.HttpResponse("Job marked as deleted", status_code=200)
     except Exception as e:
         logging.exception("DELETE job: Error: d10001")
+        try:
+            if conn: conn.rollback()
+        except Exception:
+            pass
         return func.HttpResponse(f"Error: {str(e)}", status_code=500)
 
 @app.route(route="jobs/{jobId}/status", methods=["PUT"])
 def put_job_status(req: func.HttpRequest) -> func.HttpResponse:
+    conn = None
     try:
         user_id = get_current_user_id(req)
         job_id_raw = req.route_params.get("jobId")
         logging.info(f"PUT jobs/{job_id_raw}/status")
-        try:
-            if not is_guid(job_id_raw):
-                return func.HttpResponse("Invalid jobId", status_code=400)
-            job_id = normalize_guid(job_id_raw)
 
-            user_id = get_current_user_id(req)
+        if not is_guid(job_id_raw):
+            return func.HttpResponse("Invalid jobId", status_code=400)
+        job_id = normalize_guid(job_id_raw)
 
-            try:
-                payload = req.get_json()
-            except ValueError:
-                return func.HttpResponse("Invalid JSON", status_code=400)
+        payload = req.get_json()
+        status = clean_status(payload.get("status"))
 
-            status = clean_status(payload.get("status"))
+        conn = get_connection()
+        cursor = conn.cursor()
 
-            conn = get_connection()
-            cursor = conn.cursor()
+        # Ensure job exists
+        cursor.execute("SELECT 1 FROM JobOfferings WHERE Id = ? AND IsDeleted = 0", job_id)
+        if cursor.fetchone() is None:
+            return func.HttpResponse("Job not found", status_code=404)
 
-            # Ensure the referenced JobOffering exists (optional but nice safety)
-            cursor.execute("SELECT 1 FROM JobOfferings WHERE Id = ? AND IsDeleted = 0", job_id)
-            if cursor.fetchone() is None:
-                return func.HttpResponse("Job not found", status_code=404)
+        # Read previous status (if any)
+        cursor.execute("""
+            SELECT Status FROM dbo.UserJobStatus
+            WHERE JobOfferingId = ? AND UserId = ?
+        """, (job_id, user_id))
+        prev_row = cursor.fetchone()
+        prev_status = prev_row[0] if prev_row else "Unset"
 
-            # Upsert via MERGE; ignore Comment by design; set LastUpdated
-            cursor.execute("""
-                MERGE dbo.UserJobStatus AS target
-                USING (SELECT ? AS JobOfferingId, ? AS UserId) AS src
-                ON target.JobOfferingId = src.JobOfferingId AND target.UserId = src.UserId
-                WHEN MATCHED THEN
-                UPDATE SET Status = ?, LastUpdated = SYSDATETIME()
-                WHEN NOT MATCHED THEN
-                INSERT (JobOfferingId, UserId, Status, LastUpdated)
-                VALUES (src.JobOfferingId, src.UserId, ?, SYSDATETIME());
-            """, (job_id, user_id, status, status))
+        # Upsert status
+        cursor.execute("""
+            MERGE dbo.UserJobStatus AS target
+            USING (SELECT ? AS JobOfferingId, ? AS UserId) AS src
+            ON target.JobOfferingId = src.JobOfferingId AND target.UserId = src.UserId
+            WHEN MATCHED THEN
+              UPDATE SET Status = ?, LastUpdated = SYSDATETIME()
+            WHEN NOT MATCHED THEN
+              INSERT (JobOfferingId, UserId, Status, LastUpdated)
+              VALUES (src.JobOfferingId, src.UserId, ?, SYSDATETIME());
+        """, (job_id, user_id, status, status))
 
-            conn.commit()
+        # History (actor: user)
+        insert_history(
+            cursor, job_id, "status_changed",
+            {"userId": user_id, "from": prev_status, "to": status},
+            "user", user_id
+        )
 
-            return func.HttpResponse(
-                json.dumps({"jobId": job_id, "userId": user_id, "status": status}),
-                mimetype="application/json",
-                status_code=200
-            )
+        conn.commit()
+        return func.HttpResponse(
+            json.dumps({"jobId": job_id, "userId": user_id, "status": status}),
+            mimetype="application/json",
+            status_code=200
+        )
 
-        except ValueError as ve:
-            return func.HttpResponse(str(ve), status_code=400)
-        except Exception as e:
-            logging.exception("PUT job status: Error js10001")
-            return func.HttpResponse(f"Error: {str(e)}", status_code=500)
     except UnauthorizedError as ue:
         return func.HttpResponse(str(ue), status_code=401)
     except ValueError as ve:
         return func.HttpResponse(str(ve), status_code=400)
     except Exception as e:
         logging.exception("PUT job status: Error js10001")
+        try:
+            if conn: conn.rollback()
+        except Exception:
+            pass
         return func.HttpResponse(f"Error: {str(e)}", status_code=500)
 
 
@@ -427,4 +505,160 @@ def post_job_statuses(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse(str(ve), status_code=400)
     except Exception as e:
         logging.exception("POST job statuses: Error js20002")
+        return func.HttpResponse(f"Error: {str(e)}", status_code=500)
+
+@app.route(route="jobs/{jobId}/history", methods=["POST"])
+def post_job_history(req: func.HttpRequest) -> func.HttpResponse:
+    job_id_raw = req.route_params.get("jobId")
+    if not is_guid(job_id_raw):
+        return func.HttpResponse("Invalid jobId", status_code=400)
+    job_id = normalize_guid(job_id_raw)
+    conn = None
+    try:
+        body = req.get_json()
+        if not isinstance(body, dict):
+            return func.HttpResponse("Invalid JSON", status_code=400)
+
+        action = body.get("action")
+        if not action or not isinstance(action, str):
+            return func.HttpResponse("Missing 'action'", status_code=400)
+
+        details = body.get("details") or {}
+        if not isinstance(details, dict):
+            return func.HttpResponse("'details' must be an object", status_code=400)
+
+        # override actor if provided in body, else detect from headers
+        actor_type, actor_id = detect_actor(req)
+        if body.get("actorType"):
+            at = str(body["actorType"]).lower()
+            if at not in ("system", "user"):
+                return func.HttpResponse("actorType must be 'system' or 'user'", status_code=400)
+            actor_type = at
+        if body.get("actorId"):
+            aid = body["actorId"]
+            if not (isinstance(aid, str) and is_guid(aid)):
+                return func.HttpResponse("actorId must be a GUID", status_code=400)
+            actor_id = normalize_guid(aid)
+
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        # ensure job exists (optional but recommended)
+        cursor.execute("SELECT 1 FROM JobOfferings WHERE Id = ?", job_id)
+        if cursor.fetchone() is None:
+            return func.HttpResponse("Job not found", status_code=404)
+
+        insert_history(cursor, job_id, action, details, actor_type, actor_id)
+        conn.commit()
+        return func.HttpResponse(json.dumps({"ok": True}), mimetype="application/json", status_code=200)
+
+    except ValueError:
+        return func.HttpResponse("Invalid JSON", status_code=400)
+    except Exception as e:
+        logging.exception("POST job history: Error h10001")
+        try:
+            if conn: conn.rollback()
+        except Exception:
+            pass
+        return func.HttpResponse(f"Error: {str(e)}", status_code=500)
+
+@app.route(route="jobs/{jobId}/history", methods=["GET"])
+def get_job_history(req: func.HttpRequest) -> func.HttpResponse:
+    job_id_raw = req.route_params.get("jobId")
+    if not is_guid(job_id_raw):
+        return func.HttpResponse("Invalid jobId", status_code=400)
+    job_id = normalize_guid(job_id_raw)
+
+    # query params: limit (default 50, max 200), cursor (optional)
+    try:
+        limit = int(req.params.get("limit", 50))
+    except ValueError:
+        return func.HttpResponse("Invalid 'limit'", status_code=400)
+    limit = max(1, min(limit, 200))
+
+    cursor = req.params.get("cursor")
+    after_ts = None
+    after_id = None
+    if cursor:
+        try:
+            after_ts, after_id = parse_history_cursor(cursor)
+        except ValueError:
+            return func.HttpResponse("Invalid cursor", status_code=400)
+
+    conn = None
+    try:
+        conn = get_connection()
+        cursor_db = conn.cursor()
+
+        # ensure job exists (optional but consistent with other endpoints)
+        cursor_db.execute("SELECT 1 FROM dbo.JobOfferings WHERE Id = ?", job_id)
+        if cursor_db.fetchone() is None:
+            return func.HttpResponse("Job not found", status_code=404)
+
+        # Keyset pagination: order newest first; when cursor present, fetch items *older* than the cursor
+        # Tie-break with Id for stable order
+        if after_ts is None:
+            cursor_db.execute("""
+                SELECT Id, JobOfferingId, Timestamp, ActorType, ActorId, Action, Details
+                FROM dbo.JobOfferingHistory
+                WHERE JobOfferingId = ?
+                ORDER BY Timestamp DESC, Id DESC
+                OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY
+            """, (job_id, limit))
+        else:
+            cursor_db.execute("""
+                SELECT Id, JobOfferingId, Timestamp, ActorType, ActorId, Action, Details
+                FROM dbo.JobOfferingHistory
+                WHERE JobOfferingId = ?
+                  AND (Timestamp < ? OR (Timestamp = ? AND Id < ?))
+                ORDER BY Timestamp DESC, Id DESC
+                OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY
+            """, (job_id, after_ts, after_ts, after_id, limit))
+
+        rows = cursor_db.fetchall()
+
+        # shape response
+        items = []
+        next_cursor = None
+        for r in rows:
+            r_id = str(r[0])
+            r_job = str(r[1])
+            r_ts = r[2]
+            actor_type = r[3]
+            actor_id = str(r[4]) if r[4] is not None else None
+            action = r[5]
+            details_json = r[6]
+
+            # ensure Details is valid JSON text; if NVARCHAR saved as text, keep as-is
+            try:
+                details_obj = json.loads(details_json) if isinstance(details_json, str) else details_json
+            except Exception:
+                details_obj = None  # tolerate bad history payloads
+
+            items.append({
+                "id": r_id,
+                "jobId": r_job,
+                "timestamp": r_ts.isoformat(),
+                "actorType": actor_type,
+                "actorId": actor_id,
+                "kind": action,
+                "data": details_obj.get("data") if isinstance(details_obj, dict) and "data" in details_obj else None,
+                "v": details_obj.get("v") if isinstance(details_obj, dict) and "v" in details_obj else None
+            })
+
+        if rows:
+            last_ts = rows[-1][2]
+            last_id = str(rows[-1][0])
+            next_cursor = make_history_cursor(last_ts, last_id)
+
+        return func.HttpResponse(
+            json.dumps({
+                "items": items,
+                "nextCursor": next_cursor
+            }),
+            mimetype="application/json",
+            status_code=200
+        )
+    except Exception as e:
+        logging.exception("GET job history: Error gh10001")
         return func.HttpResponse(f"Error: {str(e)}", status_code=500)
