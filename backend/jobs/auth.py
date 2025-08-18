@@ -1,12 +1,7 @@
 # auth.py
-import re
 import uuid
 import azure.functions as func
 from ids import is_guid
-
-GUID_REGEX = re.compile(
-    r"^[{]?[0-9a-fA-F]{8}[-]?[0-9a-fA-F]{4}[-]?[0-9a-fA-F]{4}[-]?[0-9a-fA-F]{4}[-]?[0-9a-fA-F]{12}[}]?$"
-)
 
 class UnauthorizedError(Exception):
     pass

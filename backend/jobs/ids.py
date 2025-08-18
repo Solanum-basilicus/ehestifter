@@ -1,4 +1,9 @@
+import re
 import uuid
+
+GUID_REGEX = re.compile(
+    r"^[{]?[0-9a-fA-F]{8}[-]?[0-9a-fA-F]{4}[-]?[0-9a-fA-F]{4}[-]?[0-9a-fA-F]{4}[-]?[0-9a-fA-F]{12}[}]?$"
+)
 
 def normalize_guid(s: str) -> str:
     # canonical 8-4-4-4-12 lowercase form
