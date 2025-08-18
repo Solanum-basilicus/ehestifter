@@ -1,16 +1,16 @@
 {% extends "base.html" %}
 
 {% block head_extra %}
+<link href="{{ url_for('static', filename='css/quill.snow.css') }}" rel="stylesheet">
+<script src="{{ url_for('static', filename='js/quill.min.js') }}"></script>
+<script src="{{ url_for('static', filename='js/job-url-helpers.js') }}" type="module"></script>
+
 <style>
   .card { border:1px solid #e5e7eb; border-radius:12px; background:#fff; }
   .btn { padding:8px 12px; border:1px solid #e5e7eb; border-radius:8px; cursor:pointer; background:#f9fafb; }
   .btn.primary { background:#eef2ff; border-color:#c7d2fe; }
-  .grid { display:grid; gap: 12px 16px; }
   .form-grid { grid-template-columns: 220px 1fr; }
   label { align-self:center; color:#374151; }
-  input[type="text"], input[type="url"], input[type="datetime-local"], select {
-    width:100%; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px;
-  }
   .muted { color:#6b7280; }
   .help-row { grid-column: 2 / span 1; margin-top: -6px; }
   .chips { display:flex; flex-wrap:wrap; gap:6px; }
@@ -25,343 +25,151 @@
   .ql-container { min-height: 180px; border-radius: 8px; }
   .ql-container.ql-snow { border:1px solid #e5e7eb; }
   .ql-editor { min-height: 160px; }
-</style>
 
-<link href="{{ url_for('static', filename='css/quill.snow.css') }}" rel="stylesheet">
-<script src="{{ url_for('static', filename='js/quill.min.js') }}"></script>
+  /* Fix: inputs aligned with form container */
+  .form-shell { max-width: 900px; margin: 0 auto; background: #fff; padding: 16px; border-radius: 8px; border:1px solid #e5e7eb; }
+  .grid { display:grid; grid-template-columns: 220px 1fr; gap: 10px 14px; align-items: center; }
+  .grid .label { align-self: center; }
+  input[type="text"], input[type="url"], input[type="datetime-local"], textarea, select {
+    width: 100%; box-sizing: border-box; padding: 8px; border:1px solid #d1d5db; border-radius:6px;
+  }
+  /* Fix: helper nuggets not overlapping fields */
+  .help-nuggets { margin-top: 4px; display:flex; flex-wrap: wrap; gap:6px; }
+  .help-nuggets .nugget { font-size: 12px; color:#6b7280; border:1px dashed #cbd5e1; padding:2px 6px; border-radius:9999px; cursor:pointer; }
+  /* Buttons top */
+  .actions-top { display:flex; gap:8px; margin-bottom:12px; }
+</style>
 {% endblock %}
 
+
 {% block content %}
-<div class="mx-auto" style="max-width:900px; padding:16px;">
-  <h1 style="font-size:20px; font-weight:600; margin:8px 0 6px;">{{ title }}</h1>
-  <p class="muted" style="margin-top:0;">Fields marked with * are required.</p>
-
-  <div class="card" style="padding:16px;">
-    <form id="job-form" novalidate>
-      <div class="grid form-grid">
-
-        <!-- Source + helpers -->
-        <label class="req" for="Source">Source *</label>
-        <div>
-          <input id="Source" name="Source" type="text" required placeholder="e.g. LinkedIn">
-          <div class="help-row muted">
-            <div class="chips" data-target="Source">
-              <span class="chip">LinkedIn</span>
-              <span class="chip">Stepstone</span>
-              <span class="chip">Indeed</span>
-              <span class="chip">Xing</span>
-              <span class="chip">arbitenow</span>
-              <span class="chip">weworkremotely</span>
-              <span class="chip">DinamiteJobs</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- URL -->
-        <label class="req" for="Url">Url *</label>
-        <input id="Url" name="Url" type="url" required placeholder="https://…">
-
-        <!-- ExternalId with tip -->
-        <label class="req" for="ExternalId">ExternalId *</label>
-        <div>
-          <input id="ExternalId" name="ExternalId" type="text" required placeholder="e.g. 4284137177">
-          <div class="muted" style="font-size:.9rem;">Often visible in the job URL, e.g. <code>/jobs/view/<b>4284137177</b></code></div>
-        </div>
-
-        <!-- Company mapping -->
-        <label class="req" for="Company">Company *</label>
-        <input id="Company" name="Company" type="text" required placeholder="Company or agency name">
-
-        <label for="IsAgency">It's a talent agency</label>
-        <div class="radio-row">
-          <input id="IsAgency" name="IsAgency" type="checkbox" />
-          <label class="muted" for="IsAgency" style="margin-left:4px;">If checked, we’ll ask who they hire for.</label>
-        </div>
-
-        <label for="TheyHireFor" id="TheyHireForLabel" class="hidden">They hire for</label>
-        <div id="TheyHireForBox" class="hidden">
-          <input id="TheyHireFor" name="TheyHireFor" type="text" placeholder="Hiring company name, if known">
-          <div class="muted" style="font-size:.9rem;">You can leave empty if unsure.</div>
-        </div>
-
-        <!-- Title -->
-        <label class="req" for="Title">Title *</label>
-        <input id="Title" name="Title" type="text" required>
-
-        <!-- Country + helpers -->
-        <label class="req" for="Country">Country *</label>
-        <div>
-          <input id="Country" name="Country" type="text" required placeholder="e.g. Germany">
-          <div class="help-row muted">
-            <div class="chips" data-target="Country">
-              <span class="chip">Germany</span>
-              <span class="chip">EU</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Locality -->
-        <label for="Locality">Locality</label>
-        <input id="Locality" name="Locality" type="text" placeholder="Munich, Remote, …">
-
-        <!-- RemoteType radios -->
-        <label for="RemoteType">RemoteType</label>
-        <div class="radio-row" id="RemoteTypeGroup">
-          <label><input type="radio" name="RemoteType" value="Remote"> Remote</label>
-          <label><input type="radio" name="RemoteType" value="Hybrid"> Hybrid</label>
-          <label><input type="radio" name="RemoteType" value="On-Site"> On-Site</label>
-          <label><input type="radio" name="RemoteType" value="Unknown" checked> Unknown</label>
-        </div>
-
-        <!-- PostedDate -->
-        <label for="PostedDate">PostedDate (local)</label>
-        <div>
-          <input id="PostedDate" name="PostedDate" type="datetime-local" placeholder="auto: now">
-          <div class="muted">Default is “now”. If you pick a date from calendar, time will be set to 00:00.</div>
-        </div>
-
-        <!-- Description -->
-        <label for="Description">Description</label>
-        <div>
-          <div id="editor" style="background:#fff;"></div>
-          <div class="muted" style="font-size:12px; margin-top:6px;">
-            Paste rich text. Formatting and links are preserved. External images are blocked; clipboard images (data:) are allowed.
-          </div>
-        </div>
-
-        <!-- Preview -->
-        <label>Preview</label>
-        <article class="prose" id="desc-preview"></article>
-      </div>
-
-      <div class="err" id="form-error" hidden></div>
-      <div style="display:flex; gap:8px; margin-top: 12px;">
-        <button type="submit" class="btn primary" id="btn-submit">Create</button>
-        <a href="{{ url_for('index') }}" class="btn">Cancel</a>
-        <span class="muted" id="form-note" style="display:none;">Submitting…</span>
-      </div>
-    </form>
+<div class="form-shell">
+  <div class="actions-top">
+    <button id="btnCreate" class="btn btn-primary">Create</button>
+    <a href="{{ url_for('index') }}" class="btn btn-secondary">Cancel</a>
   </div>
 
-  <details style="margin-top:12px;">
-    <summary><p style="display:inline">Debug</p></summary>
-    <pre id="dbg" class="muted"></pre>
-  </details>
+  <form id="jobForm" class="grid">
+    <!-- URL first -->
+    <label for="url" class="label">URL</label>
+    <div>
+      <input type="url" id="url" name="url" placeholder="https://..." required>
+      <!-- Optional helpers under Source later if you want -->
+    </div>
+
+    <!-- RemoteType immediately after URL to trigger blur early -->
+    <label class="label">Remote Type</label>
+    <div>
+      <label><input type="radio" name="remoteType" value="Remote"> Remote</label>
+      <label><input type="radio" name="remoteType" value="Hybrid"> Hybrid</label>
+      <label><input type="radio" name="remoteType" value="On-Site"> On-Site</label>
+      <label><input type="radio" name="remoteType" value="Unknown" checked> Unknown</label>
+    </div>
+
+    <!-- Title -->
+    <label for="title" class="label">Title</label>
+    <input type="text" id="title" name="title" placeholder="Job title">
+
+    <!-- Company + TalentAgency side-by-side -->
+    <label for="company" class="label">Company</label>
+    <input type="text" id="company" name="company" placeholder="Company name">
+
+    <label for="talentAgency" class="label">Talent Agency</label>
+    <input type="text" id="talentAgency" name="talentAgency" placeholder="(if applicable)">
+
+    <!-- Country + Locality -->
+    <label for="country" class="label">Country</label>
+    <input type="text" id="country" name="country" placeholder="e.g. Germany">
+
+    <label for="locality" class="label">Locality</label>
+    <input type="text" id="locality" name="locality" placeholder="e.g. Berlin">
+
+    <!-- Source (with click-to-fill helpers) -->
+    <label for="source" class="label">Source</label>
+    <div>
+      <input type="text" id="source" name="source" placeholder="e.g. LinkedIn">
+      <div class="help-nuggets" id="sourceNuggets">
+        <!-- Opinion: give common sources you listed -->
+        <span class="nugget">LinkedIn</span>
+        <span class="nugget">StepStone</span>
+        <span class="nugget">Indeed</span>
+        <span class="nugget">Xing</span>
+        <span class="nugget">arbinow</span>
+        <span class="nugget">weworkremotely</span>
+        <span class="nugget">dynamitejobs</span>
+      </div>
+    </div>
+
+    <!-- Posted date -->
+    <label for="postedDate" class="label">Posted Date</label>
+    <input type="datetime-local" id="postedDate" name="postedDate">
+
+    <!-- ExternalId (kept but auto-filled; user can override) -->
+    <label for="externalId" class="label">External ID</label>
+    <input type="text" id="externalId" name="externalId" placeholder="(auto-filled from URL)">
+
+    <!-- Description (no preview) -->
+    <label for="description" class="label">Description</label>
+    <textarea id="description" name="description" rows="10" placeholder="Paste or write a description"></textarea>
+  </form>
 </div>
 
-<script>
-(function(){
-  const form = document.getElementById('job-form');
-  const btn = document.getElementById('btn-submit');
-  const errEl = document.getElementById('form-error');
-  const dbg = document.getElementById('dbg');
-  const note = document.getElementById('form-note');
+<script type="module">
+  import { deduceFromUrl } from "{{ url_for('static', filename='js/job-url-helpers.js') }}";
 
-  const isAgency = document.getElementById('IsAgency');
-  const hireForLabel = document.getElementById('TheyHireForLabel');
-  const hireForBox = document.getElementById('TheyHireForBox');
-  const postedEl = document.getElementById('PostedDate');
-  const preview = document.getElementById('desc-preview');
+  const el = (id) => document.getElementById(id);
+  const urlInput = el('url');
+  const sourceInput = el('source');
+  const externalIdInput = el('externalId');
+  const companyInput = el('company');
+  const agencyInput = el('talentAgency');
+  const postedInput = el('postedDate');
 
-  // Quill init (no toolbar)
-  const quill = new Quill('#editor', { theme: 'snow', modules: { toolbar: false, clipboard: { matchVisual: false } } });
+  // 1) Set postedDate default to now (so user can skip for fresh offerings)
+  // Opinion: using local time is friendlier for input UX; backend can normalize to UTC.
+  (function presetPostedNow(){
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2,'0');
+    const isoLocal = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+    postedInput.value = isoLocal;
+  })();
 
-  function toggleAgencyFields() {
-    const show = isAgency.checked;
-    hireForLabel.classList.toggle('hidden', !show);
-    hireForBox.classList.toggle('hidden', !show);
-  }
-  isAgency.addEventListener('change', toggleAgencyFields);
-
-  // Helper chips: click to fill
-  document.querySelectorAll('.chips').forEach(group => {
-    const targetId = group.getAttribute('data-target');
-    const target = document.getElementById(targetId);
-    group.addEventListener('click', (e) => {
-      const chip = e.target.closest('.chip');
-      if (!chip || !target) return;
-      target.value = chip.textContent.trim();
-      target.dispatchEvent(new Event('input'));
-    });
+  // 2) Source nuggets click-to-fill
+  document.getElementById('sourceNuggets')?.addEventListener('click', (e) => {
+    const t = e.target;
+    if (t.classList.contains('nugget')) {
+      sourceInput.value = t.textContent.trim();
+      sourceInput.dispatchEvent(new Event('change'));
+    }
   });
 
-  // Prefill PostedDate with "now" in local tz (YYYY-MM-DDTHH:mm)
-  function localNowForDatetimeLocal() {
-    const d = new Date();
-    const pad = n => String(n).padStart(2,'0');
-    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  }
-  if (!postedEl.value) {
-    postedEl.value = localNowForDatetimeLocal();
-    postedEl.dataset.lastDate = postedEl.value.slice(0,10);
-  }
-  // If user changes date part, snap time to 00:00
-  postedEl.addEventListener('change', () => {
-    const datePart = postedEl.value.slice(0,10);
-    const last = postedEl.dataset.lastDate || '';
-    if (datePart && datePart !== last) {
-      postedEl.value = `${datePart}T00:00`;
-    }
-    postedEl.dataset.lastDate = datePart || '';
+  // 3) On URL blur: compute fields not yet filled by user
+  urlInput.addEventListener('blur', () => {
+    const raw = urlInput.value.trim();
+    if (!raw) return;
+    const deduced = deduceFromUrl(raw);
+
+    // Respect existing user input: only set if empty
+    if (deduced.source && !sourceInput.value.trim()) sourceInput.value = deduced.source;
+    if (deduced.externalId && !externalIdInput.value.trim()) externalIdInput.value = deduced.externalId;
+    if (deduced.company && !companyInput.value.trim()) companyInput.value = deduced.company;
+    if (deduced.talentAgency && !agencyInput.value.trim()) agencyInput.value = deduced.talentAgency;
   });
 
-  // Keep preview in sync
-  function sanitizeForPreview(html) {
-    if (!html) return '';
-    const tmp = document.createElement('div');
-    tmp.innerHTML = html;
-
-    tmp.querySelectorAll('script,iframe,style,link,object,embed').forEach(el => el.remove());
-    tmp.querySelectorAll('a[href]').forEach(a => {
-      a.setAttribute('target','_blank');
-      a.setAttribute('rel','noopener noreferrer nofollow');
-    });
-    tmp.querySelectorAll('img[src]').forEach(img => {
-      const src = (img.getAttribute('src') || '').trim();
-      if (!src.startsWith('data:')) {
-        const ph = document.createElement('div');
-        ph.className = 'placeholder-img';
-        ph.textContent = 'External image blocked';
-        img.replaceWith(ph);
-      } else {
-        img.loading = 'lazy';
-        img.decoding = 'async';
-      }
-    });
-    return tmp.innerHTML;
-  }
-
-  function updatePreview() {
-    preview.innerHTML = sanitizeForPreview(quill.root.innerHTML || '');
-  }
-  quill.on('text-change', updatePreview);
-  updatePreview();
-
-  async function fetchWithRetry(url, options, attempts=4) {
-    let delay = 500;
-    for (let i=1;i<=attempts;i++){
-      try {
-        const resp = await fetch(url, options);
-        if (!resp.ok) throw resp;
-        return resp;
-      } catch (e) {
-        if (i===attempts) throw e;
-        await new Promise(r=>setTimeout(r, delay));
-        delay *= 2;
-      }
+  // 4) When user picks a date from the calendar, set time to 00:00
+  postedInput.addEventListener('change', () => {
+    const v = postedInput.value;
+    if (v && v.length >= 10 && !v.includes('T')) {
+      postedInput.value = v + "T00:00";
     }
-  }
+  });
 
-  function getRadio(name) {
-    const el = document.querySelector(`input[name="${name}"]:checked`);
-    return el ? el.value : null;
-  }
-
-  function getFormData(){
-    const o = {};
-    o.Source = document.getElementById('Source').value.trim();
-    o.Url = document.getElementById('Url').value.trim();
-    o.ExternalId = document.getElementById('ExternalId').value.trim();
-    o.Title = document.getElementById('Title').value.trim();
-    o.Country = document.getElementById('Country').value.trim();
-    o.Locality = document.getElementById('Locality').value.trim() || undefined;
-
-    // Description from Quill (sanitized preview version)
-    const rawHtml = quill.root.innerHTML || "";
-    o.Description = sanitizeForPreview(rawHtml) || undefined;
-
-    // RemoteType radios
-    o.RemoteType = getRadio('RemoteType') || 'Unknown';
-
-    // Company mapping
-    const company = document.getElementById('Company').value.trim();
-    if (isAgency.checked) {
-      const hireFor = document.getElementById('TheyHireFor').value.trim();
-      o.PostingCompanyName = company || undefined;
-      o.HiringCompanyName = hireFor || 'Unknown';
-    } else {
-      o.HiringCompanyName = company || undefined;
-      o.PostingCompanyName = undefined;
-    }
-
-    // PostedDate -> ISO (UTC) if present
-    const pd = postedEl.value;
-    if (pd) {
-      const d = new Date(pd);
-      if (!isNaN(d)) o.PostedDate = d.toISOString();
-    }
-
-    // Drop empty
-    for (const k of Object.keys(o)) {
-      if (o[k] === undefined || o[k] === null || o[k] === '') delete o[k];
-    }
-    return o;
-  }
-
-  function validateClient(o){
-    const req = ["Source","ExternalId","Url","HiringCompanyName","Title","Country"];
-    const miss = req.filter(k=>!o[k]);
-    if (miss.length) return "Missing required: " + miss.join(", ");
-
-    try { new URL(o.Url); } catch { return "Invalid URL in Url"; }
-
-    const caps = {
-      Source:100, ExternalId:200, Url:1000, HiringCompanyName:300,
-      PostingCompanyName:300, Title:300, Country:100, Locality:300,
-      RemoteType:50, Description:5000
-    };
-    for (const [k,max] of Object.entries(caps)) {
-      if (o[k] && String(o[k]).length > max) return `${k} exceeds max length (${max})`;
-    }
-    return null;
-  }
-
-  function setBusy(b){
-    btn.disabled = b;
-    note.style.display = b ? 'inline' : 'none';
-    btn.textContent = b ? "Creating…" : "Create";
-  }
-
-  form.addEventListener('submit', async (e)=>{
+  // 5) Top buttons
+  document.getElementById('btnCreate').addEventListener('click', async (e) => {
     e.preventDefault();
-    errEl.hidden = true; errEl.textContent = '';
-
-    const payload = getFormData();
-    const msg = validateClient(payload);
-    if (msg) { errEl.hidden = false; errEl.textContent = msg; return; }
-
-    setBusy(true);
-    try{
-      dbg.textContent = JSON.stringify(payload, null, 2);
-      const resp = await fetchWithRetry('/ui/jobs', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        credentials:'same-origin',
-        body: JSON.stringify(payload)
-      }, 4);
-
-      const body = await resp.json();
-      if (resp.status === 201 && body?.id) {
-        const id = encodeURIComponent(body.id);
-        window.location.assign(`/jobs/${id}`);
-        return;
-      }
-      errEl.hidden = false; errEl.textContent = body?.message || 'Failed to create';
-    } catch (e) {
-      let msg = 'Failed to create';
-      if (e && typeof e.text === 'function') {
-        try { msg = await e.text(); } catch {}
-      }
-      errEl.hidden = false; errEl.textContent = msg;
-    } finally {
-      setBusy(false);
-    }
+    const form = document.getElementById('jobForm');
+    // TODO: submit via fetch to your create endpoint
+    form.submit(); // or custom fetch
   });
-
-  // init
-  document.addEventListener('DOMContentLoaded', () => {
-    toggleAgencyFields();
-  });
-})();
 </script>
 {% endblock %}

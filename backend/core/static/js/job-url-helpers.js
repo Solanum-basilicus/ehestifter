@@ -1,0 +1,550 @@
+// ------------------
+// -- Helpers --
+// ------------------
+
+// -- Simple, stable 32-bit FNV-1a hash -> hex (for ExternalId fallback) --
+function fnv1a32Hex(str) {
+  let h = 0x811c9dc5 >>> 0;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return ("0000000" + h.toString(16)).slice(-8);
+}
+
+function hostnameNoWww(hostname) {
+  return hostname.replace(/^www\./i, "").toLowerCase();
+}
+function lastPathSegment(pathname) {
+  const parts = pathname.split("/").filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : "";
+}
+function firstAfter(pathname, token) {
+  const parts = pathname.split("/").filter(Boolean);
+  const idx = parts.findIndex(p => p.toLowerCase() === token.toLowerCase());
+  if (idx >= 0 && idx + 1 < parts.length) return parts[idx + 1];
+  return "";
+}
+function stripQuery(url) {
+  return url.split("?")[0];
+}
+function looksLikeNumericId(seg) {
+  return /^[0-9]{6,}$/.test(seg); // ≥6 digits feels safe for IDs like LinkedIn, Workday numeric refs
+}
+function looksLikeAlphaNumId(seg) {
+  return /^[A-Za-z0-9._-]{6,}$/.test(seg);
+}
+function isGenericWord(seg) {
+  const s = seg.toLowerCase();
+  return ["jobs", "job", "position", "career", "careers", "vacancies", "vacancy", "listing", "listings", "apply"].includes(s);
+}
+function slugToWords(slug) {
+  return slug.replace(/[-_]+/g, " ").trim();
+}
+
+// --- multi-level TLDs we should treat as a single suffix ---
+const MULTI_LEVEL_TLDS = new Set([
+  "co.uk","com.au","com.br","co.nz","com.sg","com.tr","com.mx","co.jp","co.kr","com.cn","com.hk","com.tw","com.pl"
+]);
+
+function getPublicSuffixLength(host) {
+  const parts = host.split(".");
+  if (parts.length < 2) return 1;
+  const lastTwo = parts.slice(-2).join(".");
+  return MULTI_LEVEL_TLDS.has(lastTwo) ? 2 : 1;
+}
+
+// Generic “jobs/career” labels in EN/FR/DACH/PL
+const GENERIC_JOB_LABELS = new Set([
+  // EN
+  "job","jobs","career","careers",
+  // DE (DACH)
+  "karriere","stellen","stellenangebote","arbeit",
+  // FR
+  "emploi","carriere","carrieres",
+  // PL
+  "praca","kariera","oferty","ofertapracy","ofertypracy","oferta"
+]);
+
+// Choose the company label from host: take the label right before the public suffix,
+// skipping generic job/career subdomains (jobs/career/etc.).
+function companyFromHost(host) {
+  const h = hostnameNoWww(host);
+  const parts = h.split(".");
+  const psLen = getPublicSuffixLength(h);
+  const stop = parts.length - psLen - 1; // index of label before suffix
+
+  // scan leftwards from the label right before the suffix until we find a non-generic one
+  for (let i = stop; i >= 0; i--) {
+    const label = (parts[i] || "").toLowerCase();
+    if (label && !GENERIC_JOB_LABELS.has(label)) {
+      return label;
+    }
+  }
+  // fallback: the label right before the suffix (or first label)
+  return parts[stop] || parts[0] || h;
+}
+
+// --- Referral source extraction from URL params ---
+// Normalize a board/source name from a free-form value or a domain/URL.
+function normalizeSourceName(v) {
+  if (!v) return null;
+  let s = String(v).trim().toLowerCase();
+
+  // sometimes full URL is passed
+  try {
+    if (s.startsWith("http://") || s.startsWith("https://")) {
+      const u = new URL(s);
+      s = u.hostname;
+    }
+  } catch { /* noop */ }
+
+  // strip www.
+  s = s.replace(/^www\./, "");
+
+  // if looks like a domain, use registrable base label
+  if (s.includes(".")) {
+    s = s.split(".")[0]; // simple base label
+  }
+
+  // common canonicalizations
+  const map = {
+    "li": "linkedin",
+    "lnkd": "linkedin",
+    "linkedin": "linkedin",
+    "angellist": "wellfound",
+    "angel": "wellfound",
+    "angelco": "wellfound",
+    "wellfound": "wellfound",
+    "cvlibrary": "cv-library",
+    "stackoverflowjobs": "stackoverflow",
+    "stack-overflow": "stackoverflow",
+    "stackoverflow": "stackoverflow",
+    "wwr": "weworkremotely",
+    "weworkremotely": "weworkremotely",
+    "arbeitnow": "arbeitnow",
+    "stepstone": "stepstone",
+    "indeed": "indeed",
+    "xing": "xing",
+    "ziprecruiter": "ziprecruiter",
+    "glassdoor": "glassdoor",
+    "monster": "monster",
+    "totaljobs": "totaljobs",
+    "cv-library": "cv-library",
+    "nofluffjobs": "nofluffjobs",
+    "pracuj": "pracuj",
+  };
+  return map[s] || s;
+}
+
+// Keys that commonly carry the referral/where-we-found-it info.
+// Note: we intentionally skip GH-specific "gh_src" to avoid mistaking it for a board.
+const REFERRAL_KEYS = ["source", "src", "utm_source", "ref", "referrer"];
+
+// Extract referral source from URL search params, normalized; null if none.
+function sourceFromParams(u) {
+  const qp = new URLSearchParams(u.search || "");
+  for (const key of REFERRAL_KEYS) {
+    const raw = qp.get(key);
+    if (raw) {
+      const norm = normalizeSourceName(raw);
+      if (norm) return norm;
+    }
+  }
+  return null;
+}
+
+// --- Which sources are ATS engines (fallback to these when no referral present) ---
+const ATS_NAMES = new Set([
+  "workday","greenhouse","lever","personio","smartrecruiters","teamtailor",
+  "workable","jazzhr","ashby","recruitee","bamboohr","icims","jobvite",
+  "breezyhr","comeet","pinpoint","join"  // + join
+]);
+
+
+
+
+
+
+
+// -- Known job boards / ATS registry --
+// Each entry can implement `match(u)` and return a partial {source, externalId, company, talentAgency}.
+// Opinion: keeping all patterns in one array is easier to maintain than scattered if/else.
+const REGISTRY = [
+  // We Work Remotely
+  {
+    domains: ["weworkremotely.com"],
+    match: (u) => {
+      const seg = lastPathSegment(u.pathname);
+      const base = seg || u.pathname.split("/").filter(Boolean).pop() || "";
+      const externalId = base ? fnv1a32Hex(base) : fnv1a32Hex(stripQuery(u.href));
+      return { source: "weworkremotely", externalId };
+    }
+  },
+  // Dynamite Jobs
+  {
+    domains: ["dynamitejobs.com"],
+    match: (u) => {
+      const company = firstAfter(u.pathname, "company") || "";
+      let titleSlug = firstAfter(u.pathname, "remote-job") || lastPathSegment(u.pathname);
+      if (!titleSlug) titleSlug = "dynamitejobs";
+      return {
+        source: "dynamitejobs",
+        company: company || undefined,
+        externalId: fnv1a32Hex(titleSlug)
+      };
+    }
+  },
+  // LinkedIn
+  {
+    domains: ["linkedin.com"],
+    match: (u) => {
+      const id = firstAfter(u.pathname, "view") || lastPathSegment(u.pathname);
+      return { source: "linkedin", externalId: id && looksLikeNumericId(id) ? id : fnv1a32Hex(stripQuery(u.href)) };
+    }
+  },
+  // Wellfound (AngelList Talent)
+  {
+    domains: ["wellfound.com", "angel.co"],
+    match: (u) => {
+      const id = firstAfter(u.pathname, "jobs") || lastPathSegment(u.pathname);
+      const company = firstAfter(u.pathname, "company") || "";
+      return { source: "wellfound", company: company || undefined, externalId: id ? fnv1a32Hex(id) : fnv1a32Hex(stripQuery(u.href)) };
+    }
+  },
+  // Join ATS
+  {
+    domains: ["join.com"],
+    match: (u) => {
+      // Company is explicitly in the path: /companies/<company>/...
+      const company = firstAfter(u.pathname, "companies") || "";
+      const seg = lastPathSegment(u.pathname) || "";
+
+      // ExternalId - prefer numeric ID prefix if present (e.g. 14702571-...)
+      let externalId = seg;
+      const m = /^(\d+)(?:-|$)/.exec(seg);
+      if (m) {
+        externalId = m[1];
+      } else if (!looksLikeAlphaNumId(seg) || isGenericWord(seg)) {
+        externalId = fnv1a32Hex(stripQuery(u.href));
+      }
+
+      // Source - default to ATS name, but our earlier patch will override with referral params if present
+      return {
+        source: "join",
+        company: company || undefined,
+        externalId
+      };
+    }
+  },
+  // Remotive
+  {
+    domains: ["remotive.com"],
+    match: (u) => {
+      const id = firstAfter(u.pathname, "remote-jobs") || lastPathSegment(u.pathname);
+      return { source: "remotive", externalId: id ? fnv1a32Hex(id) : fnv1a32Hex(stripQuery(u.href)) };
+    }
+  },
+  // ZipRecruiter
+  {
+    domains: ["ziprecruiter.com"],
+    match: (u) => {
+      const id = lastPathSegment(u.pathname);
+      return { source: "ziprecruiter", externalId: id && !isGenericWord(id) ? id : fnv1a32Hex(stripQuery(u.href)) };
+    }
+  },
+  // Indeed
+  {
+    domains: ["indeed.com", "indeed.co.uk", "indeed.de", "indeed.fr", "indeed.nl", "indeed.es", "indeed.it", "indeed.ie", "indeed.ca"],
+    match: (u) => {
+      const qp = new URLSearchParams(u.search || "");
+      const jk = qp.get("jk") || qp.get("vjk");
+      const id = jk || lastPathSegment(u.pathname);
+      return { source: "indeed", externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+    }
+  },
+  // StepStone (EU)
+  {
+    domains: ["stepstone.de", "stepstone.fr", "stepstone.nl", "stepstone.co.uk", "stepstone.com"],
+    match: (u) => {
+      const id = lastPathSegment(u.pathname);
+      return { source: "stepstone", externalId: id && looksLikeAlphaNumId(id) ? id : fnv1a32Hex(stripQuery(u.href)) };
+    }
+  },
+  // Xing
+  {
+    domains: ["xing.com"],
+    match: (u) => {
+      const id = firstAfter(u.pathname, "jobs") || lastPathSegment(u.pathname);
+      return { source: "xing", externalId: id ? fnv1a32Hex(id) : fnv1a32Hex(stripQuery(u.href)) };
+    }
+  },
+  // Glassdoor
+  {
+    domains: ["glassdoor.com", "glassdoor.de", "glassdoor.co.uk", "glassdoor.fr"],
+    match: (u) => {
+      const id = firstAfter(u.pathname, "job") || lastPathSegment(u.pathname);
+      return { source: "glassdoor", externalId: id && looksLikeAlphaNumId(id) ? id : fnv1a32Hex(stripQuery(u.href)) };
+    }
+  },
+  // Monster
+  {
+    domains: ["monster.com", "monster.de", "monster.co.uk", "monster.fr", "monster.it"],
+    match: (u) => {
+      const id = lastPathSegment(u.pathname);
+      return { source: "monster", externalId: id && looksLikeAlphaNumId(id) ? id : fnv1a32Hex(stripQuery(u.href)) };
+    }
+  },
+  // Workday (common in-company ATS)
+  {
+    domains: [/\.myworkdayjobs\.com$/i],
+    match: (u) => {
+      // Company often appears before domain or as subdomain.
+      const host = hostnameNoWww(u.hostname);
+      const company = host.split(".")[0]; // e.g., azenta.wd1.myworkdayjobs.com -> "azenta"
+      // ID often after last slash; sometimes like _R20250574
+      const seg = lastPathSegment(u.pathname);
+      const qp = new URLSearchParams(u.search || "");
+      const src = qp.get("source");
+      let source = src ? src.toLowerCase() : "workday";
+      if (source === "linkedin") source = "linkedin"; // propagate referral
+      const id = seg && !isGenericWord(seg) ? seg : fnv1a32Hex(stripQuery(u.href));
+      return { source, company, externalId: id };
+    }
+  },
+  // Greenhouse
+  {
+    domains: ["boards.greenhouse.io", "greenhouse.io"],
+    match: (u) => {
+      const company = firstAfter(u.pathname, "boards") || "";
+      const id = firstAfter(u.pathname, "jobs") || lastPathSegment(u.pathname);
+      return { source: "greenhouse", company: company || undefined, externalId: id && looksLikeNumericId(id) ? id : fnv1a32Hex(stripQuery(u.href)) };
+    }
+  },
+  // Lever
+  {
+    domains: [/\.lever\.co$/i],
+    match: (u) => {
+      const host = hostnameNoWww(u.hostname).replace(".lever.co","");
+      const company = host || "";
+      const id = firstAfter(u.pathname, "jobs") || lastPathSegment(u.pathname);
+      return { source: "lever", company: company || undefined, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+    }
+  },
+  // Personio
+  {
+    domains: [/\.jobs\.personio\.de$/i, /\.jobs\.personio\.com$/i],
+    match: (u) => {
+      const host = hostnameNoWww(u.hostname).split(".")[0];
+      const company = host || "";
+      const id = lastPathSegment(u.pathname);
+      return { source: "personio", company, externalId: id && looksLikeAlphaNumId(id) ? id : fnv1a32Hex(stripQuery(u.href)) };
+    }
+  },
+  // SmartRecruiters
+  {
+    domains: ["careers.smartrecruiters.com", "jobs.smartrecruiters.com"],
+    match: (u) => {
+      const company = firstAfter(u.pathname, "SmartRecruiters") || firstAfter(u.pathname, "company") || "";
+      const id = firstAfter(u.pathname, "job") || lastPathSegment(u.pathname);
+      return { source: "smartrecruiters", company: company || undefined, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+    }
+  },
+  // Teamtailor
+  {
+    domains: [/\.teamtailor\.com$/i],
+    match: (u) => {
+      const company = hostnameNoWww(u.hostname).split(".")[0];
+      const id = lastPathSegment(u.pathname);
+      return { source: "teamtailor", company, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+    }
+  },
+  // Workable
+  {
+    domains: [/\.applytojob\.com$/i, /\.workable\.com$/i],
+    match: (u) => {
+      const id = lastPathSegment(u.pathname);
+      const host = hostnameNoWww(u.hostname);
+      const company = host.includes(".workable.com") ? host.split(".")[0] : undefined;
+      return { source: "workable", company, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+    }
+  },
+  // JazzHR
+  {
+    domains: [/\.applytojob\.com$/i, /\.jazz\.co$/i],
+    match: (u) => {
+      const id = lastPathSegment(u.pathname);
+      return { source: "jazzhr", externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+    }
+  },
+  // Ashby
+  {
+    domains: [/\.ashbyhq\.com$/i],
+    match: (u) => {
+      const company = hostnameNoWww(u.hostname).split(".")[0];
+      const id = lastPathSegment(u.pathname);
+      return { source: "ashby", company, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+    }
+  },
+  // Recruitee
+  {
+    domains: [/\.recruitee\.com$/i],
+    match: (u) => {
+      const company = hostnameNoWww(u.hostname).split(".")[0];
+      const id = lastPathSegment(u.pathname);
+      return { source: "recruitee", company, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+    }
+  },
+  // BambooHR
+  {
+    domains: [/\.bamboohr\.com$/i],
+    match: (u) => {
+      const company = hostnameNoWww(u.hostname).split(".")[0];
+      const id = lastPathSegment(u.pathname);
+      return { source: "bamboohr", company, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+    }
+  },
+  // iCIMS
+  {
+    domains: ["careers.icims.com", "icims.com"],
+    match: (u) => {
+      const id = firstAfter(u.pathname, "jobs") || lastPathSegment(u.pathname);
+      return { source: "icims", externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+    }
+  },
+  // Jobvite
+  {
+    domains: [/\.jobvite\.com$/i],
+    match: (u) => {
+      const id = lastPathSegment(u.pathname);
+      return { source: "jobvite", externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+    }
+  },
+  // BreezyHR
+  {
+    domains: [/\.breezy\.hr$/i],
+    match: (u) => {
+      const company = hostnameNoWww(u.hostname).split(".")[0];
+      const id = lastPathSegment(u.pathname);
+      return { source: "breezyhr", company, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+    }
+  },
+  // Comeet
+  {
+    domains: [/\.comeet\.co$/i],
+    match: (u) => {
+      const id = lastPathSegment(u.pathname);
+      return { source: "comeet", externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+    }
+  },
+  // Pinpoint
+  {
+    domains: [/\.pinpoint\.jobs$/i],
+    match: (u) => {
+      const company = hostnameNoWww(u.hostname).split(".")[0];
+      const id = lastPathSegment(u.pathname);
+      return { source: "pinpoint", company, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+    }
+  },
+  // Job boards UK/EU
+  {
+    domains: ["reed.co.uk"],
+    match: (u) => ({ source: "reed", externalId: lastPathSegment(u.pathname) || fnv1a32Hex(stripQuery(u.href)) })
+  },
+  {
+    domains: ["totaljobs.com", "totaljobs.com.au", "cwjobs.co.uk"],
+    match: (u) => ({ source: "totaljobs", externalId: lastPathSegment(u.pathname) || fnv1a32Hex(stripQuery(u.href)) })
+  },
+  {
+    domains: ["cv-library.co.uk"],
+    match: (u) => ({ source: "cv-library", externalId: lastPathSegment(u.pathname) || fnv1a32Hex(stripQuery(u.href)) })
+  },
+  {
+    domains: ["nofluffjobs.com"],
+    match: (u) => ({ source: "nofluffjobs", externalId: lastPathSegment(u.pathname) || fnv1a32Hex(stripQuery(u.href)) })
+  },
+  {
+    domains: ["pracuj.pl"],
+    match: (u) => ({ source: "pracuj", externalId: lastPathSegment(u.pathname) || fnv1a32Hex(stripQuery(u.href)) })
+  }
+];
+
+// -- Talent agencies (recognize by domain; can set talentAgency/company) --
+const TALENT_AGENCIES = [
+  "adecco.com", "randstad.com", "manpowergroup.com", "hays.com",
+  "tietalent.com", "aerotek.com", "pagepersonnel.com", "michaelpage.com",
+  "robertwalters.com", "kornferry.com", "reedglobal.com", "alfredtalke.com"
+].map(d => d.toLowerCase());
+
+// -- Core: deduce fields from URL --
+export function deduceFromUrl(rawUrl) {
+  let url;
+  try { url = new URL(rawUrl); } catch { return {}; }
+  const host = hostnameNoWww(url.hostname);
+
+  // Talent agency?
+  const agencyHit = TALENT_AGENCIES.find(d => host.endsWith(d));
+  let talentAgency = agencyHit ? agencyHit.split(".")[0] : undefined;
+
+  // Known registry
+  for (const entry of REGISTRY) {
+    const domains = entry.domains || [];
+    const hit = domains.some(d => {
+      if (typeof d === "string") return host === d || host.endsWith("." + d);
+      if (d instanceof RegExp) return d.test(host);
+      return false;
+    });
+    if (hit) {
+      const r = entry.match(url) || {};
+
+      // Prefer referral param as *source* if this entry is an ATS.
+      // (We only override when r.source is an ATS name.)
+      const refSrc = sourceFromParams(url);
+      if (refSrc && r.source && ATS_NAMES.has(String(r.source).toLowerCase())) {
+        r.source = refSrc;
+      }
+
+      if (!r.talentAgency && talentAgency) r.talentAgency = talentAgency;
+
+      // If company still empty and this wasn't an agency, infer from registrable domain
+      if (!r.company && !agencyHit) {
+        r.company = companyFromHost(host);
+      }
+
+      return r;
+    }
+  }
+
+  // Fallback heuristic (your generalistic approach)
+  const params = new URLSearchParams(url.search || "");
+
+  // --- SOURCE ---
+  // If an explicit src/source is present, honor it (e.g., ?src=linkedin).
+  // Otherwise, for unknown boards/ATS, we default to "Corporate Site".
+  let source = (params.get("src") || params.get("source") || "").toLowerCase().trim();
+  if (!source) {
+    source = "Corporate Site";
+  }
+
+  // --- EXTERNAL ID ---
+  let externalId =
+    firstAfter(url.pathname, "job") ||
+    firstAfter(url.pathname, "jobs") ||
+    lastPathSegment(url.pathname);
+
+  if (!externalId || isGenericWord(externalId)) {
+    externalId = fnv1a32Hex(stripQuery(url.href)); // final fallback
+  }
+
+  // --- COMPANY ---
+  let company;
+  // prefer /company/<name> if present
+  const c = firstAfter(url.pathname, "company");
+  if (c) {
+    company = c;
+  } else if (!agencyHit) {
+    company = companyFromHost(host);
+  }
+
+  return { source, externalId, company, talentAgency };
+}
