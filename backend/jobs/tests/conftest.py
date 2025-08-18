@@ -1,6 +1,8 @@
 import os
 import pytest
 from dotenv import load_dotenv
+import uuid
+import copy
 
 load_dotenv()
 
@@ -24,3 +26,20 @@ def auth_headers(function_key):
 @pytest.fixture(scope="session")
 def shared_state():
     return {}
+
+@pytest.fixture(scope="session")
+def system_headers(auth_headers):
+    h = copy.deepcopy(auth_headers)
+    h.update({"X-Actor-Type": "system"})
+    return h
+
+@pytest.fixture(scope="session")
+def test_user_id():
+    # fixed GUID for deterministic tests
+    return "00000000-0000-0000-0000-000000000123"
+
+@pytest.fixture(scope="session")
+def user_headers(auth_headers, test_user_id):
+    h = RedactedDict(auth_headers)
+    h.update({"X-User-Id": test_user_id})
+    return h

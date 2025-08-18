@@ -1,74 +1,64 @@
 # validation.py
-
 from datetime import datetime
 
-# Define schema-like structure
-JOB_SCHEMA = {
-    "required": {
-        "Source": 100,
-        "ExternalId": 200,
-        "Url": 1000,
-        "HiringCompanyName": 300,
-        "Title": 300,
-        "Country": 100
-    },
-    "optional": {
-        "ApplyUrl": 1000,
-        "PostingCompanyName": 300,
-        "Locality": 300,
-        "RemoteType": 50,
-        "Description": 5000,
-        "PostedDate": "datetime"
-    }
-}
+def _is_iso8601(s: str) -> bool:
+    try:
+        datetime.fromisoformat(s)
+        return True
+    except Exception:
+        return False
 
+def _check_str(d, key, max_len):
+    if key in d and d[key] is not None:
+        if not isinstance(d[key], str):
+            return False, f"Field '{key}' must be a string"
+        if len(d[key]) > max_len:
+            return False, f"Field '{key}' exceeds max length ({max_len})"
+    return True, ""
 
 def validate_job_payload(data: dict, for_update=False) -> (bool, str):
-    """
-    Validates job data payload.
+    if not isinstance(data, dict):
+        return False, "Body must be a JSON object"
 
-    :param data: dict from req.get_json()
-    :param for_update: if True, required fields will be skipped (PATCH-style)
-    :return: (True, "") if valid, else (False, "error message")
-    """
-    # Required fields
+    # Required for create: url
     if not for_update:
-        for field, max_len in JOB_SCHEMA["required"].items():
-            if field not in data:
-                return False, f"Missing required field: {field}"
-            if not isinstance(data[field], str):
-                return False, f"Field '{field}' must be a string"
-            if not data[field].strip():
-                return False, f"Field '{field}' cannot be empty"
-            if len(data[field]) > max_len:
-                return False, f"Field '{field}' exceeds max length ({max_len})"
+        if "url" not in data or not isinstance(data["url"], str) or not data["url"].strip():
+            return False, "Missing required field: url"
 
-    else:
-        # In updates, if required fields are present, validate them
-        for field, max_len in JOB_SCHEMA["required"].items():
-            if field in data:
-                if not isinstance(data[field], str):
-                    return False, f"Field '{field}' must be a string"
-                if not data[field].strip():
-                    return False, f"Field '{field}' cannot be empty"
-                if len(data[field]) > max_len:
-                    return False, f"Field '{field}' exceeds max length ({max_len})"
+    # Strings max lengths
+    rules = {
+        "foundOn": 100,
+        "provider": 100,
+        "providerTenant": 200,
+        "externalId": 200,
+        "url": 1000,
+        "applyUrl": 1000,
+        "hiringCompanyName": 300,
+        "postingCompanyName": 300,
+        "title": 300,
+        "remoteType": 50,
+        # "description" left unchecked length-wise (NVARCHAR(MAX) in DB); but we can cap if you like
+    }
+    for k, n in rules.items():
+        ok, msg = _check_str(data, k, n)
+        if not ok:
+            return False, msg
 
-    # Optional fields
-    for field, rule in JOB_SCHEMA["optional"].items():
-        if field in data:
-            value = data[field]
-            if value is None:
-                continue
-            if rule == "datetime":
-                try:
-                    datetime.fromisoformat(value)
-                except ValueError:
-                    return False, f"Field '{field}' must be a valid ISO8601 datetime"
-            else:
-                if not isinstance(value, str):
-                    return False, f"Field '{field}' must be a string"
-                if len(value) > rule:
-                    return False, f"Field '{field}' exceeds max length ({rule})"
+    # locations validation
+    locs = data.get("locations")
+    if locs is not None:
+        if not isinstance(locs, list):
+            return False, "locations must be an array"
+        for i, loc in enumerate(locs):
+            if not isinstance(loc, dict):
+                return False, f"locations[{i}] must be an object"
+            if not isinstance(loc.get("countryName"), str) or not loc["countryName"].strip():
+                return False, f"locations[{i}].countryName is required"
+            if "countryCode" in loc and loc["countryCode"] is not None:
+                cc = loc["countryCode"]
+                if not (isinstance(cc, str) and len(cc) == 2 and cc.isalpha()):
+                    return False, f"locations[{i}].countryCode must be a 2-letter ISO code"
+            if "cityName" in loc and loc["cityName"] is not None and not isinstance(loc["cityName"], str):
+                return False, f"locations[{i}].cityName must be a string"
 
     return True, ""

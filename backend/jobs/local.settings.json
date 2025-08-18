@@ -1,9 +1,7 @@
 {
   "IsEncrypted": true,
   "Values": {
-    "FUNCTIONS_WORKER_RUNTIME": "CfDJ8GouzjfyBk1LizBjF+WAflWkyFi2+zOis4KyUsqHdZDWn/8wlCpUUGIx3pBXcbx9fejIxk1OKvEJ+Ojqx/gWHVTot16OgO5n9Q8UNwQ04WVAKOhJBKR726ERbS+AOVY7ig==",
-    "SQLConnectionString": """Driver={ODBC Driver 18 for SQL Server};Server=eperidbserver.database.windows.net,1433;Database=eperidb;Uid=dbuserxxxonoefiy;Pwd=6\!6EBH++)SG"0=iQRDu#`T";Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;""",
-    "empty": ""
+    "FUNCTIONS_WORKER_RUNTIME": "CfDJ8GouzjfyBk1LizBjF+WAflU9ahOaqeligAblLm6v8pHmk8QZ+M2bBl2o5ugS0RuBZPbrBo7PbWL+ppbt/S9aSTqoJG8TqduF7HTstrkRHbHjlG6WLiRjGmn2OletmB4r0w=="
   },
   "ConnectionStrings": {}
 }
