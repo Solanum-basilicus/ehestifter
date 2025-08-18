@@ -3,6 +3,7 @@ import logging
 import azure.functions as func
 from db import get_connection
 from history import DatetimeEncoder
+from ids import normalize_guid
 
 def register(app: func.FunctionApp):
 
@@ -29,8 +30,10 @@ def register(app: func.FunctionApp):
             rows = cur.fetchall()
             cols = [c[0] for c in cur.description]
             jobs = [dict(zip(cols, r)) for r in rows]
-            ids = [str(r[0]) for r in rows]
-
+            for j in jobs:
+                j["Id"] = normalize_guid(str(j["Id"]))
+            ids = [j["Id"] for j in jobs]  # use normalized ids for the subsequent map
+            
             loc_map = {jid: [] for jid in ids}
             if ids:
                 placeholders = ",".join(["?"] * len(ids))

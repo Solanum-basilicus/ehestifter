@@ -3,6 +3,7 @@ import logging
 import azure.functions as func
 from db import get_connection
 from history import DatetimeEncoder
+from ids import normalize_guid, normalize_guid_in_dict
 
 def register(app: func.FunctionApp):
 
@@ -20,6 +21,7 @@ def register(app: func.FunctionApp):
                 return func.HttpResponse("Not found", status_code=404)
             cols = [c[0] for c in cur.description]
             job = dict(zip(cols, row))
+            normalize_guid_in_dict(job, ["Id", "CreatedByUserId"])  # CreatedByUserId may be NULL; handled safely
 
             cur.execute("""
               SELECT CountryName, CountryCode, CityName, Region

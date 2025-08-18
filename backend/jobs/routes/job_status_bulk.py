@@ -2,7 +2,8 @@ import json
 import logging
 import azure.functions as func
 from db import get_connection
-from auth import UnauthorizedError, get_current_user_id, is_guid, normalize_guid
+from auth import UnauthorizedError, get_current_user_id
+from ids import normalize_guid, is_guid
 
 def register(app: func.FunctionApp):
 
@@ -51,8 +52,9 @@ def register(app: func.FunctionApp):
                 """,
                 params
             )
-            found = {normalize_guid(str(r[0])): r[1] for r in cur.fetchall()}
-            result = {jid: found.get(jid, "Unset") for jid in job_ids}
+            found = { normalize_guid(str(r[0])): r[1] for r in cur.fetchall() }
+            result = { normalize_guid(jid): found.get(normalize_guid(jid), "Unset") for jid in job_ids }
+
             return func.HttpResponse(json.dumps({"userId": user_id, "statuses": result}),
                                      mimetype="application/json", status_code=200)
         except UnauthorizedError as ue:

@@ -2,7 +2,7 @@ import json
 import logging
 import azure.functions as func
 from db import get_connection
-from auth import is_guid, normalize_guid
+from ids import normalize_guid, is_guid
 from history import make_history_cursor, parse_history_cursor
 
 def register(app: func.FunctionApp):
@@ -67,8 +67,12 @@ def register(app: func.FunctionApp):
                 except Exception:
                     d = None
                 items.append({
-                    "id": rid, "jobId": rjob, "timestamp": rts.isoformat(),
-                    "actorType": at, "actorId": aid, "kind": act,
+                    "id": normalize_guid(rid), 
+                    "jobId": normalize_guid(rjob),
+                    "timestamp": rts.isoformat(),
+                    "actorType": at, 
+                    "actorId": normalize_guid(aid) if aid else None,
+                    "kind": act,
                     "data": d.get("data") if isinstance(d, dict) and "data" in d else None,
                     "v": d.get("v") if isinstance(d, dict) and "v" in d else None
                 })

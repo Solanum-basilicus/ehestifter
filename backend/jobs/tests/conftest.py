@@ -15,6 +15,10 @@ def base_url():
     return os.getenv("EHESTIFTER_JOBS_BASE_URL")
 
 @pytest.fixture(scope="session")
+def test_job_url():
+    return os.getenv("TEST_JOB_LINK")
+
+@pytest.fixture(scope="session")
 def function_key():
     return os.getenv("AZURE_FUNCTION_KEY")
 
@@ -36,7 +40,7 @@ def system_headers(auth_headers):
 @pytest.fixture(scope="session")
 def test_user_id():
     # fixed GUID for deterministic tests
-    return "00000000-0000-0000-0000-000000000123"
+    return os.getenv("TEST_USER_GUID")
 
 @pytest.fixture(scope="session")
 def user_headers(auth_headers, test_user_id):

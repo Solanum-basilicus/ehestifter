@@ -2,24 +2,11 @@
 import re
 import uuid
 import azure.functions as func
+from ids import is_guid
 
 GUID_REGEX = re.compile(
     r"^[{]?[0-9a-fA-F]{8}[-]?[0-9a-fA-F]{4}[-]?[0-9a-fA-F]{4}[-]?[0-9a-fA-F]{4}[-]?[0-9a-fA-F]{12}[}]?$"
 )
-
-def is_guid(s: str) -> bool:
-    if not isinstance(s, str):
-        return False
-    if not GUID_REGEX.match(s):
-        return False
-    try:
-        _ = uuid.UUID(s)
-        return True
-    except Exception:
-        return False
-
-def normalize_guid(s: str) -> str:
-    return str(uuid.UUID(s))
 
 class UnauthorizedError(Exception):
     pass

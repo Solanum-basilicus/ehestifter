@@ -2,8 +2,10 @@ import json
 import logging
 import azure.functions as func
 from db import get_connection
-from auth import UnauthorizedError, get_current_user_id, is_guid, normalize_guid
+from auth import UnauthorizedError, get_current_user_id
+from ids import normalize_guid, is_guid
 from history import insert_history
+import uuid
 
 def register(app: func.FunctionApp):
 
@@ -11,7 +13,7 @@ def register(app: func.FunctionApp):
     def put_job_status(req: func.HttpRequest) -> func.HttpResponse:
         conn = None
         try:
-            user_id = get_current_user_id(req)
+            user_id = normalize_guid(get_current_user_id(req))
             job_id_raw = req.route_params.get("jobId")
             logging.info(f"PUT jobs/{job_id_raw}/status")
 
@@ -57,8 +59,10 @@ def register(app: func.FunctionApp):
                            "user", user_id)
 
             conn.commit()
-            return func.HttpResponse(json.dumps({"jobId": job_id, "userId": user_id, "status": status}),
-                                     mimetype="application/json", status_code=200)
+            return func.HttpResponse(
+                json.dumps({"jobId": normalize_guid(job_id), "userId": normalize_guid(user_id), "status": status}),
+                mimetype="application/json", status_code=200
+            )
 
         except UnauthorizedError as ue:
             return func.HttpResponse(str(ue), status_code=401)

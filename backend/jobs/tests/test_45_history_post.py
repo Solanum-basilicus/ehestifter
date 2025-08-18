@@ -11,6 +11,7 @@ def test_history_post_system_actor(base_url, auth_headers, shared_state):
         "details": {"text": "system note from test suite"}
     }
     r = requests.post(url, headers=headers, json=payload)
+    print("Response text:", r.text, " with status ", r.status_code, end=" ")
     assert r.status_code == 200, r.text
 
     # verify it shows up

@@ -3,9 +3,11 @@ import logging
 import azure.functions as func
 from db import get_connection
 from auth import detect_actor
+from ids import normalize_guid
 from history import insert_history
 from validation import validate_job_payload
 from url_helpers import deduce_from_url
+import uuid
 
 def register(app: func.FunctionApp):
 
@@ -93,6 +95,7 @@ def register(app: func.FunctionApp):
 
             insert_history(cur, job_id, "job_created", {"jobId": job_id}, actor_type, actor_id)
             conn.commit()
+            job_id = normalize_guid(str(job_id))
             return func.HttpResponse(json.dumps({"id": job_id}), mimetype="application/json", status_code=201)
 
         except Exception as e:

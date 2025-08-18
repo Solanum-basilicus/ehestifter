@@ -14,7 +14,7 @@ def test_jobs_update_fields_and_locations(base_url, system_headers, shared_state
         ]
     }
     r = requests.put(url, headers=system_headers, json=payload)
-    print("Response text:", response.text, " with status ", response.status_code, end="")
+    print("Response text:", r.text, " with status ", r.status_code, end=" ")
     assert r.status_code == 200, r.text
 
     # verify

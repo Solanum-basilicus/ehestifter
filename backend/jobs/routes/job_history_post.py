@@ -2,7 +2,8 @@ import json
 import logging
 import azure.functions as func
 from db import get_connection
-from auth import detect_actor, is_guid, normalize_guid
+from auth import detect_actor
+from ids import normalize_guid, is_guid
 from history import insert_history
 
 def register(app: func.FunctionApp):
@@ -43,6 +44,9 @@ def register(app: func.FunctionApp):
             cur.execute("SELECT 1 FROM dbo.JobOfferings WHERE Id = ?", job_id)
             if cur.fetchone() is None:
                 return func.HttpResponse("Job not found", status_code=404)
+
+            if "userId" in details and isinstance(details["userId"], str):
+                details["userId"] = normalize_guid(details["userId"])
 
             insert_history(cur, job_id, action, details, actor_type, actor_id)
             conn.commit()
