@@ -4,6 +4,8 @@ import json
 import logging
 import os
 import pyodbc
+import secrets
+import string
 
 SQL_CONN_STR = os.getenv("SQL_CONNECTION_STRING")
 
@@ -20,6 +22,12 @@ def get_connection():
         logging.exception("Unhandled database connection error")
         raise Exception("Unexpected error while connecting to the database.")
 
+BOT_FUNCTION_KEY = os.getenv("USERS_BOT_FUNCTION_KEY")
+
+def require_bot_key(req: func.HttpRequest) -> bool:
+    # Bot calls must include the x-functions-key header and match our env
+    provided = req.headers.get("x-functions-key")
+    return (BOT_FUNCTION_KEY is not None) and (provided == BOT_FUNCTION_KEY)
 
 class DatetimeEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -252,4 +260,227 @@ def delete_user_filter(req: func.HttpRequest) -> func.HttpResponse:
 
     except Exception as e:
         logging.exception("USER/FILTERS DELETE: Error m30003")
+        return func.HttpResponse(f"Error: {str(e)}", status_code=500)
+
+@app.route(route="users/by-telegram/{telegram_user_id}", methods=["GET"])
+def get_user_by_telegram(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info('USERS/BY-TELEGRAM processed a request.')
+
+    try:
+        if not require_bot_key(req):
+            return func.HttpResponse("Unauthorized", status_code=401)
+
+        tg_id_raw = req.route_params.get("telegram_user_id")
+        if not tg_id_raw:
+            return func.HttpResponse("Missing telegram_user_id", status_code=400)
+
+        try:
+            tg_id = int(tg_id_raw)
+        except ValueError:
+            return func.HttpResponse("telegram_user_id must be integer", status_code=400)
+
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT Id, Email, Username, Role
+            FROM Users
+            WHERE TelegramUserId = ?
+        """, tg_id)
+        row = cursor.fetchone()
+
+        if not row:
+            return func.HttpResponse("Not found", status_code=404)
+
+        user_id, email, username, role = row
+        data = {
+            "userId": str(user_id),
+            "email": email,
+            "username": username,
+            "role": role
+        }
+        return func.HttpResponse(json.dumps(data), status_code=200, mimetype="application/json")
+
+    except Exception as e:
+        logging.exception("USER/BY-TELEGRAM: Error t10001")
+        return func.HttpResponse(f"Error: {str(e)}", status_code=500)
+
+@app.route(route="users/link-telegram", methods=["POST"])
+def link_telegram(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info('USERS/LINK-TELEGRAM processed a request.')
+
+    try:
+        if not require_bot_key(req):
+            return func.HttpResponse("Unauthorized", status_code=401)
+
+        data = req.get_json()
+        code = data.get("code")
+        telegram_user_id = data.get("telegram_user_id")
+
+        if not code or telegram_user_id is None:
+            return func.HttpResponse("Missing code or telegram_user_id", status_code=400)
+
+        try:
+            tg_id = int(telegram_user_id)
+        except (TypeError, ValueError):
+            return func.HttpResponse("telegram_user_id must be integer", status_code=400)
+
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        # Find by link code
+        cursor.execute("""
+            SELECT Id, TelegramUserId
+            FROM Users
+            WHERE TelegramLinkCode = ?
+        """, code)
+        row = cursor.fetchone()
+        if not row:
+            return func.HttpResponse("Invalid or expired code", status_code=404)
+
+        user_id, existing_tg = row
+
+        # Already linked?
+        if existing_tg is not None:
+            if existing_tg == tg_id:
+                # Idempotent success
+                result = { "userId": str(user_id), "message": "Already linked" }
+                return func.HttpResponse(json.dumps(result), status_code=200, mimetype="application/json")
+            else:
+                return func.HttpResponse("Account already linked to a different Telegram user", status_code=409)
+
+        # Perform the link + consume the code
+        cursor.execute("""
+            UPDATE Users
+            SET TelegramUserId = ?, TelegramLinkedAt = SYSDATETIME(), TelegramLinkCode = NULL
+            WHERE Id = ?
+        """, (tg_id, user_id))
+        conn.commit()
+
+        result = { "userId": str(user_id), "message": "Linked" }
+        return func.HttpResponse(json.dumps(result), status_code=200, mimetype="application/json")
+
+    except ValueError:
+        return func.HttpResponse("Invalid JSON", status_code=400)
+    except Exception as e:
+        logging.exception("USER/LINK-TELEGRAM: Error t20001")
+        return func.HttpResponse(f"Error: {str(e)}", status_code=500)
+
+import secrets
+import string
+
+def _generate_code(n: int = 8) -> str:
+    alphabet = string.ascii_uppercase + string.digits
+    return ''.join(secrets.choice(alphabet) for _ in range(n))
+
+@app.route(route="users/link-code", methods=["GET"])
+def get_or_create_link_code(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info('USERS/LINK-CODE processed a request.')
+
+    try:
+        b2c_object_id = req.headers.get("x-user-sub")
+        if not b2c_object_id:
+            return func.HttpResponse("Unauthorized", status_code=401)
+
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT Id, TelegramUserId, TelegramLinkCode
+            FROM Users
+            WHERE B2CObjectId = ?
+        """, b2c_object_id)
+        row = cursor.fetchone()
+
+        if not row:
+            return func.HttpResponse("User not found", status_code=404)
+
+        user_id, tg_user_id, code = row
+
+        if tg_user_id is not None:
+            payload = {
+                "linked": True,
+                "telegramUserId": int(tg_user_id)
+            }
+            return func.HttpResponse(json.dumps(payload), status_code=200, mimetype="application/json")
+
+        # Ensure a code exists
+        if not code:
+            # generate unique code (retry if collision)
+            for _ in range(5):
+                new_code = _generate_code(8)
+                try:
+                    cursor.execute("""
+                        UPDATE Users
+                        SET TelegramLinkCode = ?
+                        WHERE Id = ? AND TelegramLinkCode IS NULL
+                    """, (new_code, user_id))
+                    if cursor.rowcount == 1:
+                        conn.commit()
+                        code = new_code
+                        break
+                except Exception:
+                    # If unique index collision occurs, retry
+                    conn.rollback()
+            if not code:
+                return func.HttpResponse("Failed to generate code", status_code=500)
+
+        payload = {
+            "linked": False,
+            "code": code
+        }
+        return func.HttpResponse(json.dumps(payload), status_code=200, mimetype="application/json")
+
+    except Exception as e:
+        logging.exception("USER/LINK-CODE: Error t30001")
+        return func.HttpResponse(f"Error: {str(e)}", status_code=500)
+
+@app.route(route="users/unlink-telegram", methods=["POST"])
+def unlink_telegram(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info('USERS/UNLINK-TELEGRAM processed a request.')
+
+    try:
+        if not require_bot_key(req):
+            return func.HttpResponse("Unauthorized", status_code=401)
+
+        data = req.get_json() or {}
+        tg_id = data.get("telegram_user_id")
+        b2c_obj = data.get("b2c_object_id")
+
+        if tg_id is None and not b2c_obj:
+            return func.HttpResponse("Provide telegram_user_id or b2c_object_id", status_code=400)
+
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        if tg_id is not None:
+            try:
+                tg_id = int(tg_id)
+            except (TypeError, ValueError):
+                return func.HttpResponse("telegram_user_id must be integer", status_code=400)
+            # Unlink by TelegramUserId
+            cursor.execute("""
+                UPDATE Users
+                SET TelegramUserId = NULL,
+                    TelegramLinkedAt = NULL
+                WHERE TelegramUserId = ?
+            """, tg_id)
+            affected = cursor.rowcount
+            conn.commit()
+            return func.HttpResponse(json.dumps({"unlinked": affected}), status_code=200, mimetype="application/json")
+
+        # else unlink by B2C object id
+        cursor.execute("""
+            UPDATE Users
+            SET TelegramUserId = NULL,
+                TelegramLinkedAt = NULL
+            WHERE B2CObjectId = ?
+        """, b2c_obj)
+        affected = cursor.rowcount
+        conn.commit()
+        return func.HttpResponse(json.dumps({"unlinked": affected}), status_code=200, mimetype="application/json")
+
+    except ValueError:
+        return func.HttpResponse("Invalid JSON", status_code=400)
+    except Exception as e:
+        logging.exception("USER/UNLINK-TELEGRAM: Error t40001")
         return func.HttpResponse(f"Error: {str(e)}", status_code=500)

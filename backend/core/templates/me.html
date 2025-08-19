@@ -1,110 +1,91 @@
-<!doctype html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>User Info</title>
-</head>
-<body>
-  <div id="user-bar" style="text-align: right; padding: 10px;">
-    <span id="user-link" style="opacity:.6">Loading user…</span>
-    <p>Updated at: {{ now }}</p>
-    <a href="{{ url_for('identity.logout') }}">Logout</a>
+{% extends "base.html" %}
+
+{% block head_extra %}
+<style>
+  /* lightweight card + layout */
+  .container { max-width:1100px; margin:0 auto; padding:24px 16px; }
+  .grid { display:grid; grid-template-columns: 1fr; gap:16px; }
+  @media (min-width: 900px) { .grid { grid-template-columns: 1.2fr .8fr; } }
+  .card { border:1px solid #e5e7eb; border-radius:12px; background:#fff; padding:16px; }
+  .subtle { color:#6b7280; font-size:14px; }
+  .key { width:140px; color:#6b7280; }
+  .row { display:flex; gap:12px; padding:6px 0; align-items:center; }
+  .skeleton { background:linear-gradient(90deg,#f3f4f6,#e5e7eb,#f3f4f6); background-size:200% 100%; animation: sh 1.2s linear infinite; border-radius:6px; }
+  @keyframes sh { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+</style>
+{% endblock %}
+
+{% block content %}
+  <div class="container">
+    <h1 style="margin:0 0 12px;">Your profile</h1>
+    <p class="subtle" style="margin:0 0 20px;">
+      This page shows your in‑app user info. Filters are not implemented yet.
+    </p>
+
+    <div class="grid">
+
+      <!-- Profile card -->
+      <section id="profile" class="card" aria-busy="true">
+        <h2 style="margin:0 0 8px; font-size:18px;">Basic information</h2>
+        <div class="row">
+          <div class="key">Name</div>
+          <div id="ui-name">{{ user.get("name") or '...' }}</div>
+        </div>
+        <div class="row">
+          <div class="key">Email</div>
+          <div id="ui-email"><span class="skeleton" style="display:inline-block; width:160px; height:1em;"></span></div>
+        </div>
+        <div class="row">
+          <div class="key">Role</div>
+          <div id="ui-role"><span class="skeleton" style="display:inline-block; width:80px; height:1em;"></span></div>
+        </div>
+        <p id="ui-error" class="subtle" hidden></p>
+      </section>
+
+      <!-- Filters placeholder -->
+      <section class="card">
+        <h2 style="margin:0 0 8px; font-size:18px;">Your filters</h2>
+        <p class="subtle" id="user-filters-span">Filters are not implemented yet.</p>
+      </section>
+
+    </div>
   </div>
 
-  <div id="user-main-info" aria-busy="true">
-    <h2>Hello <span id="ui-username">{{ user.get("name") or '...' }}</span></h2>
-    <p>Email: <span id="ui-email">loading…</span></p>
-    <p>Role: <span id="ui-role">loading…</span></p>
-    <p id="ui-error" style="opacity:.8" hidden></p>
-  </div>
-  <div id="user-filters" >
-    <span id="user-filters-span" style="opacity:.6">Filters are not implemented yet.</span>
-  </div>
-  <br>
-  <a href="{{ url_for('index') }}">Back to home</a>
-
-  <details>
-    <summary><p style="display:inline">Debug info</p></summary>
-
-    <h3>MSAL claims (server)</h3>
-    <pre>{{ user | tojson(indent=2) }}</pre>
-
-    <h3>In-app user (API)</h3>
-    <pre id="dbg-inapp" style="min-height:4rem; opacity:.7">Loading user…</pre>
-  </details>
-  <hr>
-  <footer style="text-align: right">{{ title }}</footer>
-</body>
-</html>
-
-<script>
-  (function(){
-    const userLink = document.getElementById('user-link');
-    const dbgBlock = document.getElementById('dbg-inapp');
-    const elName  = document.getElementById('ui-username');
+  <script>
+  (function () {
+    const box   = document.getElementById('profile');
+    const elName  = document.getElementById('ui-name');
     const elEmail = document.getElementById('ui-email');
     const elRole  = document.getElementById('ui-role');
     const elErr   = document.getElementById('ui-error');
-    const box     = document.getElementById('user-main-info');
 
     function setBusy(b){ box?.setAttribute('aria-busy', b ? 'true' : 'false'); }
 
-    async function fetchWithRetry(url, attempts = 4) {
-      let delay = 500; // ms
-      for (let i = 1; i <= attempts; i++) {
-        try {
-          const resp = await fetch(url, { credentials: 'same-origin' });
-          if (!resp.ok) throw new Error('HTTP ' + resp.status);
-          return await resp.json();
-        } catch (err) {
-          if (i === attempts) throw err;
-          await new Promise(r => setTimeout(r, delay));
-          delay *= 2; // 0.5s, 1s, 2s, 4s
-        }
-      }
-    }
-
-    function renderUser(u) {
-      // defensive defaults
-      const username = (u && (u.username || u.email)) || 'me';
-      const href = "{{ url_for('me') }}";
-      userLink.outerHTML = `<a href="${href}">To profile: ${username}</a>`;
-    }
-
-    function renderError(msg) {
-      userLink.outerHTML = `
-        <span style="opacity:.8">User info unavailable - ${msg}</span>
-        <button id="retry-user" type="button" style="margin-left:.5rem">Retry</button>
-      `;
-      document.getElementById('retry-user').addEventListener('click', init);
-    }
-
     function renderProfile(u){
-      if (u?.username) elName.textContent = u.username;
-      if (u?.email)    elEmail.textContent = u.email;
+      if (u?.name || u?.preferred_username || u?.username) {
+        elName.textContent = u.name || u.preferred_username || u.username;
+      }
+      if (u?.email) elEmail.textContent = u.email; else elEmail.textContent = '—';
       elRole.textContent = u?.role ?? 'user';
-    }    
+    }
 
     function showError(msg){
       elErr.hidden = false;
       elErr.textContent = msg;
     }
 
-    async function init() {
+    async function init(){
+      setBusy(true);
       try {
-        const data = await fetchWithRetry("/ui/users/me", 4);
+        // shared helper from static/js/net-utils.js
+        const data = await window.fetchWithRetry('/ui/users/me', 4);
         if (data && !data.error) {
-          renderUser(data); // Right top block
-          dbgBlock.style.opacity = 1; // debug block
-          dbgBlock.textContent = JSON.stringify(data, null, 2); // debug block
-          renderProfile(data); // Main block
+          renderProfile(data);
         } else {
-          renderError(data.message || 'please try again'); // Right top block
-          dbgBlock.textContent = (data && data.message) || 'User service is warming up'; // debug block
-          showError(data?.message || 'User service is warming up');  // Main block
+          showError((data && data.message) || 'Please try again.');
         }
-      } catch (e) {
-        renderError('please try again');
+      } catch {
+        showError('Please try again.');
       } finally {
         setBusy(false);
       }
@@ -113,3 +94,4 @@
     document.addEventListener('DOMContentLoaded', init);
   })();
   </script>
+{% endblock %}
