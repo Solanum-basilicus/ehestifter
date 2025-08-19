@@ -15,7 +15,7 @@ def test_06_link_then_lookup_and_cleanup(base_url, auth_headers, default_user):
 
     # Ensure exists
     r_me = s.get(
-        f"{base_url}/api/users/me",
+        f"{base_url}/users/me",
         headers={**auth_headers, "x-user-sub": default_user, "x-user-email": "itest@ex.com", "x-user-name": "ITester"},
         timeout=20,
     )
@@ -24,7 +24,7 @@ def test_06_link_then_lookup_and_cleanup(base_url, auth_headers, default_user):
 
     # Reset link
     s.post(
-        f"{base_url}/api/users/unlink-telegram",
+        f"{base_url}/users/unlink-telegram",
         headers={"x-functions-key": BOT_KEY},
         json={"b2c_object_id": default_user},
         timeout=20,
@@ -32,7 +32,7 @@ def test_06_link_then_lookup_and_cleanup(base_url, auth_headers, default_user):
 
     # Get link code
     r_code = s.get(
-        f"{base_url}/api/users/link-code",
+        f"{base_url}/users/link-code",
         headers={**auth_headers, "x-user-sub": default_user},
         timeout=20,
     )
@@ -42,7 +42,7 @@ def test_06_link_then_lookup_and_cleanup(base_url, auth_headers, default_user):
     # Link as bot with a fake telegram id
     fake_tg_id = 161803398  # arbitrary int
     r_link = s.post(
-        f"{base_url}/api/users/link-telegram",
+        f"{base_url}/users/link-telegram",
         headers={"x-functions-key": BOT_KEY},
         json={"code": code, "telegram_user_id": fake_tg_id},
         timeout=20,
@@ -52,12 +52,12 @@ def test_06_link_then_lookup_and_cleanup(base_url, auth_headers, default_user):
     assert linked_payload.get("userId") == me["userId"]
 
     # Verify by-telegram requires bot key
-    r_by_tg_no_key = s.get(f"{base_url}/api/users/by-telegram/{fake_tg_id}", timeout=20)
+    r_by_tg_no_key = s.get(f"{base_url}/users/by-telegram/{fake_tg_id}", timeout=20)
     assert r_by_tg_no_key.status_code == 401
 
     # Verify lookup works with bot key
     r_by_tg = s.get(
-        f"{base_url}/api/users/by-telegram/{fake_tg_id}",
+        f"{base_url}/users/by-telegram/{fake_tg_id}",
         headers={"x-functions-key": BOT_KEY},
         timeout=20,
     )
@@ -67,7 +67,7 @@ def test_06_link_then_lookup_and_cleanup(base_url, auth_headers, default_user):
 
     # Link-code now shows linked=true
     r_code2 = s.get(
-        f"{base_url}/api/users/link-code",
+        f"{base_url}/users/link-code",
         headers={**auth_headers, "x-user-sub": default_user},
         timeout=20,
     )
@@ -78,7 +78,7 @@ def test_06_link_then_lookup_and_cleanup(base_url, auth_headers, default_user):
 
     # Cleanup: unlink again to keep tests idempotent
     r_unlink = s.post(
-        f"{base_url}/api/users/unlink-telegram",
+        f"{base_url}/users/unlink-telegram",
         headers={"x-functions-key": BOT_KEY},
         json={"telegram_user_id": fake_tg_id},
         timeout=20,

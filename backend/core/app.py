@@ -1,15 +1,9 @@
 import os
-#import uuid
-#import requests
-from flask import Flask, render_template #, Blueprint, jsonify, session, request, current_app
+from flask import Flask, render_template
 from identity.flask import Auth
 import app_config
 import logging
-#import time,random
-#from werkzeug.exceptions import Unauthorized, BadRequest
 from datetime import datetime
-#import bleach
-#from bs4 import BeautifulSoup
 from routes import register_all
 
 

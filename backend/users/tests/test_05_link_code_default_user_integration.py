@@ -16,7 +16,7 @@ def test_05_link_code_for_default_user(base_url, auth_headers, default_user):
 
     # 1) Ensure default user exists (creates if necessary)
     r_me = s.get(
-        f"{base_url}/api/users/me",
+        f"{base_url}/users/me",
         headers={**auth_headers, "x-user-sub": default_user, "x-user-email": "itest@ex.com", "x-user-name": "ITester"},
         timeout=20,
     )
@@ -26,7 +26,7 @@ def test_05_link_code_for_default_user(base_url, auth_headers, default_user):
 
     # 2) Make sure user is unlinked first (idempotent)
     r_unlink = s.post(
-        f"{base_url}/api/users/unlink-telegram",
+        f"{base_url}/users/unlink-telegram",
         headers={"x-functions-key": BOT_KEY},
         json={"b2c_object_id": default_user},
         timeout=20,
@@ -35,7 +35,7 @@ def test_05_link_code_for_default_user(base_url, auth_headers, default_user):
 
     # 3) Get link code for the user (should be unlinked -> returns code)
     r_code = s.get(
-        f"{base_url}/api/users/link-code",
+        f"{base_url}/users/link-code",
         headers={**auth_headers, "x-user-sub": default_user},
         timeout=20,
     )
@@ -47,7 +47,7 @@ def test_05_link_code_for_default_user(base_url, auth_headers, default_user):
 
     # 4) Call again - should return same code (stable until consumed)
     r_code2 = s.get(
-        f"{base_url}/api/users/link-code",
+        f"{base_url}/users/link-code",
         headers={**auth_headers, "x-user-sub": default_user},
         timeout=20,
     )

@@ -12,6 +12,13 @@
   .row { display:flex; gap:12px; padding:6px 0; align-items:center; }
   .skeleton { background:linear-gradient(90deg,#f3f4f6,#e5e7eb,#f3f4f6); background-size:200% 100%; animation: sh 1.2s linear infinite; border-radius:6px; }
   @keyframes sh { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+
+  .pill { display:inline-block; border:1px solid #e5e7eb; border-radius:999px; padding:2px 10px; font-size:12px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+  .btn { padding:6px 10px; border-radius:8px; border:1px solid #e5e7eb; background:#f9fafb; cursor:pointer; }
+  .btn:disabled { opacity:.6; cursor:not-allowed; }
+  .btn-row { display:flex; gap:8px; flex-wrap:wrap; }
+  .small { font-size:12px; }
 </style>
 {% endblock %}
 
@@ -42,6 +49,43 @@
         <p id="ui-error" class="subtle" hidden></p>
       </section>
 
+      <!-- Telegram linking card -->
+      <section id="telegram" class="card" aria-busy="true">
+        <h2 style="margin:0 0 8px; font-size:18px;">Telegram</h2>
+
+        <!-- Single line status that starts as Loading… -->
+        <div class="row">
+          <div class="key">Status</div>
+          <div id="tg-status" class="subtle">Loading…</div>
+        </div>
+
+        <!-- Shown only when linked -->
+        <div id="tg-linked" class="row" hidden>
+          <div class="key">Linked as</div>
+          <div id="tg-linked-id" class="mono"></div>
+        </div>
+
+        <!-- Shown only when NOT linked -->
+        <div id="tg-unlinked" hidden>
+          <div class="row">
+            <div class="key">Link code</div>
+            <div>
+              <span id="tg-code" class="mono" style="font-size:16px;">— — — — — — — —</span>
+              <div class="btn-row" style="margin-top:8px;">
+                <button id="btn-copy-code" class="btn" type="button" disabled>Copy code</button>
+                <button id="btn-refresh-status" class="btn" type="button" disabled>Refresh status</button>
+                <a id="btn-open-bot" class="btn" href="#" target="_blank" rel="noopener" hidden>Open bot</a>
+              </div>
+              <p class="subtle small" style="margin-top:8px;">
+                Open the bot and send <span class="mono">/link &lt;your code&gt;</span>. The code stays the same until used.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <p id="tg-error" class="subtle" hidden></p>
+      </section>
+
       <!-- Filters placeholder -->
       <section class="card">
         <h2 style="margin:0 0 8px; font-size:18px;">Your filters</h2>
@@ -51,7 +95,7 @@
     </div>
   </div>
 
-  <script>
+<script>
   (function () {
     const box   = document.getElementById('profile');
     const elName  = document.getElementById('ui-name');
@@ -59,39 +103,123 @@
     const elRole  = document.getElementById('ui-role');
     const elErr   = document.getElementById('ui-error');
 
-    function setBusy(b){ box?.setAttribute('aria-busy', b ? 'true' : 'false'); }
+    const tgBox      = document.getElementById('telegram');
+    const tgStatus   = document.getElementById('tg-status');
+    const tgLinked   = document.getElementById('tg-linked');
+    const tgLinkedId = document.getElementById('tg-linked-id');
+    const tgUnlinked = document.getElementById('tg-unlinked');
+    const tgCode     = document.getElementById('tg-code');
+    const tgErr      = document.getElementById('tg-error');
+    const btnCopy    = document.getElementById('btn-copy-code');
+    const btnRefresh = document.getElementById('btn-refresh-status');
+    const btnOpenBot = document.getElementById('btn-open-bot');
+
+    function setBusy(section, b){ section?.setAttribute('aria-busy', b ? 'true' : 'false'); }
+    function enableControls(enabled) {
+      btnCopy && (btnCopy.disabled = !enabled);
+      btnRefresh && (btnRefresh.disabled = !enabled);
+    }
 
     function renderProfile(u){
       if (u?.name || u?.preferred_username || u?.username) {
         elName.textContent = u.name || u.preferred_username || u.username;
       }
-      if (u?.email) elEmail.textContent = u.email; else elEmail.textContent = '—';
+      elEmail.textContent = u?.email || '—';
       elRole.textContent = u?.role ?? 'user';
     }
 
-    function showError(msg){
-      elErr.hidden = false;
-      elErr.textContent = msg;
+    function showError(el, msg){
+      el.hidden = false;
+      el.textContent = msg;
     }
 
-    async function init(){
-      setBusy(true);
-      try {
-        // shared helper from static/js/net-utils.js
-        const data = await window.fetchWithRetry('/ui/users/me', 4);
-        if (data && !data.error) {
-          renderProfile(data);
+    async function fetchLinkCode(){
+      // UI proxy (added below) to users function
+      return await window.fetchWithRetry('/ui/users/link-code', 4);
+    }
+
+    function applyTelegramUi(state){
+      // Reset view
+      tgLinked.hidden = true;
+      tgUnlinked.hidden = true;
+      enableControls(false);
+
+      if (!state) {
+        tgStatus.textContent = 'Error';
+        return;
+      }
+
+      if (state.linked) {
+        tgStatus.textContent = 'Linked ✅';
+        tgLinked.hidden = false;
+        tgLinkedId.textContent = state.telegramUserId ? String(state.telegramUserId) : '';
+      } else {
+        tgStatus.textContent = 'Not linked';
+        tgUnlinked.hidden = false;
+        tgCode.textContent = state.code || '— — — — — — — —';
+        enableControls(Boolean(state.code));
+
+        // Optional deep link to bot
+        const botName = (window.TELEGRAM_BOT_USERNAME || '').trim();
+        if (botName) {
+          btnOpenBot.hidden = false;
+          btnOpenBot.href = 'https://t.me/' + encodeURIComponent(botName);
         } else {
-          showError((data && data.message) || 'Please try again.');
+          btnOpenBot.hidden = true;
         }
-      } catch {
-        showError('Please try again.');
-      } finally {
-        setBusy(false);
       }
     }
 
-    document.addEventListener('DOMContentLoaded', init);
+    async function initProfile(){
+      setBusy(box, true);
+      try {
+        const data = await window.fetchWithRetry('/ui/users/me', 4);
+        if (data && !data.error) renderProfile(data);
+        else showError(elErr, (data && data.message) || 'Please try again.');
+      } catch {
+        showError(elErr, 'Please try again.');
+      } finally {
+        setBusy(box, false);
+      }
+    }
+
+    async function initTelegram(){
+      setBusy(tgBox, true);
+      tgStatus.textContent = 'Loading…';
+      try {
+        const data = await fetchLinkCode();
+        if (data && !data.error) applyTelegramUi(data);
+        else {
+          tgStatus.textContent = 'Error';
+          showError(tgErr, (data && data.message) || 'Please try again.');
+        }
+      } catch {
+        tgStatus.textContent = 'Error';
+        showError(tgErr, 'Please try again.');
+      } finally {
+        setBusy(tgBox, false);
+      }
+    }
+
+    // Events
+    btnCopy?.addEventListener('click', async () => {
+      const code = (tgCode?.textContent || '').replace(/\s+/g, '').trim();
+      if (!code || code.includes('—')) return;
+      try {
+        await navigator.clipboard.writeText(code);
+        btnCopy.textContent = 'Copied ✓';
+        setTimeout(() => (btnCopy.textContent = 'Copy code'), 1200);
+      } catch { /* noop */ }
+    });
+
+    btnRefresh?.addEventListener('click', async () => {
+      await initTelegram();
+    });
+
+    document.addEventListener('DOMContentLoaded', async () => {
+      await initProfile();
+      await initTelegram();
+    });
   })();
-  </script>
+</script>
 {% endblock %}

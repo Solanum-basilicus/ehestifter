@@ -10,12 +10,12 @@ def test_07_bot_endpoints_require_key(base_url):
     s = requests.Session()
 
     # by-telegram without key
-    r = s.get(f"{base_url}/api/users/by-telegram/424242", timeout=20)
+    r = s.get(f"{base_url}/users/by-telegram/424242", timeout=20)
     assert r.status_code == 401
 
     # link-telegram without key
     r2 = s.post(
-        f"{base_url}/api/users/link-telegram",
+        f"{base_url}/users/link-telegram",
         json={"code": "NOPE", "telegram_user_id": 1},
         timeout=20,
     )
@@ -23,7 +23,7 @@ def test_07_bot_endpoints_require_key(base_url):
 
     # unlink-telegram without key
     r3 = s.post(
-        f"{base_url}/api/users/unlink-telegram",
+        f"{base_url}/users/unlink-telegram",
         json={"telegram_user_id": 1},
         timeout=20,
     )

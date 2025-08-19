@@ -42,3 +42,33 @@ def get_in_app_user_id(context) -> str:
     if not uid:
         raise ValueError("In-app user is missing userId")
     return uid
+
+def _b2c_headers_from_context(context: dict) -> dict:
+    h = {
+        "x-user-sub": context["user"]["sub"],
+        "x-user-email": context["user"].get("email") or "",
+        "x-user-name": context["user"].get("name") or context["user"].get("preferred_username") or "",
+        "Accept": "application/json",
+    }
+    if fxkey:
+        h["x-functions-key"] = fxkey
+    return h
+
+def _do_get_link_code(url: str, headers: dict) -> dict:
+    r = requests.get(url, headers=headers, timeout=5)
+    if r.status_code == 200:
+        return r.json()
+    if r.status_code in (500, 502, 503, 504):
+        raise TimeoutError(f"Upstream unavailable: {r.status_code}")
+    if r.status_code in (401, 403):
+        raise Exception(f"Unauthorized from users/link-code: {r.status_code}")
+    raise Exception(f"Unexpected status from users/link-code: {r.status_code} {r.text}")
+
+def get_link_code(context: dict) -> dict:
+    url = f"{base_url}/users/link-code"
+    headers = _b2c_headers_from_context(context)
+    try:
+        # 4 attempts, ~0.75s, 1.5s, 3s, 6s (+ jitter)
+        return retry_until_ready(lambda: _do_get_link_code(url, headers), attempts=4, base_delay=0.75)
+    except requests.Timeout as te:
+        raise TimeoutError("users/link-code timeout") from te
