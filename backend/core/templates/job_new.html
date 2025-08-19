@@ -31,6 +31,13 @@
   .loc-actions { display:flex; gap:8px; }
   .section-subtle { padding:10px; border:1px dashed #e5e7eb; border-radius:8px; background:#fafafa; }
   details.advanced summary { cursor:pointer; color:#374151; }
+  /* Quill styling */
+  .ql-toolbar.ql-snow { border:1px solid #e5e7eb; border-radius:8px 8px 0 0; }
+  .ql-container.ql-snow { border:1px solid #e5e7eb; border-top:0; border-radius:0 0 8px 8px; min-height:180px; }
+  .ql-editor { min-height:160px; }
+
+  .desc-meta { display:flex; justify-content:space-between; align-items:center; font-size:12px; color:#6b7280; margin-top:6px; }
+  .desc-count.over { color:#b91c1c; font-weight:600; }  
 </style>
 {% endblock %}
 
@@ -119,13 +126,53 @@
       </div>
     </div>
 
-    <!-- Description (no preview) -->
-    <label for="description" class="label">Description</label>
-    <textarea id="description" name="description" rows="10" placeholder="Paste or write a description"></textarea>
+    <!-- Description (rich) -->
+    <label class="label">Description</label>
+    <div>
+      <!-- Simple toolbar (no image/video) -->
+      <div id="descToolbar">
+        <span class="ql-formats">
+          <select class="ql-header">
+            <option selected></option>
+            <option value="2">H2</option>
+            <option value="3">H3</option>
+          </select>
+        </span>
+        <span class="ql-formats">
+          <button class="ql-bold"></button>
+          <button class="ql-italic"></button>
+          <button class="ql-underline"></button>
+          <button class="ql-strike"></button>
+        </span>
+        <span class="ql-formats">
+          <button class="ql-blockquote"></button>
+          <button class="ql-code-block"></button>
+        </span>
+        <span class="ql-formats">
+          <button class="ql-list" value="ordered"></button>
+          <button class="ql-list" value="bullet"></button>
+        </span>
+        <span class="ql-formats">
+          <button class="ql-link"></button>
+          <!-- deliberately omit image/video -->
+        </span>
+        <span class="ql-formats">
+          <button class="ql-clean"></button>
+        </span>
+      </div>
+      <div id="descEditor"></div>
+      <div class="desc-meta">
+        <span>No images. Links are allowed.</span>
+        <span>Length: <span id="descCount" class="desc-count">0</span>/20000</span>
+      </div>
+    </div>
+
   </form>
 
   <div id="err" class="err hidden" role="alert"></div>
 </div>
+
+
 
 <script type="module">
   import { deduceFromUrl } from "{{ url_for('static', filename='js/job-url-helpers.js') }}";
@@ -141,12 +188,84 @@
   const providerInput = el('provider');
   const tenantInput = el('providerTenant');
   const titleInput = el('title');
-  const descInput = el('description');
   const errEl = el('err');
 
   // Locations editor
   const locHost = el('locations');
   el('btnAddLoc').addEventListener('click', () => addLocRow());
+
+  // --- Quill init ---
+  const quill = new Quill('#descEditor', {
+    theme: 'snow',
+    modules: { toolbar: '#descToolbar' }
+  });
+
+  // Prevent images on paste
+  const Delta = Quill.import('delta');
+  quill.clipboard.addMatcher('img', () => new Delta());  // drop images
+
+  // Live counter (plain text length)
+  const descCountEl = document.getElementById('descCount');
+  const DESC_LIMIT = 20000;
+
+  function updateDescCount() {
+    const len = quill.getText().trimEnd().length; // plain text
+    descCountEl.textContent = String(len);
+    descCountEl.classList.toggle('over', len > DESC_LIMIT);
+  }
+  quill.on('text-change', updateDescCount);
+  updateDescCount();
+
+  // Client-side sanitize: remove dangerous tags/attrs; allow links
+  function sanitizeClientHtml(html) {
+    try {
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const removeAll = (sel) => doc.querySelectorAll(sel).forEach(n => n.remove());
+
+      // Drop risky/embedded content
+      removeAll('script,style,iframe,object,embed,video,audio,canvas,svg,img');
+
+      // Remove event handlers and javascript: URLs
+      doc.querySelectorAll('*').forEach(el => {
+        // remove on* attributes
+        [...el.attributes].forEach(a => {
+          if (a.name.toLowerCase().startsWith('on')) el.removeAttribute(a.name);
+        });
+        // tighten <a>
+        if (el.tagName.toLowerCase() === 'a') {
+          const href = (el.getAttribute('href') || '').trim();
+          if (!/^https?:\/\//i.test(href) && !/^mailto:/i.test(href)) {
+            el.removeAttribute('href');
+          }
+          el.setAttribute('target', '_blank');
+          el.setAttribute('rel', 'noopener noreferrer nofollow');
+        }
+      });
+
+      // Keep only a conservative set of tags (others -> unwrap)
+      const allowed = new Set(['p','br','hr','span','div','b','strong','i','em','u','code','pre','blockquote',
+                              'ul','ol','li','h1','h2','h3','h4','a']);
+      doc.body.querySelectorAll('*').forEach(el => {
+        if (!allowed.has(el.tagName.toLowerCase())) {
+          // Replace el with its children (unwrap)
+          const parent = el.parentNode;
+          while (el.firstChild) parent.insertBefore(el.firstChild, el);
+          parent.removeChild(el);
+        }
+      });
+
+      // Normalize empty content
+      const cleaned = doc.body.innerHTML
+        .replace(/^\s+|\s+$/g, '')
+        .replace(/<p><br><\/p>/g, '')
+        .trim();
+      return cleaned || '';
+    } catch {
+      return '';
+    }
+  }
+
+
 
   function addLocRow(init = {}) {
     const row = document.createElement('div');
@@ -225,7 +344,18 @@
       return;
     }
 
-    // gather form
+    // Gather Quill content
+    const plain = quill.getText().trim();
+    const htmlRaw = quill.root.innerHTML.trim();
+    if (plain.length > DESC_LIMIT) {
+      errEl.textContent = `Description is too long (${plain.length} > ${DESC_LIMIT} characters).`;
+      errEl.classList.remove('hidden');
+      return;
+    }
+    const htmlSafe = sanitizeClientHtml(htmlRaw);
+    const description = plain ? htmlSafe : undefined;
+
+    // gather rest of form
     const body = {
       url,
       title: titleInput.value.trim() || undefined,
@@ -236,11 +366,9 @@
       providerTenant: tenantInput.value.trim() || undefined,
       externalId: externalIdInput.value.trim() || undefined,
       remoteType: (document.querySelector('input[name="remoteType"]:checked')?.value) || 'Unknown',
-      description: descInput.value.trim() || undefined,
+      description,
       locations: readLocations()
     };
-
-    // remove empty locations array if all rows empty
     if (!body.locations.length) delete body.locations;
 
     try {

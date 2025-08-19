@@ -80,6 +80,22 @@
             </div>
           </template>
 
+          <!-- Found on -->
+          <template x-if="meta.foundOn">
+            <div class="flex">
+              <div class="sep-vert"></div>
+              <span class="badge" x-text="'found on ' + meta.foundOn"></span>
+            </div>
+          </template>
+
+          <!-- ATS / Provider -->
+          <template x-if="providerLine()">
+            <div class="flex">
+              <div class="sep-vert"></div>
+              <span class="badge" x-text="providerLine()"></span>
+            </div>
+          </template>
+
           <template x-if="meta.url">
             <div class="flex">
               <div class="sep-vert"></div>
@@ -448,90 +464,91 @@
     // That one is for pretty much everything on the page
     Alpine.data('jobDetailPage', (jobId) => ({
       jobId,
-      _inited: false,
+      _inited:false,
       meta: {
-        title: "", company: "", postingCompany: "", country: "", locality: "",
-        remoteType: "", firstSeenUtc: "", lastSeenUtc: "", repostCount: 0, url: "", applyUrl: ""
+        title:"", company:"", postingCompany:"",
+        remoteType:"", firstSeenUtc:"", lastSeenUtc:"",
+        repostCount:0, url:"", applyUrl:"",
+        foundOn:"", externalId:"", provider:"", providerTenant:"",
+        locations: []
       },
-      app: { state: "New", changedAtUtc: null },
-      safeDescription: "",
-      descLoaded: false,
+      app:{ state:"New", changedAtUtc:null },
+      safeDescription:"", descLoaded:false,
+      history:{ items:[], nextCursor:null, loaded:false, loadingMore:false, error:"" },
 
-      /* history state */
-      history: {
-        items: [],
-        nextCursor: null,
-        loaded: false,
-        loadingMore: false,
-        error: ""
-      },
-
-      async init() {
-        if (this._inited) return;
-        this._inited = true;
-
-        // Load main job payload (with cold-start retry)
+      async init(){
+        if (this._inited) return; this._inited = true;
         const tryFetch = async () => {
-          const r = await fetch(`/ui/jobs/${this.jobId}`, { credentials: 'same-origin' });
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const r = await fetch(`/ui/jobs/${this.jobId}`, { credentials:'same-origin' });
+          if(!r.ok) throw new Error(`HTTP ${r.status}`);
           return r.json();
         };
-
-        try {
+        try{
           let payload;
-          try {
-            payload = await tryFetch();
-          } catch {
-            await new Promise(res => setTimeout(res, 1200));
-            payload = await tryFetch();
-          }
+          try { payload = await tryFetch(); }
+          catch { await new Promise(res => setTimeout(res, 1200)); payload = await tryFetch(); }
           window.__lastJobPayload = payload;
           this.hydrateFromPayload(payload);
           this.descLoaded = true;
-        } catch (e) {
+        }catch(e){
           this.safeDescription = `<p class="muted">Unable to load description right now.</p>`;
           this.descLoaded = true;
         }
-
-        // Kick off history load (don’t block page)
-        this.loadHistory();       
-        // listen for status changes to refresh history
-         window.addEventListener('job-history-refresh', (e) => {
-          if (!e.detail || e.detail.jobId === this.jobId) {
-            this.loadHistory();
-          }
-        }, { once: false });
+        this.loadHistory();
+        window.addEventListener('job-history-refresh', (e) => {
+          if (!e.detail || e.detail.jobId === this.jobId) this.loadHistory();
+        });
       },
 
+      get(obj, keys){ for (const k of keys) if (obj && obj[k] != null) return obj[k]; },
 
-      // A full bucket of helpers follows...
-      get(obj, keys) {
-        for (const k of keys) if (obj && obj[k] != null) return obj[k];
-        return undefined;
-      },
+      hydrateFromPayload(p){
+        const title   = this.get(p, ["Title","title","JobTitle"]) || "";
+        const extId   = this.get(p, ["ExternalId","externalId"]) || "";
+        const company = this.get(p, ["HiringCompanyName","Company","CompanyName"]) || "";
+        const posting = this.get(p, ["PostingCompanyName","PostingCompany","PostedBy"]) || "";
+        const remote  = this.get(p, ["RemoteType","remote_type"]) || "";
+        const foundOn = (this.get(p, ["FoundOn","foundOn"]) || "").toString().trim();
+        const provider = (this.get(p, ["Provider","provider"]) || "").toString().trim();
+        const tenant   = (this.get(p, ["ProviderTenant","providerTenant"]) || "").toString().trim();
 
-      hydrateFromPayload(p) {
-        const title          = this.get(p, ["Title","title","JobTitle"]) || "";
-        const company        = this.get(p, ["HiringCompanyName","Company","CompanyName"]) || "";
-        const postingCompany = this.get(p, ["PostingCompanyName","PostingCompany","PostedBy"]) || "";
-        const country        = this.get(p, ["Country"]) || "";
-        const locality       = this.get(p, ["Locality","City"]) || "";
-        const remoteType     = this.get(p, ["RemoteType","remote_type"]) || "";
-
-        const firstSeenUtc   = this.get(p, ["FirstSeenAt","PostedDate","CreatedAt"]) || "";
-        const lastSeenUtc    = this.get(p, ["LastSeenAt","UpdatedAt"]) || firstSeenUtc || "";
-
+        const firstSeen = this.get(p, ["FirstSeenAt","PostedDate","CreatedAt"]) || "";
+        const lastSeen  = this.get(p, ["LastSeenAt","UpdatedAt"]) || firstSeen || "";
         let repostCount = Number.parseInt(this.get(p, ["RepostCount","repostCount"]) || 0, 10);
         if (!Number.isFinite(repostCount)) repostCount = 0;
 
-        const url      = this.get(p, ["Url","OriginalUrl"]) || "";
+        const url  = this.get(p, ["Url","OriginalUrl"]) || "";
         const applyUrl = this.get(p, ["ApplyUrl","ApplyLink"]) || "";
 
-        this.meta = { title, company, postingCompany, country, locality, remoteType,
-                      firstSeenUtc, lastSeenUtc, repostCount, url, applyUrl };
+        // Locations: prefer new shape
+        let locs = Array.isArray(p.locations) ? p.locations : [];
+        // Back-compat: derive from Country/Locality if new field absent
+        if (!locs.length) {
+          const country = this.get(p, ["Country"]) || "";
+          const locality = this.get(p, ["Locality","City"]) || "";
+          if (country || locality) {
+            locs = [{ countryName: country || "", countryCode: null, cityName: locality || null, region: null }];
+          }
+        }
+        // Normalize location fields
+        locs = locs.map(it => ({
+          countryName: (it.countryName ?? "").toString(),
+          countryCode: it.countryCode ? String(it.countryCode).toUpperCase() : null,
+          cityName: (it.cityName ?? null) ? String(it.cityName) : null,
+          region: (it.region ?? null) ? String(it.region) : null
+        }));
 
-        const raw = this.get(p, ["descriptionHtml","Description","Html"]) || "";
-        this.safeDescription = this.sanitizeDescription(raw);
+        this.meta = {
+          title: title || extId || "(untitled)",
+          company, postingCompany: posting,
+          remoteType: remote, firstSeenUtc:firstSeen, lastSeenUtc:lastSeen,
+          repostCount, url, applyUrl,
+          foundOn, externalId: extId, provider, providerTenant: tenant,
+          locations: locs
+        };
+
+        const rawHtml = this.get(p, ["descriptionHtml","Description","Html"]) || "";
+        this.safeDescription = this.sanitizeDescription(rawHtml);
 
         const appState = this.get(p, ["appState","Application"]) || {};
         this.app = {
@@ -540,7 +557,7 @@
         };
       },
 
-      sanitizeDescription(html) {
+      sanitizeDescription(html){
         if (!html) return "";
         const tmp = document.createElement('div');
         tmp.innerHTML = html;
@@ -549,34 +566,53 @@
         tmp.querySelectorAll('img[src]').forEach(img => {
           const src = (img.getAttribute('src') || '').trim();
           if (!src.startsWith('data:')) {
-            const ph = document.createElement('div');
-            ph.className = 'placeholder-img';
-            ph.textContent = 'External image blocked';
+            const ph = document.createElement('div'); ph.className='placeholder-img'; ph.textContent='External image blocked';
             img.replaceWith(ph);
-          } else {
-            img.loading = 'lazy'; img.decoding = 'async';
-          }
+          } else { img.loading='lazy'; img.decoding='async'; }
         });
         return tmp.innerHTML;
       },
 
-      companyLine() {
+      companyLine(){
         return this.meta.postingCompany
           ? `${this.meta.company}, through ${this.meta.postingCompany}`
-          : this.meta.company || "";
+          : (this.meta.company || "");
       },
-      geoLine() {
+
+      // Group locations by country; render "DE: Berlin · ES: Madrid · GB"
+      geoLine(){
+        const locs = this.meta.locations || [];
         const parts = [];
-        if (this.meta.country) parts.push(this.meta.country);
-        if (this.meta.locality) parts.push(`(${this.meta.locality})`);
-        if (this.meta.remoteType) parts.push(this.meta.remoteType);
-        return parts.join(', ');
+        if (locs.length) {
+          const groups = new Map(); // label -> [cities]
+          for (const it of locs) {
+            const label = (it.countryCode || it.countryName || "").toString().trim();
+            if (!label) continue;
+            if (!groups.has(label)) groups.set(label, []);
+            if (it.cityName) groups.get(label).push(it.cityName);
+          }
+          for (const [label, cities] of groups.entries()) {
+            parts.push(cities.length ? `${label}: ${cities.join(', ')}` : label);
+          }
+        }
+        const geo = parts.join(' · ');
+        // Append remote type if set
+        if (this.meta.remoteType) return geo ? `${geo}, ${this.meta.remoteType}` : this.meta.remoteType;
+        return geo;
       },
-      seenPrefix() { return (this.meta.repostCount || 0) === 0 ? 'First seen' : 'Last seen'; },
-      relativeSeen() { return this.relativeFromLocal((this.meta.repostCount||0)===0 ? this.meta.firstSeenUtc : this.meta.lastSeenUtc); },
 
+      providerLine(){
+        const p = (this.meta.provider || "").toLowerCase();
+        if (!p || p === "corporate-site") return "";
+        return this.meta.providerTenant
+          ? `ATS: ${this.meta.provider}/${this.meta.providerTenant}`
+          : `ATS: ${this.meta.provider}`;
+      },
 
-      // Time related
+      seenPrefix(){ return (this.meta.repostCount||0) === 0 ? 'First seen' : 'Last seen'; },
+      relativeSeen(){ return this.relativeFromLocal((this.meta.repostCount||0)===0 ? this.meta.firstSeenUtc : this.meta.lastSeenUtc); },
+
+      // Time helpers
       formatLocalHM(iso){
         if (!iso) return '';
         const d = new Date(iso);
@@ -585,56 +621,47 @@
         return `${hh}:${mm}`;
       },
       localTzAbbr(iso){
-        try {
+        try{
           const d = new Date(iso);
-          const parts = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short', hour: '2-digit' }).formatToParts(d);
+          const parts = new Intl.DateTimeFormat(undefined, { timeZoneName:'short', hour:'2-digit' }).formatToParts(d);
           return parts.find(p => p.type === 'timeZoneName')?.value || '';
-        } catch { return ''; }
+        }catch{ return ''; }
       },
-
-      // replace any usage of relativeFromUtc with this:
       relativeFromLocal(iso){ return window.__relativeFromLocal?.(iso) ?? ''; },
-
-      /* that one is old, for compatibility */
-      relativeFromUtc(iso){ return window.__relativeFromUtc?.(iso) ?? ''; },
-
+      relativeFromUtc(iso){ return window.__relativeFromUtc?.(iso) ?? ''; }, // legacy
 
       safeStr(v){ return (v === null || v === undefined) ? '∅' : String(v); },
 
-      async loadHistory(limit=10) {
+      async loadHistory(limit=10){
         this.history.error = "";
-        try {
-          const qs = new URLSearchParams({ limit: String(limit) }).toString();
+        try{
+          const qs = new URLSearchParams({ limit:String(limit) }).toString();
           const url = `/ui/jobs/${this.jobId}/history?` + qs;
           const data = await window.fetchWithRetry(url, 4, 900);
           this.history.items = Array.isArray(data.items) ? data.items : [];
           this.history.nextCursor = data.nextCursor || null;
           this.history.loaded = true;
-        } catch (e) {
+        }catch(e){
           this.history.error = "please try again";
           this.history.loaded = false;
         }
       },
-
-      async loadMore(limit=10) {
+      async loadMore(limit=10){
         if (!this.history.nextCursor || this.history.loadingMore) return;
         this.history.loadingMore = true;
-        try {
-          const qs = new URLSearchParams({ limit: String(limit), cursor: this.history.nextCursor }).toString();
+        try{
+          const qs = new URLSearchParams({ limit:String(limit), cursor:this.history.nextCursor }).toString();
           const url = `/ui/jobs/${this.jobId}/history?` + qs;
           const data = await window.fetchWithRetry(url, 3, 900);
           const more = Array.isArray(data.items) ? data.items : [];
           this.history.items = this.history.items.concat(more);
           this.history.nextCursor = data.nextCursor || null;
-        } catch (e) {
-          // keep existing list; expose a soft error on footer if you like
-        } finally {
+        }finally{
           this.history.loadingMore = false;
           this.history.loaded = true;
         }
-      },      
-
-      copy(text) { navigator.clipboard?.writeText(text).catch(()=>{}); }
+      },
+      copy(text){ navigator.clipboard?.writeText(text).catch(()=>{}); }
     }));
   });
 
