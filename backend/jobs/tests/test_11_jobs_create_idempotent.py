@@ -2,7 +2,7 @@ import requests
 import json
 
 def test_jobs_create_idempotent(base_url, system_headers, shared_state, test_job_url):
-    assert "job_id" in shared_state
+    assert "job_id" in shared_state, "Job not created"
     url = f"{base_url}/api/jobs"
     payload = { "url": test_job_url }
     r = requests.post(url, headers=system_headers, json=payload)

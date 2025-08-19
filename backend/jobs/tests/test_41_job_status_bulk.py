@@ -1,6 +1,7 @@
 import requests
 
 def test_post_job_statuses_bulk(base_url, user_headers, shared_state):
+    assert "job_id" in shared_state, "Job not created"
     job_id = shared_state["job_id"]
     url = f"{base_url}/api/jobs/status"
     r = requests.post(url, headers=user_headers, json={"jobIds":[job_id]})
