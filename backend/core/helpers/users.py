@@ -2,15 +2,16 @@ import os, time, logging, requests
 from flask import session
 from .retry import retry_until_ready
 
+base_url = os.getenv("EHESTIFTER_USERS_API_BASE_URL")
+fxkey    = os.getenv("EHESTIFTER_USERS_FUNCTION_KEY")
+
 def create_or_get_user(msal_user: dict):
     b2c_object_id = msal_user.get("sub")
     useremail = msal_user.get("preferred_username")
     username = msal_user.get("name")
     if not (b2c_object_id and useremail and username):
         raise ValueError("Missing identity claims (sub/preferred_username/name)")
-
-    base_url = os.getenv("EHESTIFTER_USERS_API_BASE_URL")
-    fxkey    = os.getenv("EHESTIFTER_USERS_FUNCTION_KEY")
+    
     if not base_url or not fxkey:
         raise ValueError("Users API env is not configured")
 
@@ -54,21 +55,23 @@ def _b2c_headers_from_context(context: dict) -> dict:
         h["x-functions-key"] = fxkey
     return h
 
+class UpstreamHttpError(Exception):
+    def __init__(self, status: int, body: str):
+        super().__init__(f"Upstream status {status}")
+        self.status = status
+        self.body = body
+
 def _do_get_link_code(url: str, headers: dict) -> dict:
     r = requests.get(url, headers=headers, timeout=5)
     if r.status_code == 200:
         return r.json()
     if r.status_code in (500, 502, 503, 504):
         raise TimeoutError(f"Upstream unavailable: {r.status_code}")
-    if r.status_code in (401, 403):
-        raise Exception(f"Unauthorized from users/link-code: {r.status_code}")
-    raise Exception(f"Unexpected status from users/link-code: {r.status_code} {r.text}")
+    # Surface other statuses (401/403/404/etc.)
+    raise UpstreamHttpError(r.status_code, r.text)
 
 def get_link_code(context: dict) -> dict:
     url = f"{base_url}/users/link-code"
     headers = _b2c_headers_from_context(context)
-    try:
-        # 4 attempts, ~0.75s, 1.5s, 3s, 6s (+ jitter)
-        return retry_until_ready(lambda: _do_get_link_code(url, headers), attempts=4, base_delay=0.75)
-    except requests.Timeout as te:
-        raise TimeoutError("users/link-code timeout") from te
+    return retry_until_ready(lambda: _do_get_link_code(url, headers), attempts=4, base_delay=0.75)
+

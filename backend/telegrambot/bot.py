@@ -7,7 +7,8 @@ from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     ContextTypes, filters
 )
-from ehestifter_api import EhestifterApi, ApiJob, ApiStatus
+from telegram.error import TelegramError
+from ehestifter_api import EhestifterApi, ApiJob
 
 load_dotenv()  # loads TELEGRAM_BOT_TOKEN from .env
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -17,6 +18,15 @@ api = EhestifterApi()  # configure base URLs & keys inside file/env
 # Utilities -----
 
 FINAL_STATUSES = {"offer_accepted", "rejected_unfortunately", "rejected_other"}
+
+async def on_error(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # keep it minimal; you can log context.error
+    try:
+        await (update.effective_message.reply_text("Oops, something went wrong. Try again.")  # type: ignore
+               if update and update.effective_message else asyncio.sleep(0))
+    except TelegramError:
+        pass  # avoid cascaded errors
+
 
 def parse_args(text: str) -> List[str]:
     # naive splitter; good enough for our simple commands
@@ -162,6 +172,7 @@ def main() -> None:
     # Optional: reply to any plain text with a hint
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,
                                    lambda u, c: u.message.reply_text("Try /applied, /status, or /myjobs.")))
+    app.add_error_handler(on_error)
     app.run_polling()
 
 if __name__ == "__main__":
