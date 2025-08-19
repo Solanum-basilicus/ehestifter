@@ -76,7 +76,7 @@
       try {
         const data = await window.fetchWithRetry('/ui/users/me', 4);
         if (data && !data.error) {
-          const username = data.name || data.preferred_username || data.email || data.username || 'me';
+          const username = data.name || data.preferred_username || data.username || data.email || 'me';
           setUser('To profile: ' + username, "{{ url_for('me') }}");
         } else {
           showError((data && data.message) || 'please try again');

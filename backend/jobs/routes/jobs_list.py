@@ -21,15 +21,17 @@ def register(app: func.FunctionApp):
             cur = conn.cursor()
 
             cur.execute("""
-                SELECT Id, Title, HiringCompanyName, RemoteType, FirstSeenAt
+                SELECT Id, Title, ExternalId, FoundOn, HiringCompanyName, RemoteType, FirstSeenAt
                 FROM dbo.JobOfferings
                 WHERE IsDeleted = 0
                 ORDER BY FirstSeenAt DESC
                 OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
             """, (offset, limit))
+            
             rows = cur.fetchall()
             cols = [c[0] for c in cur.description]
             jobs = [dict(zip(cols, r)) for r in rows]
+
             for j in jobs:
                 j["Id"] = normalize_guid(str(j["Id"]))
             ids = [j["Id"] for j in jobs]  # use normalized ids for the subsequent map
