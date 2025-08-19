@@ -477,74 +477,121 @@ const TALENT_AGENCIES = [
 ].map(d => d.toLowerCase());
 
 // -- Core: deduce fields from URL --
+// Returns new-API keys and (for now) legacy aliases.
 export function deduceFromUrl(rawUrl) {
   let url;
   try { url = new URL(rawUrl); } catch { return {}; }
+
   const host = hostnameNoWww(url.hostname);
 
-  // Talent agency?
+  // Talent agency by domain (posting company)
   const agencyHit = TALENT_AGENCIES.find(d => host.endsWith(d));
-  let talentAgency = agencyHit ? agencyHit.split(".")[0] : undefined;
+  const postingCompanyName = agencyHit ? agencyHit.split(".")[0] : undefined;
 
-  // Known registry
+  // Potential referral source (where we *found* the job)
+  const referral = (sourceFromParams(url) || "").toLowerCase();
+
+  // Try known registry first (ATS / boards with custom extractors)
   for (const entry of REGISTRY) {
-    const domains = entry.domains || [];
-    const hit = domains.some(d => {
+    const hit = (entry.domains || []).some(d => {
       if (typeof d === "string") return host === d || host.endsWith("." + d);
-      if (d instanceof RegExp) return d.test(host);
+      if (d instanceof RegExp)   return d.test(host);
       return false;
     });
-    if (hit) {
-      const r = entry.match(url) || {};
+    if (!hit) continue;
 
-      // Prefer referral param as *source* if this entry is an ATS.
-      // (We only override when r.source is an ATS name.)
-      const refSrc = sourceFromParams(url);
-      if (refSrc && r.source && ATS_NAMES.has(String(r.source).toLowerCase())) {
-        r.source = refSrc;
-      }
+    // r may contain legacy fields like: { source, company, externalId, title, tenant, provider, ... }
+    const r = entry.match(url) || {};
 
-      if (!r.talentAgency && talentAgency) r.talentAgency = talentAgency;
+    // Provider: prefer explicit, else legacy source from registry
+    let provider = (r.provider || r.source || "").toLowerCase() || "corporate-site";
 
-      // If company still empty and this wasn't an agency, infer from registrable domain
-      if (!r.company && !agencyHit) {
-        r.company = companyFromHost(host);
-      }
-
-      return r;
+    // FoundOn: if we are on ATS and referral exists -> use referral; else fall back
+    // If it's *not* ATS (i.e., a job board), treat provider as foundOn too.
+    let foundOn;
+    if (ATS_NAMES.has(provider)) {
+      foundOn = referral || "corporate-site";
+    } else {
+      // Boards and others: if no explicit referral, the board itself is where we found it
+      foundOn = referral || provider || "corporate-site";
     }
+
+    // Tenant: prefer explicit tenant, else r.company (tenants often equal company/slug on ATS),
+    // else infer from registrable host label.
+    let providerTenant = (r.providerTenant || r.tenant || "");
+    if (!providerTenant && ATS_NAMES.has(provider)) {
+      providerTenant = (r.company || companyFromHost(host) || "");
+    }
+
+    // Hiring company: prefer explicit; else r.company; else infer from registrable domain
+    // (but don't infer from agency domains)
+    let hiringCompanyName = (r.hiringCompanyName || r.company);
+    if (!hiringCompanyName && !agencyHit) {
+      hiringCompanyName = companyFromHost(host);
+    }
+
+    // External id
+    let externalId = r.externalId;
+    if (!externalId) {
+      // fallback: last segment or a stable hash of the URL (w/o query)
+      const seg = lastPathSegment(url.pathname);
+      externalId = seg || fnv1a32Hex(stripQuery(url.href));
+    }
+
+    // If we recognized agency from host and the extractor didn't set a talent agency, keep it
+    const postingName = r.postingCompanyName || r.talentAgency || postingCompanyName;
+
+    // Return new API keys + temporary legacy aliases
+    return {
+      foundOn,
+      provider,
+      providerTenant,
+      externalId,
+      hiringCompanyName,
+      postingCompanyName: postingName || undefined,
+
+      // legacy aliases (keep for now; safe to remove later)
+      source: foundOn,
+      company: hiringCompanyName,
+      talentAgency: postingName || undefined,
+
+      // passthrough if the registry gave us one (UI might use it)
+      title: r.title
+    };
   }
 
-  // Fallback heuristic (your generalistic approach)
-  const params = new URLSearchParams(url.search || "");
-
-  // --- SOURCE ---
-  // If an explicit src/source is present, honor it (e.g., ?src=linkedin).
-  // Otherwise, for unknown boards/ATS, we default to "Corporate Site".
-  let source = (params.get("src") || params.get("source") || "").toLowerCase().trim();
-  if (!source) {
-    source = "Corporate Site";
+  // -------- No registry match: generic fallback ----------
+  const STOP_WORDS = new Set(["job","jobs","position","positions","career","careers"]);
+  const afterJob = firstAfter(url.pathname, "job");
+  let externalId;
+  if (afterJob) {
+    externalId = afterJob;
+  } else {
+    const last = lastPathSegment(url.pathname);
+    externalId = (last && !STOP_WORDS.has(last.toLowerCase())) ? last : fnv1a32Hex(stripQuery(url.href));
   }
 
-  // --- EXTERNAL ID ---
-  let externalId =
-    firstAfter(url.pathname, "job") ||
-    firstAfter(url.pathname, "jobs") ||
-    lastPathSegment(url.pathname);
+  // Provider = corporate site; Tenant unknown; FoundOn prefers referral param
+  const provider = "corporate-site";
+  const providerTenant = "";
+  const foundOn = referral || "corporate-site";
 
-  if (!externalId || isGenericWord(externalId)) {
-    externalId = fnv1a32Hex(stripQuery(url.href)); // final fallback
-  }
+  // Hiring company from host (skip if it’s an agency domain)
+  const hiringCompanyName = agencyHit ? undefined : companyFromHost(host);
+  const postingName = postingCompanyName;
 
-  // --- COMPANY ---
-  let company;
-  // prefer /company/<name> if present
-  const c = firstAfter(url.pathname, "company");
-  if (c) {
-    company = c;
-  } else if (!agencyHit) {
-    company = companyFromHost(host);
-  }
+  return {
+    foundOn,
+    provider,
+    providerTenant,
+    externalId,
+    hiringCompanyName,
+    postingCompanyName: postingName || undefined,
 
-  return { source, externalId, company, talentAgency };
+    // legacy aliases
+    source: foundOn,
+    company: hiringCompanyName,
+    talentAgency: postingName || undefined
+  };
 }
+

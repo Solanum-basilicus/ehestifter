@@ -9,57 +9,51 @@
   .card { border:1px solid #e5e7eb; border-radius:12px; background:#fff; }
   .btn { padding:8px 12px; border:1px solid #e5e7eb; border-radius:8px; cursor:pointer; background:#f9fafb; }
   .btn.primary { background:#eef2ff; border-color:#c7d2fe; }
-  .form-grid { grid-template-columns: 220px 1fr; }
-  label { align-self:center; color:#374151; }
-  .muted { color:#6b7280; }
-  .help-row { grid-column: 2 / span 1; margin-top: -6px; }
-  .chips { display:flex; flex-wrap:wrap; gap:6px; }
-  .chip { font-size: .88rem; padding:2px 8px; border:1px dashed #bbb; border-radius:999px; color:#444; cursor:pointer; }
-  .radio-row { display:flex; gap:16px; align-items:center; }
-  .err { color:#b91c1c; }
-  .hidden { display:none; }
-  .prose img { max-width:100%; height:auto; border-radius:8px; }
-  .placeholder-img { width:100%; height:128px; border-radius:8px; background:#f3f4f6; color:#6b7280;
-    display:flex; align-items:center; justify-content:center; font-size:12px; }
-  /* Quill (no toolbar) */
-  .ql-container { min-height: 180px; border-radius: 8px; }
-  .ql-container.ql-snow { border:1px solid #e5e7eb; }
-  .ql-editor { min-height: 160px; }
-
-  /* Fix: inputs aligned with form container */
   .form-shell { max-width: 900px; margin: 0 auto; background: #fff; padding: 16px; border-radius: 8px; border:1px solid #e5e7eb; }
   .grid { display:grid; grid-template-columns: 220px 1fr; gap: 10px 14px; align-items: center; }
   .grid .label { align-self: center; }
-  input[type="text"], input[type="url"], input[type="datetime-local"], textarea, select {
+  label.required::after { content:" *"; color:#b91c1c; }
+  .muted { color:#6b7280; }
+  .err { color:#b91c1c; }
+  .hidden { display:none; }
+  input[type="text"], input[type="url"], textarea, select {
     width: 100%; box-sizing: border-box; padding: 8px; border:1px solid #d1d5db; border-radius:6px;
   }
-  /* Fix: helper nuggets not overlapping fields */
+  /* helper nuggets position fix */
   .help-nuggets { margin-top: 4px; display:flex; flex-wrap: wrap; gap:6px; }
   .help-nuggets .nugget { font-size: 12px; color:#6b7280; border:1px dashed #cbd5e1; padding:2px 6px; border-radius:9999px; cursor:pointer; }
   /* Buttons top */
   .actions-top { display:flex; gap:8px; margin-bottom:12px; }
+
+  /* Locations editor */
+  .loc-row { display:grid; grid-template-columns: 160px 90px 1fr auto; gap:8px; align-items:center; margin-bottom:8px; }
+  .loc-row input { width:100%; }
+  .loc-actions { display:flex; gap:8px; }
+  .section-subtle { padding:10px; border:1px dashed #e5e7eb; border-radius:8px; background:#fafafa; }
+  details.advanced summary { cursor:pointer; color:#374151; }
 </style>
 {% endblock %}
-
 
 {% block content %}
 <div class="form-shell">
   <div class="actions-top">
-    <button id="btnCreate" class="btn btn-primary">Create</button>
-    <a href="{{ url_for('index') }}" class="btn btn-secondary">Cancel</a>
+    <button id="btnCreate" class="btn primary">Create</button>
+    <a href="{{ url_for('index') }}" class="btn">Cancel</a>
   </div>
 
-  <form id="jobForm" class="grid">
-    <!-- URL first -->
-    <label for="url" class="label">URL</label>
+  <form id="jobForm" class="grid" onsubmit="return false;">
+    <!-- URL first (mandatory) -->
+    <label for="url" class="label required">URL</label>
     <div>
       <input type="url" id="url" name="url" placeholder="https://..." required>
-      <!-- Optional helpers under Source later if you want -->
+      <div class="muted" style="font-size:12px; margin-top:4px;">
+        You can fill only that, leaving everything else empty. It'll work, but wouldn't be pretty.
+      </div>
     </div>
 
-    <!-- RemoteType immediately after URL to trigger blur early -->
+    <!-- RemoteType immediately after URL to force early blur -->
     <label class="label">Remote Type</label>
-    <div>
+    <div class="radio-row">
       <label><input type="radio" name="remoteType" value="Remote"> Remote</label>
       <label><input type="radio" name="remoteType" value="Hybrid"> Hybrid</label>
       <label><input type="radio" name="remoteType" value="On-Site"> On-Site</label>
@@ -70,106 +64,203 @@
     <label for="title" class="label">Title</label>
     <input type="text" id="title" name="title" placeholder="Job title">
 
-    <!-- Company + TalentAgency side-by-side -->
-    <label for="company" class="label">Company</label>
-    <input type="text" id="company" name="company" placeholder="Company name">
+    <!-- Company + Talent Agency -->
+    <label for="hiringCompanyName" class="label">Company</label>
+    <input type="text" id="hiringCompanyName" name="hiringCompanyName" placeholder="Hiring company">
 
-    <label for="talentAgency" class="label">Talent Agency</label>
-    <input type="text" id="talentAgency" name="talentAgency" placeholder="(if applicable)">
+    <label for="postingCompanyName" class="label">Talent Agency</label>
+    <input type="text" id="postingCompanyName" name="postingCompanyName" placeholder="(if applicable)">
 
-    <!-- Country + Locality -->
-    <label for="country" class="label">Country</label>
-    <input type="text" id="country" name="country" placeholder="e.g. Germany">
-
-    <label for="locality" class="label">Locality</label>
-    <input type="text" id="locality" name="locality" placeholder="e.g. Berlin">
-
-    <!-- Source (with click-to-fill helpers) -->
-    <label for="source" class="label">Source</label>
+    <!-- Locations (multi) -->
+    <label class="label">Locations</label>
     <div>
-      <input type="text" id="source" name="source" placeholder="e.g. LinkedIn">
-      <div class="help-nuggets" id="sourceNuggets">
-        <!-- Opinion: give common sources you listed -->
-        <span class="nugget">LinkedIn</span>
-        <span class="nugget">StepStone</span>
-        <span class="nugget">Indeed</span>
-        <span class="nugget">Xing</span>
-        <span class="nugget">arbinow</span>
+      <div id="locations" class="section-subtle"></div>
+      <div class="loc-actions" style="margin-top:8px;">
+        <button type="button" class="btn" id="btnAddLoc">+ Add location</button>
+      </div>
+      <div class="muted" style="font-size:12px; margin-top:4px;">
+        You can add multiple countries and cities. Example: DE: Berlin · ES: Madrid · GB: London
+      </div>
+    </div>
+
+    <!-- FoundOn (was Source) -->
+    <label for="foundOn" class="label">Found on</label>
+    <div>
+      <input type="text" id="foundOn" name="foundOn" placeholder="e.g. linkedin, stepstone">
+      <div class="help-nuggets" id="foundOnNuggets">
+        <span class="nugget">linkedin</span>
+        <span class="nugget">stepstone</span>
+        <span class="nugget">indeed</span>
+        <span class="nugget">xing</span>
+        <span class="nugget">arbeitnow</span>
         <span class="nugget">weworkremotely</span>
         <span class="nugget">dynamitejobs</span>
       </div>
     </div>
 
-    <!-- Posted date -->
-    <label for="postedDate" class="label">Posted Date</label>
-    <input type="datetime-local" id="postedDate" name="postedDate">
+    <!-- Advanced ATS details (optional, auto-filled) -->
+    <label class="label">Advanced</label>
+    <div>
+      <details class="advanced">
+        <summary>ATS & identifiers (optional)</summary>
+        <div class="grid" style="grid-template-columns: 160px 1fr; gap:8px 12px; margin-top:8px;">
+          <label for="provider" class="label">Provider</label>
+          <input type="text" id="provider" name="provider" placeholder="workday / greenhouse / join / corporate-site">
 
-    <!-- ExternalId (kept but auto-filled; user can override) -->
-    <label for="externalId" class="label">External ID</label>
-    <input type="text" id="externalId" name="externalId" placeholder="(auto-filled from URL)">
+          <label for="providerTenant" class="label">Provider tenant</label>
+          <input type="text" id="providerTenant" name="providerTenant" placeholder="tenant or slug (optional)">
+
+          <label for="externalId" class="label">External ID</label>
+          <input type="text" id="externalId" name="externalId" placeholder="auto or custom id">
+        </div>
+      </details>
+      <div class="muted" style="font-size:12px; margin-top:4px;">
+        We’ll try to fill these from the URL. You can override them.
+      </div>
+    </div>
 
     <!-- Description (no preview) -->
     <label for="description" class="label">Description</label>
     <textarea id="description" name="description" rows="10" placeholder="Paste or write a description"></textarea>
   </form>
+
+  <div id="err" class="err hidden" role="alert"></div>
 </div>
 
 <script type="module">
   import { deduceFromUrl } from "{{ url_for('static', filename='js/job-url-helpers.js') }}";
 
   const el = (id) => document.getElementById(id);
+
+  // Inputs
   const urlInput = el('url');
-  const sourceInput = el('source');
+  const foundOnInput = el('foundOn');
   const externalIdInput = el('externalId');
-  const companyInput = el('company');
-  const agencyInput = el('talentAgency');
-  const postedInput = el('postedDate');
+  const companyInput = el('hiringCompanyName');
+  const agencyInput = el('postingCompanyName');
+  const providerInput = el('provider');
+  const tenantInput = el('providerTenant');
+  const titleInput = el('title');
+  const descInput = el('description');
+  const errEl = el('err');
 
-  // 1) Set postedDate default to now (so user can skip for fresh offerings)
-  // Opinion: using local time is friendlier for input UX; backend can normalize to UTC.
-  (function presetPostedNow(){
-    const now = new Date();
-    const pad = (n) => String(n).padStart(2,'0');
-    const isoLocal = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
-    postedInput.value = isoLocal;
-  })();
+  // Locations editor
+  const locHost = el('locations');
+  el('btnAddLoc').addEventListener('click', () => addLocRow());
 
-  // 2) Source nuggets click-to-fill
-  document.getElementById('sourceNuggets')?.addEventListener('click', (e) => {
+  function addLocRow(init = {}) {
+    const row = document.createElement('div');
+    row.className = 'loc-row';
+    row.innerHTML = `
+      <input type="text" placeholder="Country (name)" value="${init.countryName || ''}" data-k="countryName">
+      <input type="text" placeholder="CC" value="${(init.countryCode || '').toUpperCase()}" maxlength="2" data-k="countryCode" style="text-transform:uppercase;">
+      <input type="text" placeholder="City (optional)" value="${init.cityName || ''}" data-k="cityName">
+      <button type="button" class="btn" data-act="del">✕</button>
+    `;
+    row.querySelector('[data-act="del"]').addEventListener('click', () => row.remove());
+    locHost.appendChild(row);
+  }
+  // start with one empty row
+  addLocRow();
+
+  function readLocations() {
+    const rows = [...locHost.querySelectorAll('.loc-row')];
+    const out = [];
+    for (const r of rows) {
+      const cn = r.querySelector('[data-k="countryName"]').value.trim();
+      const cc = r.querySelector('[data-k="countryCode"]').value.trim().toUpperCase();
+      const city = r.querySelector('[data-k="cityName"]').value.trim();
+      if (!cn && !cc && !city) continue; // skip empty row
+      out.push({
+        countryName: cn || '', 
+        countryCode: cc || null,
+        cityName: city || null
+      });
+    }
+    return out;
+  }
+
+  // FoundOn nuggets
+  document.getElementById('foundOnNuggets')?.addEventListener('click', (e) => {
     const t = e.target;
     if (t.classList.contains('nugget')) {
-      sourceInput.value = t.textContent.trim();
-      sourceInput.dispatchEvent(new Event('change'));
+      foundOnInput.value = t.textContent.trim();
+      foundOnInput.dispatchEvent(new Event('change'));
     }
   });
 
-  // 3) On URL blur: compute fields not yet filled by user
+  // On URL blur: compute fields (respect existing input)
   urlInput.addEventListener('blur', () => {
     const raw = urlInput.value.trim();
     if (!raw) return;
-    const deduced = deduceFromUrl(raw);
+    const d = deduceFromUrl(raw) || {};
 
-    // Respect existing user input: only set if empty
-    if (deduced.source && !sourceInput.value.trim()) sourceInput.value = deduced.source;
-    if (deduced.externalId && !externalIdInput.value.trim()) externalIdInput.value = deduced.externalId;
-    if (deduced.company && !companyInput.value.trim()) companyInput.value = deduced.company;
-    if (deduced.talentAgency && !agencyInput.value.trim()) agencyInput.value = deduced.talentAgency;
+    // Support old helper keys if the local file wasn't updated yet
+    const foundOn = d.foundOn || d.source;
+    const extId = d.externalId || d.ExternalId;
+    const company = d.hiringCompanyName || d.company;
+    const provider = d.provider || null;
+    const tenant = d.providerTenant || d.tenant || null;
+    const title = d.title || null;
+
+    if (foundOn && !foundOnInput.value.trim()) foundOnInput.value = foundOn;
+    if (extId && !externalIdInput.value.trim()) externalIdInput.value = extId;
+    if (company && !companyInput.value.trim()) companyInput.value = company;
+    if (provider && !providerInput.value.trim()) providerInput.value = provider;
+    if (tenant && !tenantInput.value.trim()) tenantInput.value = tenant;
+    if (title && !titleInput.value.trim()) titleInput.value = title;
   });
 
-  // 4) When user picks a date from the calendar, set time to 00:00
-  postedInput.addEventListener('change', () => {
-    const v = postedInput.value;
-    if (v && v.length >= 10 && !v.includes('T')) {
-      postedInput.value = v + "T00:00";
-    }
-  });
-
-  // 5) Top buttons
+  // Create
   document.getElementById('btnCreate').addEventListener('click', async (e) => {
     e.preventDefault();
-    const form = document.getElementById('jobForm');
-    // TODO: submit via fetch to your create endpoint
-    form.submit(); // or custom fetch
+    errEl.classList.add('hidden');
+    errEl.textContent = '';
+
+    const url = urlInput.value.trim();
+    if (!url) {
+      errEl.textContent = 'URL is required.';
+      errEl.classList.remove('hidden');
+      urlInput.focus();
+      return;
+    }
+
+    // gather form
+    const body = {
+      url,
+      title: titleInput.value.trim() || undefined,
+      hiringCompanyName: companyInput.value.trim() || undefined,
+      postingCompanyName: agencyInput.value.trim() || undefined,
+      foundOn: foundOnInput.value.trim() || undefined,
+      provider: providerInput.value.trim() || undefined,
+      providerTenant: tenantInput.value.trim() || undefined,
+      externalId: externalIdInput.value.trim() || undefined,
+      remoteType: (document.querySelector('input[name="remoteType"]:checked')?.value) || 'Unknown',
+      description: descInput.value.trim() || undefined,
+      locations: readLocations()
+    };
+
+    // remove empty locations array if all rows empty
+    if (!body.locations.length) delete body.locations;
+
+    try {
+      const resp = await fetch('/ui/jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(body)
+      });
+      if (!resp.ok) {
+        const tx = await resp.text();
+        throw new Error(tx || `HTTP ${resp.status}`);
+      }
+      const data = await resp.json();
+      if (!data.id) throw new Error('Create succeeded but no id returned');
+      window.location.assign(`/jobs/${encodeURIComponent(data.id)}`);
+    } catch (err) {
+      errEl.textContent = `Create failed: ${err.message || err}`;
+      errEl.classList.remove('hidden');
+    }
   });
 </script>
 {% endblock %}

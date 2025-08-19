@@ -29,13 +29,20 @@ def register(app: func.FunctionApp):
             """, (offset, limit))
             
             rows = cur.fetchall()
+            if not rows:
+                # Return empty array early to avoid extra queries
+                return func.HttpResponse("[]", mimetype="application/json")
+
             cols = [c[0] for c in cur.description]
             jobs = [dict(zip(cols, r)) for r in rows]
 
+            # Normalize Ids on the wire (canonical lowercase)
             for j in jobs:
                 j["Id"] = normalize_guid(str(j["Id"]))
-            ids = [j["Id"] for j in jobs]  # use normalized ids for the subsequent map
-            
+
+            ids = [j["Id"] for j in jobs]  # normalized strings
+
+            # Fetch locations
             loc_map = {jid: [] for jid in ids}
             if ids:
                 placeholders = ",".join(["?"] * len(ids))
@@ -45,16 +52,20 @@ def register(app: func.FunctionApp):
                   WHERE JobOfferingId IN ({placeholders})
                   ORDER BY CountryName, CityName
                 """, ids)
+
                 for (jid, cn, cc, city, region) in cur.fetchall():
-                    loc_map[str(jid)].append({
+                    # Normalize FK to match map keys
+                    jid_norm = normalize_guid(str(jid))
+                    loc_map.setdefault(jid_norm, []).append({
                         "countryName": cn,
                         "countryCode": cc,
-                        "cityName": city,
-                        "region": region
+                        "cityName":    city,
+                        "region":      region
                     })
 
+            # Attach locations
             for j in jobs:
-                j["locations"] = loc_map.get(str(j["Id"]), [])
+                j["locations"] = loc_map.get(j["Id"], [])
 
             return func.HttpResponse(json.dumps(jobs, cls=DatetimeEncoder), mimetype="application/json")
 

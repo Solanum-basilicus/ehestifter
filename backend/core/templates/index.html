@@ -18,6 +18,8 @@
   /* A subtle private cue on the whole column (matches private-block theme) */
   thead th.th-status { background: linear-gradient(90deg, rgba(124,58,237,.08), #f7f7f7 36px) }
   tbody td.col-status { background: linear-gradient(90deg, rgba(124,58,237,.05), transparent 12px); }
+  .chip { border:1px solid #ddd; border-radius:999px; padding:2px 8px; font-size:12px; line-height:20px; }
+  .chip.muted { opacity:.75; }
 
 </style>
 {% endblock %}
@@ -160,38 +162,63 @@
       nextBtn.disabled = lastReceived < pageSize;
     }
 
-    function locationFrom(row) {
-      const country = row.Country || '';
-      const loc = row.Locality || '';
-      const remote = row.RemoteType || '';
+    function summarizeLocations(row) {
+      const locs = Array.isArray(row.locations) ? row.locations : [];
+      const remote = row.RemoteType && row.RemoteType !== 'Unknown' ? row.RemoteType : '';
+
+      if (!locs.length) return remote || '';
+
+      // Group by country (prefer ISO code for compactness)
+      const byCountry = new Map(); // key -> Set(cities)
+      for (const l of locs) {
+        const key = (l.countryCode || '').toUpperCase() || (l.countryName || '').trim();
+        const city = (l.cityName || '').trim();
+        if (!key) continue;
+        if (!byCountry.has(key)) byCountry.set(key, new Set());
+        if (city) byCountry.get(key).add(city);
+      }
+
+      // Build "DE: Berlin, Munich; ES: Madrid; GB: London"
       const parts = [];
-      if (country) parts.push(country);
-      if (loc) parts.push(`(${loc})`);
-      if (remote) parts.push(remote);
-      return parts.join(', ');
+      for (const [country, cities] of byCountry) {
+        const cityArr = Array.from(cities);
+        const cityStr = cityArr.slice(0, 2).join(", ") + (cityArr.length > 2 ? ", …" : "");
+        parts.push(cityArr.length ? `${country}: ${cityStr}` : country);
+        if (parts.length >= 4) { parts.push("…"); break; } // keep short
+      }
+      const geo = parts.join("; ");
+      return remote ? `${geo} · ${remote}` : geo;
+    }
+
+    function displayTitle(row) {
+      const t = (row.Title || '').trim();
+      if (t) return t;
+      const xid = (row.ExternalId || '').trim();
+      return xid || '(no title)';
     }
 
     // ---------- Card rendering ----------
     function cardHTML(row) {
-      // Note: list API has FirstSeenAt only; we show "First seen".
-      const title = row.Title || '(no title)';
+      const title = displayTitle(row);
       const company = row.HiringCompanyName || '';
-      const geo = locationFrom(row);
-      const firstSeen = row.FirstSeenAt || row.PostedDate || '';
-
-      // status placeholder id
+      const geo = summarizeLocations(row);
+      const firstSeen = row.FirstSeenAt || '';
       const sid = `ust_${row.Id}`;
+      const via = (row.FoundOn || '').trim();
+
+      const esc = (s) => String(s).replaceAll('"','&quot;');
 
       return `
         <article class="card" style="padding:12px 16px;">
-          <div class="flex-between">
+          <div class="flex-between" style="gap:12px;">
             <div style="min-width:0;">
               <h4 class="truncate-1" style="font-size:18px; margin:0 0 4px 0;">
-                <a class="title-link" href="/jobs/${encodeURIComponent(row.Id)}" title="${title.replaceAll('"','&quot;')}">${title}</a>
+                <a class="title-link" href="/jobs/${encodeURIComponent(row.Id)}" title="${esc(title)}">${title}</a>
               </h4>
-              <div class="flex muted" style="flex-wrap:wrap; font-size:14px;">
-                ${company ? `<span class="truncate-1" style="max-width:36ch;" title="${company.replaceAll('"','&quot;')}">${company}</span>` : ''}
-                ${geo ? `<span class="truncate-1" style="max-width:28ch; margin-left:8px;" title="${geo.replaceAll('"','&quot;')}">${geo}</span>` : ''}
+              <div class="flex muted" style="flex-wrap:wrap; font-size:14px; gap:8px;">
+                ${company ? `<span class="truncate-1" style="max-width:36ch;" title="${esc(company)}">${company}</span>` : ''}
+                ${geo ? `<span class="truncate-1" style="max-width:38ch;" title="${esc(geo)}">${geo}</span>` : ''}
+                ${via ? `<span class="chip muted" title="Found on">${esc(via)}</span>` : ''}
               </div>
             </div>
             <div style="text-align:right;">
@@ -200,7 +227,6 @@
             </div>
           </div>
 
-          <!-- status row under seen info -->
           <div class="flex" style="margin-top:8px; flex-wrap:wrap; gap:10px; align-items:center;">
             <div class="muted" style="font-size:14px;">Your status</div>
             <span class="chip-private">🔒 Only you</span>
