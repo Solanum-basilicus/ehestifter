@@ -1,5 +1,8 @@
 import os, httpx
+from httpx import HTTPError
+import logging
 from dataclasses import dataclass
+from dotenv import load_dotenv
 from typing import Optional, Tuple, List
 
 
@@ -9,6 +12,8 @@ def _require_url(name: str) -> str:
         raise ValueError(f"{name} is missing or does not start with http(s):// (got: {v!r})")
     return v.rstrip("/")
 
+load_dotenv()
+
 API_BASE = _require_url("EHESTIFTER_JOBS_BASE_URL") 
 USERS_BASE = _require_url("EHESTIFTER_USERS_BASE_URL")
 USERS_BOT_KEY  = os.getenv("EHESTIFTER_USERS_BOT_FUNCTION_KEY")
@@ -16,7 +21,7 @@ JOBS_FUNC_KEY = os.getenv("EHESTIFTER_JOBS_BOT_FUNCTION_KEY")
 
 @dataclass
 class ApiJob:
-    id: int
+    id: str
     title: str
     company: str
 
@@ -26,9 +31,30 @@ class ApiListedJob(ApiJob):
     first_seen_at: str
     link: str
 
+class ApiError(Exception):
+    """Raised when backend API returns non-success or network fails."""
+    def __init__(self, endpoint: str, status: Optional[int] = None, body: Optional[str] = None, detail: Optional[str] = None):
+        self.endpoint = endpoint
+        self.status = status
+        self.body = body
+        self.detail = detail
+        msg = f"API error at {endpoint} (status={status})"
+        if detail:
+            msg += f": {detail}"
+        super().__init__(msg)
+
+    def to_dict(self):
+        return {
+            "endpoint": self.endpoint,
+            "status": self.status,
+            "body": (self.body[:500] + "…") if self.body and len(self.body) > 500 else self.body,
+            "detail": self.detail,
+        }
+
 class EhestifterApi:
     def __init__(self):
         self.client = httpx.AsyncClient(timeout=10.0)
+        self._uid_cache: dict[int, str] = {}  # telegram_user_id -> user_id cache
 
     def _user_hdr(self):
         return {"x-functions-key": USERS_BOT_KEY} if USERS_BOT_KEY else {}
@@ -36,58 +62,216 @@ class EhestifterApi:
     def _jobs_hdr(self):
         return {"x-functions-key": JOBS_FUNC_KEY} if JOBS_FUNC_KEY else {}
 
+    def _get_any(self, d, *keys, default=None):
+        """Direct key chain (fast, deterministic), then case-insensitive fallback. Safe on non-dicts."""
+        if not isinstance(d, dict):
+            return default
+        for k in keys:
+            if k in d and d[k] is not None:
+                return d[k]
+        # Case-insensitive fallback
+        lower_map = { (dk.lower() if isinstance(dk, str) else dk): dv for dk, dv in d.items() }
+        for k in keys:
+            v = lower_map.get(k.lower())
+            if v is not None:
+                return v
+        return default
+
+    def _normalize_job_basic(self, item) -> tuple[str | None, str | None, str | None]:
+        """
+        Returns (id, title, company) from a possibly-nested/renamed shape, case-insensitive.
+        If id is missing, returns (None, title, company). Title/company may be None.
+        Supports:
+          - bare fields: id/title/company
+          - alt names: jobId/job_id/Id, jobTitle/name/Title, company/HiringCompanyName/company_name/employer
+          - nested under 'job': { job: { id/title/company, ... }, user_status: ... }
+        """
+        if not isinstance(item, dict):
+            return None, None, None
+        base = item.get("job") if isinstance(item.get("job"), dict) else item
+        # Your current API shape prefers: Id, Title, HiringCompanyName
+        job_id = self._get_any(base, "Id", "id", "jobId", "job_id")
+        title = self._get_any(base, "Title", "title", "jobTitle", "name")
+        company = self._get_any(base, "HiringCompanyName", "Company", "company",
+                                "company_name", "employer", "employerName")
+        return job_id, title, company
+
+    def _normalize_user_fields(self, item: dict) -> tuple[str, str]:
+        """Extract user-specific fields with fallbacks."""
+        user_status = self._get_any(item, "user_status", "status", "userStatus", default="?")
+        first_seen = self._get_any(item, "first_seen_at", "FirstSeenAt", "firstSeenAt",
+                                   "applied_at", "appliedAt", default="")
+        return user_status, first_seen
+
+    async def _safe_get(self, url: str, headers: dict, params: dict | None = None):
+        try:
+            r = await self.client.get(url, headers=headers, params=params)
+        except HTTPError as e:
+            raise ApiError(url, detail=str(e)) from e
+        if r.status_code >= 400:
+            raise ApiError(url, status=r.status_code, body=r.text)
+        return r
+
+    async def _safe_post(self, url: str, headers: dict, json: dict):
+        try:
+            r = await self.client.post(url, headers=headers, json=json)
+        except HTTPError as e:
+            raise ApiError(url, detail=str(e)) from e
+        if r.status_code >= 400:
+            raise ApiError(url, status=r.status_code, body=r.text)
+        return r
+
+    async def _safe_put(self, url: str, headers: dict, json: dict):
+        try:
+            r = await self.client.put(url, headers=headers, json=json)
+        except HTTPError as e:
+            raise ApiError(url, detail=str(e)) from e
+        if r.status_code >= 400:
+            raise ApiError(url, status=r.status_code, body=r.text)
+        return r
+
+    async def _resolve_user_id(self, telegram_user_id: int) -> str:
+        """Resolve and cache internal user_id from telegram_user_id via Users API."""
+        if telegram_user_id in self._uid_cache:
+            return self._uid_cache[telegram_user_id]
+        url = f"{USERS_BASE}/users/by-telegram/{telegram_user_id}"
+        r = await self._safe_get(url, headers=self._user_hdr())
+        # Expecting JSON like {"userId": "<guid or int>"}
+        try:
+            data = r.json()
+            user_id = data.get("userId") or data.get("id") or data.get("Id")
+        except Exception:
+            user_id = None
+        if not user_id:
+            # Treat as deviation: endpoint should return an id on 200
+            raise ApiError(url, status=500, body="Users API did not return userId")
+        self._uid_cache[telegram_user_id] = str(user_id)
+        return str(user_id)
+
     async def is_linked(self, telegram_user_id: int) -> bool:
-        r = await self.client.get(f"{USERS_BASE}/users/by-telegram/{telegram_user_id}", headers=self._user_hdr())
-        return r.status_code == 200
+        url = f"{USERS_BASE}/users/by-telegram/{telegram_user_id}"
+        try:
+            r = await self.client.get(url, headers=self._user_hdr())
+        except HTTPError as e:
+            raise ApiError(url, detail=str(e)) from e
+        if r.status_code == 200:
+            return True
+        if r.status_code == 404:
+            return False  # not linked is a normal state
+        # everything else is a deviation
+        raise ApiError(url, status=r.status_code, body=r.text)
 
     async def link_telegram(self, code: str, telegram_user_id: int) -> tuple[bool, str]:
-        r = await self.client.post(f"{USERS_BASE}/users/link-telegram",
-                                   headers=self._user_hdr(),
-                                   json={"code": code, "telegram_user_id": telegram_user_id})
-        if r.status_code == 200:
-            return True, "ok"
-        return False, r.text
+        url = f"{USERS_BASE}/users/link-telegram"
+        r = await self._safe_post(url, headers=self._user_hdr(),
+                                  json={"code": code, "telegram_user_id": telegram_user_id})
+        # If we got here, it's 2xx
+        return True, "ok"
 
     async def mark_applied_by_url(self, telegram_user_id: int, url: str):
-        r = await self.client.post(f"{API_BASE}/user-statuses/applied-by-url",
-                                   headers=self._jobs_hdr(),
-                                   json={"telegram_user_id": telegram_user_id, "url": url})
-        if r.status_code != 200:
-            return None, None
+        ep = f"{API_BASE}/user-statuses/applied-by-url"
+        r = await self._safe_post(ep, headers=self._jobs_hdr(),
+                                  json={"telegram_user_id": telegram_user_id, "url": url})
         data = r.json()
         job = ApiJob(id=data["jobId"], title=data["title"], company=data["company"])
         return job, data["link"]
 
     async def search_jobs_for_user(self, telegram_user_id: int, q: str, limit: int):
-        r = await self.client.get(f"{API_BASE}/jobs",
-                                  headers=self._jobs_hdr(),
-                                  params={"q": q, "user_id": telegram_user_id, "limit": limit})
-        r.raise_for_status()
-        items = r.json().get("items", r.json())
-        return [ApiJob(id=i["id"], title=i["title"], company=i["company"]) for i in items]
+        ep = f"{API_BASE}/jobs"
+        r = await self._safe_get(
+            ep,
+            headers=self._jobs_hdr(),
+            params={"q": q, "user_id": telegram_user_id, "limit": limit},
+        )
+        payload = r.json()
+        items = payload if isinstance(payload, list) else payload.get("items", payload)
+        if not isinstance(items, list):
+            items = []
+        result: list[ApiJob] = []
+        for raw in items:
+            if not isinstance(raw, dict):
+                continue
+            job_id, title, company = self._normalize_job_basic(raw)
+            if job_id is None:
+                # Skip malformed entries quietly
+                continue
+            result.append(ApiJob(
+                id=job_id,
+                title=title or "?",
+                company=company or "?"
+            ))
+        return result
 
-    async def update_user_status(self, telegram_user_id: int, job_id: int, new_status: str):
-        r = await self.client.post(f"{API_BASE}/user-statuses",
-                                   headers=self._jobs_hdr(),
-                                   json={"telegram_user_id": telegram_user_id, "job_id": job_id, "status": new_status})
-        if r.status_code == 200:
-            return True, r.json().get("link")
-        return False, None
+    async def update_user_status(self, telegram_user_id: int, job_id: str, new_status: str):
+        """Use existing Jobs endpoint that expects internal user_id."""
+        user_id = await self._resolve_user_id(telegram_user_id)
+        ep = f"{API_BASE}/jobs/{job_id}/status"
+        # Jobs API expects the user id in header X-User-Id (not the body).
+        hdrs = self._jobs_hdr().copy()
+        hdrs["X-User-Id"] = str(user_id)
+        r = await self._safe_put(ep, headers=hdrs, json={"status": new_status})
+        # Optional: backend may return {link: "..."}; tolerate absence
+        try:
+            return r.json().get("link")
+        except Exception:
+            return None
 
     async def list_user_active_jobs(self, telegram_user_id: int, q: str | None, limit: int, offset: int):
-        r = await self.client.get(f"{API_BASE}/jobs",
-                                  headers=self._jobs_hdr(),
-                                  params={"user_id": telegram_user_id, "exclude_final": True,
-                                          "q": q or "", "limit": limit, "offset": offset, "sort": "-first_seen_at"})
-        r.raise_for_status()
+        ep = f"{API_BASE}/jobs"
+        r = await self._safe_get(
+            ep,
+            headers=self._jobs_hdr(),
+            params={
+                "user_id": telegram_user_id,
+                "exclude_final": True,
+                "q": q or "",
+                "limit": limit,
+                "offset": offset,
+                "sort": "-first_seen_at",
+            },
+        )
+        # TEMP DEBUG: dump raw body when enabled
+        if os.getenv("DEBUG_DUMP_MYJOBS") == "1":
+            try:
+                logging.warning("[DEBUG /myjobs] url=%s status=%s body=%s",
+                                ep, r.status_code, (r.text[:2000] + ("…[trunc]" if len(r.text) > 2000 else "")))
+            except Exception:
+                pass
+
         payload = r.json()
-        items = payload.get("items", payload)
-        next_offset = offset + limit if len(items) == limit else None
-        def link_of(i): return f"https://ehestifter.azurewebsites.net/jobs/{i['id']}"
-        mapped = [ApiListedJob(
-            id=i["id"], title=i["title"], company=i["company"],
-            user_status=i.get("user_status","?"),
-            first_seen_at=i.get("first_seen_at",""),
-            link=link_of(i)
-        ) for i in items]
+        items = payload if isinstance(payload, list) else payload.get("items", payload)
+        if not isinstance(items, list):
+            items = []
+        raw_count = len(items)
+        next_offset = offset + limit if raw_count == limit else None
+
+        mapped: list[ApiListedJob] = []
+        for raw in items:
+            if not isinstance(raw, dict):
+                continue
+            job_id, title, company = self._normalize_job_basic(raw)
+            if job_id is None:
+                # Skip entries without an id to avoid KeyError
+                continue
+            user_status, first_seen = self._normalize_user_fields(raw)
+            link = f"https://ehestifter.azurewebsites.net/jobs/{job_id}"
+            mapped.append(ApiListedJob(
+                id=job_id,
+                title=title or "?",
+                company=company or "?",
+                user_status=user_status or "?",
+                first_seen_at=first_seen or "",
+                link=link
+            ))
+        # TEMP DEBUG: if everything was dropped, log shape of first item
+        if raw_count and not mapped:
+            sample = items[0]
+            try:
+                sample_shape = list(sample.keys()) if isinstance(sample, dict) else type(sample).__name__
+            except Exception:
+                sample_shape = "<uninspectable>"
+            logging.warning("[DEBUG /myjobs] raw_count=%d mapped_count=%d sample_shape=%s sample=%s",
+                            raw_count, 0, sample_shape,
+                            (str(sample)[:800] + ("…[trunc]" if len(str(sample)) > 800 else "")))
+
         return mapped, next_offset
