@@ -8,43 +8,49 @@ on:
       - 'backend/telegrambot/**'
   workflow_dispatch:
 
-permissions:
-  contents: read
-  id-token: write
-
-env:
-  AZURE_WEBAPP_NAME: ehestifter-telegram-bot
-  AZURE_RESOURCE_GROUP: eperi
-  WORKDIR: backend/telegrambot
-
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
-    environment: For-deploying-to-Azure
-    defaults:
-      run:
-        working-directory: ${{ env.WORKDIR }}
+    permissions:
+      contents: read #This is required for actions/checkout
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python version
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install deps
+      - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m venv venv
+          source venv/bin/activate
+          pip install -r backend/telegrambot/requirements.txt
 
-      # Optional: run unit tests here
+      - name: Upload artifact for deployment jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: telegrambot-web-app
+          path: |
+            backend/telegrambot
+            !**/venv/
 
-      - name: Oryx build artifact
-        run: |
-          mkdir -p ../artifact
-          cp -r . ../artifact
+  deploy:
+    runs-on: ubuntu-latest
+    environment: For-deploying-to-Azure
+    needs: build
+    permissions:
+      id-token: write #This is required for requesting the JWT
+      contents: read #This is required for actions/checkout
 
+    steps:
+      - name: Download artifact from build job
+        uses: actions/download-artifact@v4
+        with:
+          name: telegrambot-web-app
+          path: .
+      
       - name: Login to Azure
         uses: azure/login@v2
         with:
@@ -52,12 +58,11 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Deploy to App Service
+      - name: 'Deploy to Azure Web App'
         uses: azure/webapps-deploy@v3
+        id: deploy-to-webapp
         with:
-          app-name: ${{ env.AZURE_WEBAPP_NAME }}
-          package: backend/artifact
-          scm-do-build-during-deployment: true
-          remote-build: true
-          enable-oryx-build: true
-
+          app-name: 'ehestifter-telegram-bot'
+          slot-name: 'Production'
+          package: .
+          
