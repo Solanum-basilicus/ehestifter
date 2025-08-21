@@ -57,3 +57,7 @@ jobs:
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
           package: backend/artifact
+          scm-do-build-during-deployment: true
+          remote-build: true
+          enable-oryx-build: true
+
