@@ -8,10 +8,12 @@ from .job_status_put import register as _reg_status_put
 from .job_status_bulk import register as _reg_status_bulk
 from .job_history_post import register as _reg_history_post
 from .job_history_get import register as _reg_history_get
+from .job_list_with_statuses import register as _reg_list_with_statuses
 
 def register_all(app):
     _reg_create(app)
     _reg_list(app)
+    _reg_list_with_statuses(app)
     _reg_get(app)
     _reg_update(app)
     _reg_delete(app)
