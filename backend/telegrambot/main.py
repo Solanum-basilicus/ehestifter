@@ -17,7 +17,7 @@ async def health():
 @app.post(f"/telegram/{WEBHOOK_SECRET}")
 async def telegram_webhook(request: Request):
     data = await request.json()
-    if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != os.environ["SECRET_TOKEN"]:
+    if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != SECRET_TOKEN:
         return Response(status_code=403)
     update = Update.de_json(data, tg.bot)
     await tg.process_update(update)
