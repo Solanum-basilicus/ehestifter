@@ -12,14 +12,6 @@ from domain_constants import FINAL_STATUSES
 # Treat these as "final" (archived) statuses - exclude them from results.
 # Adjust as you standardize your taxonomy.
 
-
-FINAL_STATUSES = {
-    "Rejected with Filled",
-    "Rejected with Unfortunately",
-    "Accepted Offer",
-    "Turned down Offer",
-}
-
 def _parse_paging(req: func.HttpRequest) -> Tuple[int, int] | func.HttpResponse:
     try:
         limit = int(req.params.get("limit", 10))
@@ -110,11 +102,12 @@ def register(app: func.FunctionApp):
             params: List = [user_id]
 
             # Exclude final statuses if any are defined
-            if FINAL_STATUSES:
-                placeholders = ",".join(["?"] * len(FINAL_STATUSES))
-                where_parts.append(f"ujs.Status NOT IN ({placeholders})")
-                # tuple -> list to extend cleanly
-                params.extend(list(FINAL_STATUSES))
+            #DEBUG
+            #if FINAL_STATUSES:
+                #placeholders = ",".join(["?"] * len(FINAL_STATUSES))
+                #where_parts.append(f"ujs.Status NOT IN ({placeholders})")
+                ## tuple -> list to extend cleanly
+                #params.extend(list(FINAL_STATUSES))
 
             if search_clause:
                 where_parts.append(search_clause)
