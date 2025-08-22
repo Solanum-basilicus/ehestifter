@@ -1,6 +1,6 @@
 import requests
 
-def test_jobs_with_statuses_list(base_url, user_headers, shared_state):
+def test_jobs_with_statuses_list(base_url, user_headers, shared_state, test_user_id):
     assert "job_id" in shared_state, "Job not created"
     job_id = shared_state["job_id"]
 

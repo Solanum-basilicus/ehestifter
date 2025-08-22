@@ -33,7 +33,8 @@ def shared_state():
 
 @pytest.fixture(scope="session")
 def system_headers(auth_headers):
-    h = copy.deepcopy(auth_headers)
+    #h = copy.deepcopy(auth_headers)
+    h = RedactedDict(auth_headers)
     h.update({"X-Actor-Type": "system"})
     return h
 

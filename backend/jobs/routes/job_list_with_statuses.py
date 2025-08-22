@@ -99,7 +99,6 @@ def register(app: func.FunctionApp):
             #  - (optional) match the search
             # We also fetch the user's status to include it in the payload.
             final_placeholders = ",".join(["?"] * len(FINAL_STATUSES)) if FINAL_STATUSES else None
-            status_filter = f"AND ujs.Status NOT IN ({final_placeholders})" if FINAL_STATUSES else ""
 
             where_parts: List[str] = [
                 "jo.IsDeleted = 0",
@@ -107,8 +106,11 @@ def register(app: func.FunctionApp):
             ]
             params: List = [user_id]
 
-            if status_filter:
+            # Exclude statuses. Add NOT IN (...) for final statuses
+            if FINAL_STATUSES:
+                where_parts.append(f"ujs.Status NOT IN ({final_placeholders})")
                 params.extend(list(FINAL_STATUSES))
+            # Query
             if search_clause:
                 where_parts.append(search_clause)
                 params.extend(search_params)
