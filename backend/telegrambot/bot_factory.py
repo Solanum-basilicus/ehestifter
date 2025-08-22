@@ -13,19 +13,23 @@ from routes.status import register as register_status
 from routes.myjobs import register as register_myjobs
 from routes.errors import on_error
 
-def build_app() -> Application:
-    TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-    if not TELEGRAM_BOT_TOKEN:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN is not set. Add it as an App Setting in Azure.")    
-
+def _setup_logging():
+    level = getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO)
     logging.basicConfig(
-        level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[logging.StreamHandler(sys.stderr)],
+        level=level,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
+        force=True,  # <-- override any prior config
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("telegram.request").setLevel(logging.WARNING)
     logging.getLogger("telegram.ext._application").setLevel(logging.WARNING)
+
+def build_app() -> Application:
+    _setup_logging()
+    TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+    if not TELEGRAM_BOT_TOKEN:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN is not set. Add it as an App Setting in Azure.")    
 
     # One shared API instance
     set_api(EhestifterApi())
