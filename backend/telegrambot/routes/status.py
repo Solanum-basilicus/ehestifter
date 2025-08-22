@@ -25,8 +25,52 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     api = get_api()
     txt = update.message.text or ""
     _, _, tail = txt.partition(" ")
-    new_status, query = parse_status_and_query(tail)
-    if not new_status:
+
+    # Try to parse known status first
+    new_status, query_or_tail = parse_status_and_query(tail, STATUS_OPTIONS)
+
+    if new_status:
+        # Normal path (unchanged): search using remaining query
+        query = query_or_tail
+        try:
+            matches = await api.search_jobs_for_user(telegram_user_id=update.effective_user.id, q=query, limit=10)
+        except Exception as e:
+            err_id = new_error_id()
+            log_exception("status:search_jobs_for_user", err_id, tg_user_id=update.effective_user.id, query=query)
+            msg = friendly_api_message(getattr(e, "api_error", e)) or f"Search failed ❌\nError ID: {err_id}"
+            await update.message.reply_text(msg)
+            return
+
+        if not matches:
+            await update.message.reply_text("No matching jobs found.")
+            return
+
+        if len(matches) == 1:
+            job = matches[0]
+            try:
+                link = await api.update_user_status(
+                    telegram_user_id=update.effective_user.id,
+                    job_id=job.id,
+                    new_status=new_status
+                )
+                await update.message.reply_text(f"Updated to {new_status} ✅\n{job.company} — {job.title}\n{link}")
+            except Exception as e:
+                err_id = new_error_id()
+                log_exception("status:update_user_status(single)", err_id,
+                              tg_user_id=update.effective_user.id, job_id=job.id, new_status=new_status)
+                msg = friendly_api_message(getattr(e, "api_error", e)) or f"Update failed ❌\nError ID: {err_id}"
+                await update.message.reply_text(msg)
+            return
+
+        status_idx = STATUS_OPTIONS.index(new_status)
+        kb = [[InlineKeyboardButton(f"{j.company} — {j.title}", callback_data=f"pick|{status_idx}|{j.id}")]
+              for j in matches]
+        await update.message.reply_text("Multiple matches, pick one:", reply_markup=InlineKeyboardMarkup(kb))
+        return
+
+    # Robust path: status didn't match → build fallback query and continue
+    query = fallback_query_when_status_missing(query_or_tail)
+    if not query:
         await update.message.reply_text(
             "Usage: /status <status> <search terms>\n"
             "Examples:\n"
@@ -35,11 +79,12 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "Available statuses:\n- " + "\n- ".join(STATUS_OPTIONS)
         )
         return
+
     try:
         matches = await api.search_jobs_for_user(telegram_user_id=update.effective_user.id, q=query, limit=10)
     except Exception as e:
         err_id = new_error_id()
-        log_exception("status:search_jobs_for_user", err_id, tg_user_id=update.effective_user.id, query=query)
+        log_exception("status:search_jobs_for_user(fallback)", err_id, tg_user_id=update.effective_user.id, query=query)
         msg = friendly_api_message(getattr(e, "api_error", e)) or f"Search failed ❌\nError ID: {err_id}"
         await update.message.reply_text(msg)
         return
@@ -50,21 +95,17 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if len(matches) == 1:
         job = matches[0]
-        try:
-            link = await api.update_user_status(telegram_user_id=update.effective_user.id, job_id=job.id, new_status=new_status)
-            await update.message.reply_text(f"Updated to {new_status} ✅\n{job.company} — {job.title}\n{link}")
-        except Exception as e:
-            err_id = new_error_id()
-            log_exception("status:update_user_status(single)", err_id, tg_user_id=update.effective_user.id, job_id=job.id, new_status=new_status)
-            msg = friendly_api_message(getattr(e, "api_error", e)) or f"Update failed ❌\nError ID: {err_id}"
-            await update.message.reply_text(msg)
+        await update.message.reply_text(
+            f"{job.company} — {job.title}\nAnd to what status?",
+            reply_markup=_status_keyboard(job.id)
+        )
         return
 
-    status_idx = STATUS_OPTIONS.index(new_status)
-    kb = [[InlineKeyboardButton(f"{j.company} — {j.title}", callback_data=f"pick|{status_idx}|{j.id}")]
-          for j in matches]
-    await update.message.reply_text("Multiple matches, pick one:", reply_markup=InlineKeyboardMarkup(kb))
-
+    await update.message.reply_text(
+        "Multiple matches, pick one:",
+        reply_markup=_jobs_keyboard_for_next_status(matches)
+    )
+    
 async def pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # “status known” flow: pick|<statusIdx>|<jobId>
     api = get_api()
