@@ -24,10 +24,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 "Hi! Your account is not linked yet.\n"
                 "Open [Ehestifter → /me]({APP_ROOT}/me), copy your link code, then send: /link YOURCODE"
             )
-    except Exception as e:
+    except ApiError as e:
         err_id = new_error_id()
-        log_exception("start:is_linked", err_id, tg_user_id=update.effective_user.id)
+        # include API context in logs when available
+        ctx = e.to_dict() if hasattr(e, "to_dict") else {"status": getattr(e, "status", None), "endpoint": getattr(e, "endpoint", None)}
+        log_exception("start:is_linked", err_id, tg_user_id=getattr(update.effective_user, "id", None), api=ctx)
+        msg = friendly_api_message(e) or f"Couldn't reach user service ❌\nError ID: {err_id}"
+        await update.effective_chat.send_message(msg)
+    except Exception:
+        err_id = new_error_id()
+        log_exception("start:is_linked", err_id, tg_user_id=getattr(update.effective_user, "id", None))
         await update.effective_chat.send_message(f"Oops, something went wrong. Error ID: {err_id}")
+
 
 async def link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     api = get_api()
@@ -39,9 +47,15 @@ async def link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         await api.link_telegram(code, update.effective_user.id)
         await update.message.reply_text("Linked ✅")
+    except ApiError as e:
+        err_id = new_error_id()
+        ctx = e.to_dict() if hasattr(e, "to_dict") else {"status": getattr(e, "status", None), "endpoint": getattr(e, "endpoint", None)}
+        log_exception("link", err_id, tg_user_id=update.effective_user.id, code=code, api=ctx)
+        msg = friendly_api_message(e) or f"Link failed ❌\nError ID: {err_id}"
+        await update.message.reply_text(msg)
     except Exception:
         err_id = new_error_id()
-        log_exception("link", err_id, tg_user_id=update.effective_user.id)
+        log_exception("link", err_id, tg_user_id=update.effective_user.id, code=code)
         await update.message.reply_text(f"Link failed ❌\nError ID: {err_id}")
 
 async def help_hint(update: Update, context: ContextTypes.DEFAULT_TYPE):

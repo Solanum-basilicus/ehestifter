@@ -216,6 +216,33 @@ class EhestifterApi:
         except Exception:
             return None
 
+    async def unlink_telegram(
+        self,
+        telegram_user_id: int,
+        b2c_object_id: str | None = None,
+    ) -> tuple[bool, str]:
+        """
+        POST {USERS_BASE}/users/unlink-telegram
+        Returns (True, "ok") on any 2xx; raises ApiError otherwise (via _safe_post).
+
+        Notes:
+        - If your API requires a bot key (Azure Function uses require_bot_key),
+        this will use self._bot_hdr() when available; otherwise it falls back
+        to self._user_hdr() to match link_telegram's style.
+        """
+        url = f"{USERS_BASE}/users/unlink-telegram"
+        payload = {"telegram_user_id": telegram_user_id}
+        if b2c_object_id:
+            payload["b2c_object_id"] = b2c_object_id
+
+        # Prefer bot headers if your client exposes them; else mirror link_telegram
+        hdr_fn = getattr(self, "_bot_hdr", None) or getattr(self, "_user_hdr", None)
+        headers = hdr_fn() if hdr_fn else None
+
+        # _safe_post should raise ApiError on non-2xx, matching link_telegram behavior
+        await self._safe_post(url, headers=headers, json=payload)
+        return True, "ok"
+
     async def list_user_active_jobs(self, telegram_user_id: int, q: str | None, limit: int, offset: int):
         ep = f"{API_BASE}/jobs"
         r = await self._safe_get(

@@ -12,6 +12,7 @@ from routes.applied import register as register_applied
 from routes.status import register as register_status
 from routes.myjobs import register as register_myjobs
 from routes.errors import on_error
+from routes.unlink import register as register_unlink
 
 def _setup_logging():
     level = getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO)
@@ -41,6 +42,7 @@ def build_app() -> Application:
     register_applied(app)
     register_status(app)
     register_myjobs(app)
+    register_unlink(app)
 
     # Global error handler
     app.add_error_handler(on_error)

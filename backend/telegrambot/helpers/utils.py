@@ -27,4 +27,7 @@ def friendly_api_message(e: ApiError) -> str | None:
             return ("I couldn't verify your account for this action.\n"
                     "Use /start to check your link, or /link <code> to reconnect.")
         return "Unauthorized by jobs API. Please try again later."
+    # NEW: generic service warm-up for your backends
+    if e.status == 500 and any(svc in str(getattr(e, "endpoint", "")) for svc in ("ehestifter-users", "ehestifter-jobs")):
+        return "Our backend is waking up. Please try again in ~30–60 seconds."
     return None
