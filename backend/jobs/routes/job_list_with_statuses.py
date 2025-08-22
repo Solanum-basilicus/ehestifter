@@ -7,6 +7,7 @@ import azure.functions as func
 from db import get_connection
 from history import DatetimeEncoder
 from ids import normalize_guid, is_guid
+from domain_constants import FINAL_STATUSES
 
 # Treat these as "final" (archived) statuses - exclude them from results.
 # Adjust as you standardize your taxonomy.
@@ -36,23 +37,31 @@ def _parse_paging(req: func.HttpRequest) -> Tuple[int, int] | func.HttpResponse:
 
 def _build_search_clause(q: str) -> Tuple[str, List[str]]:
     """
-    Build a WHERE snippet and params to match all terms in q
-    against Title, ExternalId, HiringCompanyName or PostingCompanyName.
+    Build a WHERE snippet + params to match ALL terms in q
+    against Title, ExternalId, HiringCompanyName, PostingCompanyName.
+    Handle NULLs via COALESCE.
     """
+    q = (q or "").strip()
     if not q:
         return "", []
 
-    # Split on whitespace; ignore empty terms
-    terms = [t for t in q.strip().split() if t]
+    terms = [t for t in q.split() if t]
     params: List[str] = []
     clauses: List[str] = []
     for t in terms:
         like = f"%{t}%"
         # Each term must match at least one column
-        clauses.append("(jo.Title LIKE ? OR jo.ExternalId LIKE ? OR jo.HiringCompanyName LIKE ? OR jo.PostingCompanyName LIKE ?)")
+        clauses.append(
+            "("
+            "COALESCE(jo.Title,'') LIKE ? OR "
+            "COALESCE(jo.ExternalId,'') LIKE ? OR "
+            "COALESCE(jo.HiringCompanyName,'') LIKE ? OR "
+            "COALESCE(jo.PostingCompanyName,'') LIKE ?"
+            ")"
+        )
         params.extend([like, like, like, like])
 
-    # All terms must match (AND across terms)
+    # AND across terms
     return " AND ".join(clauses), params
 
 
@@ -62,15 +71,15 @@ def register(app: func.FunctionApp):
     def list_jobs_with_statuses(req: func.HttpRequest) -> func.HttpResponse:
         """
         Query params:
-          - userId  (required)  : internal user GUID (normalized by server)
-          - q       (optional)  : search phrase; may be empty
-          - limit   (optional)  : default 50
-          - offset  (optional)  : default 0
+          - userId  (required): internal user GUID
+          - q       (optional): search phrase
+          - limit   (optional): default 10
+          - offset  (optional): default 0
 
-        Returns: JSON array of jobs that have a non-final status for this user.
-        Each item includes fields from JobOfferings, plus:
-          - userStatus: the current status for this user
-          - locations : array like in /jobs
+        Returns an array of jobs that have a non-final status for this user.
+        Each item includes fields from JobOfferings plus:
+          - userStatus
+          - locations
         """
         logging.info("GET /jobs/with-statuses")
         try:
@@ -92,32 +101,28 @@ def register(app: func.FunctionApp):
             conn = get_connection()
             cur = conn.cursor()
 
-            # We only want jobs that:
-            #  - are not deleted
-            #  - have a status row for this user
-            #  - that status is NOT final
-            #  - (optional) match the search
-            # We also fetch the user's status to include it in the payload.
-            final_placeholders = ",".join(["?"] * len(FINAL_STATUSES)) if FINAL_STATUSES else None
-
+            # WHERE parts and params (keep param order exactly as placeholders)
             where_parts: List[str] = [
                 "jo.IsDeleted = 0",
-                "ujs.UserId = ?",
+                # Explicit cast avoids implicit conversion issues
+                "ujs.UserId = CONVERT(uniqueidentifier, ?)",
             ]
             params: List = [user_id]
 
-            # Exclude statuses. Add NOT IN (...) for final statuses
+            # Exclude final statuses if any are defined
             if FINAL_STATUSES:
-                where_parts.append(f"ujs.Status NOT IN ({final_placeholders})")
+                placeholders = ",".join(["?"] * len(FINAL_STATUSES))
+                where_parts.append(f"ujs.Status NOT IN ({placeholders})")
+                # tuple -> list to extend cleanly
                 params.extend(list(FINAL_STATUSES))
-            # Query
+
             if search_clause:
                 where_parts.append(search_clause)
                 params.extend(search_params)
 
             where_sql = " AND ".join(where_parts)
 
-            # Main page of jobs + the user's status
+            # Main select
             cur.execute(
                 f"""
                 SELECT
@@ -126,6 +131,7 @@ def register(app: func.FunctionApp):
                     jo.ExternalId,
                     jo.FoundOn,
                     jo.HiringCompanyName,
+                    jo.PostingCompanyName,
                     jo.RemoteType,
                     jo.FirstSeenAt,
                     ujs.Status AS UserStatus
@@ -145,14 +151,13 @@ def register(app: func.FunctionApp):
             cols = [c[0] for c in cur.description]
             jobs = [dict(zip(cols, r)) for r in rows]
 
-            # Normalize GUIDs and rename status field for client
             for j in jobs:
                 j["Id"] = normalize_guid(str(j["Id"]))
                 j["userStatus"] = j.pop("UserStatus", "Unset")
 
             ids = [j["Id"] for j in jobs]
 
-            # Fetch locations for the page of jobs
+            # Fetch locations for page
             loc_map = {jid: [] for jid in ids}
             if ids:
                 placeholders = ",".join(["?"] * len(ids))
