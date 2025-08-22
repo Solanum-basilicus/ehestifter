@@ -77,5 +77,9 @@ def me(*, context):
         now=datetime.utcnow(),
     )
 
+@app.route("/health")
+def health():
+    return {"ok": True}
+
 if __name__ == '__main__':
     app.run(debug=True)

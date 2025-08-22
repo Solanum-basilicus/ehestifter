@@ -1,15 +1,46 @@
 import uuid, logging
-from helpers.constants import STATUS_OPTIONS
 from ehestifter_api import ApiError
+from typing import Tuple, Optional, Iterable
 
-def parse_status_and_query(text: str) -> tuple[str | None, str]:
+def _starts_with_any(s: str, prefixes: Iterable[str]) -> bool:
+    s = s.strip().lower()
+    return any(s.startswith(p) for p in prefixes)
+
+def parse_status_and_query(text: str, status_options: list[str]) -> tuple[Optional[str], str]:
+    """
+    Try to parse a leading status from `text`. If no status matches exactly,
+    return (None, text) unchanged — caller may choose to derive a fallback query.
+    """
     t = (text or "").strip()
     if not t:
         return None, ""
-    for status in sorted(STATUS_OPTIONS, key=len, reverse=True):
+
+    # Try exact leading match against known statuses (longest first)
+    for status in sorted(status_options, key=len, reverse=True):
         if t.lower().startswith(status.lower()):
             return status, t[len(status):].strip()
+
+    # No status match
     return None, t
+
+
+def fallback_query_when_status_missing(raw_tail: str) -> str:
+    """
+    When user misspells status, skip the first 2 words by default,
+    or 3 words if the text starts with 'hm', 'mo', or 're'. Always leave at least one word.
+    """
+    t = (raw_tail or "").strip()
+    if not t:
+        return ""
+
+    words = t.split()
+    skip = 3 if _starts_with_any(t, ("hm", "mo", "re")) else 2
+
+    if len(words) <= skip:
+        # Always leave at least one word
+        return words[-1]
+
+    return " ".join(words[skip:])
 
 def new_error_id() -> str:
     return str(uuid.uuid4())[:8]
