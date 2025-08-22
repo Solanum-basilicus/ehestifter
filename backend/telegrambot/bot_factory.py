@@ -2,6 +2,8 @@ import os
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram import Update
 from helpers.deps import set_api
+import logging
+import sys
 from ehestifter_api import EhestifterApi
 
 # route registrars
