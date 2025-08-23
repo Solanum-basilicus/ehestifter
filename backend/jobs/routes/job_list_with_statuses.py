@@ -96,8 +96,8 @@ def register(app: func.FunctionApp):
                 user_id, offset, limit
             )
             # DEBUG
-            logging.exception("Prepared query: ", cur.stmt )
-            
+            logging.info("Prepared query: ", cur.stmt )
+
             cur.execute()
             rows = cur.fetchall()
             if not rows:
