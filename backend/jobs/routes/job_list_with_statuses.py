@@ -9,54 +9,6 @@ from history import DatetimeEncoder
 from ids import normalize_guid, is_guid
 from domain_constants import FINAL_STATUSES
 
-# Treat these as "final" (archived) statuses - exclude them from results.
-# Adjust as you standardize your taxonomy.
-
-def _parse_paging(req: func.HttpRequest) -> Tuple[int, int] | func.HttpResponse:
-    try:
-        limit = int(req.params.get("limit", 10))
-        offset = int(req.params.get("offset", 0))
-    except ValueError:
-        return func.HttpResponse("Invalid 'limit' or 'offset'", status_code=400)
-
-    if limit < 1 or limit > 50:
-        return func.HttpResponse("'limit' must be between 1 and 50", status_code=400)
-    if offset < 0:
-        return func.HttpResponse("'offset' must be >= 0", status_code=400)
-
-    return limit, offset
-
-
-def _build_search_clause(q: str) -> Tuple[str, List[str]]:
-    """
-    Build a WHERE snippet + params to match ALL terms in q
-    against Title, ExternalId, HiringCompanyName, PostingCompanyName.
-    Handle NULLs via COALESCE.
-    """
-    q = (q or "").strip()
-    if not q:
-        return "", []
-
-    terms = [t for t in q.split() if t]
-    params: List[str] = []
-    clauses: List[str] = []
-    for t in terms:
-        like = f"%{t}%"
-        # Each term must match at least one column
-        clauses.append(
-            "("
-            "COALESCE(jo.Title,'') LIKE ? OR "
-            "COALESCE(jo.ExternalId,'') LIKE ? OR "
-            "COALESCE(jo.HiringCompanyName,'') LIKE ? OR "
-            "COALESCE(jo.PostingCompanyName,'') LIKE ?"
-            ")"
-        )
-        params.extend([like, like, like, like])
-
-    # AND across terms
-    return " AND ".join(clauses), params
-
-
 def register(app: func.FunctionApp):
 
     @app.route(route="jobs/with-statuses", methods=["GET"])
@@ -74,7 +26,8 @@ def register(app: func.FunctionApp):
           - locations
         """
         logging.info("GET /jobs/with-statuses")
-        try:
+        # For valid user
+        try:            
             user_id = (req.params.get("userId") or "").strip()
             if not user_id:
                 return func.HttpResponse("Missing 'userId'", status_code=400)
@@ -82,41 +35,43 @@ def register(app: func.FunctionApp):
                 return func.HttpResponse("Invalid 'userId' GUID", status_code=400)
             user_id = normalize_guid(user_id)
 
-            paging = _parse_paging(req)
-            if isinstance(paging, func.HttpResponse):
-                return paging
-            limit, offset = paging
+            #for valid limit and offset
+            try:
+                limit = int(req.params.get("limit", 10))
+                offset = int(req.params.get("offset", 0))
+            except ValueError:
+                return func.HttpResponse("Invalid 'limit' or 'offset'", status_code=400)
+            if limit < 1 or limit > 50:
+                return func.HttpResponse("'limit' must be between 1 and 50", status_code=400)
+            if offset < 0:
+                return func.HttpResponse("'offset' must be >= 0", status_code=400)
 
+            # Two inserts into WHERE, both optional
+            # Search for query in Title, ID (autocreated from URL), and names of companies
             q = (req.params.get("q") or "").strip()
-            search_clause, search_params = _build_search_clause(q)
+            where_insert_q = ""
+            if q:
+                where_insert_q = f"""
+                    AND (  COALESCE(jo.Title,'') LIKE %{q}%
+                        OR COALESCE(jo.ExternalId,'') LIKE %{q}%
+                        OR COALESCE(jo.HiringCompanyName,'') LIKE %{q}%
+                        OR COALESCE(jo.PostingCompanyName,'') LIKE %{q}% )
+                """
+
+            # Exclude final statuses if any are defined
+            where_insert_s = ""
+            if FINAL_STATUSES:
+                where_insert_s = " AND ujs.Status NOT IN ("
+                for jobstatus in FINAL_STATUSES:
+                    where_insert_s = where_insert_s + f""" "{jobstatus}", """
+                where_insert_s = where_insert_s + " UNKNOWN )"
 
             conn = get_connection()
             cur = conn.cursor()
 
-            # WHERE parts and params (keep param order exactly as placeholders)
-            where_parts: List[str] = [
-                "jo.IsDeleted = 0",
-                # Explicit cast avoids implicit conversion issues
-                "ujs.UserId = CONVERT(uniqueidentifier, ?)",
-            ]
-            params: List = [user_id]
-
-            # Exclude final statuses if any are defined
-            #DEBUG
-            #if FINAL_STATUSES:
-                #placeholders = ",".join(["?"] * len(FINAL_STATUSES))
-                #where_parts.append(f"ujs.Status NOT IN ({placeholders})")
-                ## tuple -> list to extend cleanly
-                #params.extend(list(FINAL_STATUSES))
-
-            if search_clause:
-                where_parts.append(search_clause)
-                params.extend(search_params)
-
-            where_sql = " AND ".join(where_parts)
-
             # Main select
-            cur.execute(
+            # params : we baked in query and statuses, so they are not parametrized
+            cur.prepare(
                 f"""
                 SELECT
                     jo.Id,
@@ -131,12 +86,19 @@ def register(app: func.FunctionApp):
                 FROM dbo.JobOfferings jo
                 INNER JOIN dbo.UserJobStatus ujs
                     ON ujs.JobOfferingId = jo.Id
-                WHERE {where_sql}
+                WHERE   ujs.UserId = ?
+                    AND jo.IsDeleted = 0
+                    {where_insert_q}
+                    {where_insert_s}
                 ORDER BY jo.FirstSeenAt DESC
                 OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
                 """,
-                params + [offset, limit]
+                user_id, offset, limit
             )
+            # DEBUG
+            logging.exception("Prepared query: ", cur.stmt )
+            
+            cur.execute()
             rows = cur.fetchall()
             if not rows:
                 return func.HttpResponse("[]", mimetype="application/json")
