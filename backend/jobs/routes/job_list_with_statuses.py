@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import Iterable, List, Tuple
+from typing import List, Tuple
 
 import azure.functions as func
 
@@ -48,31 +48,41 @@ def register(app: func.FunctionApp):
 
             # Two inserts into WHERE, both optional
             # Search for query in Title, ID (autocreated from URL), and names of companies
+            # Build search clause and params (safe parameterization)
             q = (req.params.get("q") or "").strip()
-            where_insert_q = ""
+            search_clause = ""
+            search_params: List[str] = []
             if q:
-                where_insert_q = f"""
-                    AND (  COALESCE(jo.Title,'') LIKE %{q}%
-                        OR COALESCE(jo.ExternalId,'') LIKE %{q}%
-                        OR COALESCE(jo.HiringCompanyName,'') LIKE %{q}%
-                        OR COALESCE(jo.PostingCompanyName,'') LIKE %{q}% )
-                """
+                # Split on whitespace; require all terms to match at least one of the 4 fields
+                terms = [t for t in q.split() if t]
+                per_term = (
+                    "("
+                    "COALESCE(jo.Title,'') LIKE ? OR "
+                    "COALESCE(jo.ExternalId,'') LIKE ? OR "
+                    "COALESCE(jo.HiringCompanyName,'') LIKE ? OR "
+                    "COALESCE(jo.PostingCompanyName,'') LIKE ?"
+                    ")"
+                )
+                search_clause = " AND " + " AND ".join([per_term] * len(terms))
+                for t in terms:
+                    like = f"%{t}%"
+                    search_params.extend([like, like, like, like])
 
             # Exclude final statuses if any are defined
-            where_insert_s = ""
+            # Build NOT IN placeholders for final statuses (parameterized, deterministic order)
+            status_clause = ""
+            status_params: List[str] = []
             if FINAL_STATUSES:
-                where_insert_s = " AND ujs.Status NOT IN ("
-                for jobstatus in FINAL_STATUSES:
-                    where_insert_s = where_insert_s + f""" "{jobstatus}", """
-                where_insert_s = where_insert_s + " UNKNOWN )"
+                placeholders = ",".join(["?"] * len(FINAL_STATUSES))
+                status_clause = f" AND ujs.Status NOT IN ({placeholders})"
+                status_params = list(FINAL_STATUSES)
 
             conn = get_connection()
             cur = conn.cursor()
 
             # Main select
             # params : we baked in query and statuses, so they are not parametrized
-            cur.prepare(
-                f"""
+            sql = f"""
                 SELECT
                     jo.Id,
                     jo.Title,
@@ -86,19 +96,21 @@ def register(app: func.FunctionApp):
                 FROM dbo.JobOfferings jo
                 INNER JOIN dbo.UserJobStatus ujs
                     ON ujs.JobOfferingId = jo.Id
-                WHERE   ujs.UserId = ?
+                WHERE   ujs.UserId = CONVERT(uniqueidentifier, ?)
                     AND jo.IsDeleted = 0
-                    {where_insert_q}
-                    {where_insert_s}
+                    {search_clause}
+                    {status_clause}
                 ORDER BY jo.FirstSeenAt DESC
                 OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
-                """,
-                user_id, offset, limit
-            )
-            # DEBUG
-            logging.info("Prepared query: ", cur.stmt )
+            """
 
-            cur.execute()
+            params: List = [user_id] + search_params + status_params + [offset, limit]
+            logging.debug("SQL (raw): %s", sql)
+            logging.debug("SQL params: %s", params)
+
+            cur.execute(sql, params)
+
+
             rows = cur.fetchall()
             if not rows:
                 return func.HttpResponse("[]", mimetype="application/json")
