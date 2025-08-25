@@ -2,7 +2,7 @@ import os
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 from helpers.deps import get_api
-from helpers.utils import new_error_id, log_exception
+from helpers.utils import new_error_id, log_exception, friendly_api_message
 
 
 

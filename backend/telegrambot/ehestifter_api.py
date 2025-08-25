@@ -16,10 +16,11 @@ def _require_url(name: str) -> str:
 
 load_dotenv()
 
-API_BASE = _require_url("EHESTIFTER_JOBS_BASE_URL") 
+JOBS_BASE = _require_url("EHESTIFTER_JOBS_BASE_URL") 
+JOBS_BOT_KEY = os.getenv("EHESTIFTER_JOBS_BOT_FUNCTION_KEY") 
 USERS_BASE = _require_url("EHESTIFTER_USERS_BASE_URL")
 USERS_BOT_KEY  = os.getenv("EHESTIFTER_USERS_BOT_FUNCTION_KEY")
-JOBS_FUNC_KEY = os.getenv("EHESTIFTER_JOBS_BOT_FUNCTION_KEY") 
+
 
 @dataclass
 class ApiJob:
@@ -62,7 +63,7 @@ class EhestifterApi:
         return {"x-functions-key": USERS_BOT_KEY} if USERS_BOT_KEY else {}
 
     def _jobs_hdr(self):
-        return {"x-functions-key": JOBS_FUNC_KEY} if JOBS_FUNC_KEY else {}
+        return {"x-functions-key": JOBS_BOT_KEY} if JOBS_BOT_KEY else {}
 
     def _get_any(self, d, *keys, default=None):
         """Direct key chain (fast, deterministic), then case-insensitive fallback. Safe on non-dicts."""
@@ -171,7 +172,7 @@ class EhestifterApi:
         return True, "ok"
 
     async def mark_applied_by_url(self, telegram_user_id: int, url: str):
-        ep = f"{API_BASE}/user-statuses/applied-by-url"
+        ep = f"{JOBS_BASE}/user-statuses/applied-by-url"
         r = await self._safe_post(ep, headers=self._jobs_hdr(),
                                   json={"telegram_user_id": telegram_user_id, "url": url})
         data = r.json()
@@ -179,7 +180,7 @@ class EhestifterApi:
         return job, data["link"]
 
     async def search_jobs_for_user(self, telegram_user_id: int, q: str, limit: int):
-        ep = f"{API_BASE}/jobs"
+        ep = f"{JOBS_BASE}/jobs"
         r = await self._safe_get(
             ep,
             headers=self._jobs_hdr(),
@@ -207,7 +208,7 @@ class EhestifterApi:
     async def update_user_status(self, telegram_user_id: int, job_id: str, new_status: str):
         """Use existing Jobs endpoint that expects internal user_id."""
         user_id = await self._resolve_user_id(telegram_user_id)
-        ep = f"{API_BASE}/jobs/{job_id}/status"
+        ep = f"{JOBS_BASE}/jobs/{job_id}/status"
         # Jobs API expects the user id in header X-User-Id (not the body).
         hdrs = self._jobs_hdr().copy()
         hdrs["X-User-Id"] = str(user_id)
