@@ -268,7 +268,7 @@ class EhestifterApi:
         qs = "&".join(f"{k}={urllib.parse.quote_plus(v)}" for k, v in params)
         url = f"{JOBS_BASE}/jobs/with-statuses?{qs}"
 
-        r = await self._safe_get(url, headers=self._user_hdr())
+        r = await self._safe_get(url, headers=self._jobs_hdr())
         data = r.json() or []
         if not isinstance(data, list):
             raise ApiError(url, status=r.status_code, body=f"Invalid payload: {data}")
