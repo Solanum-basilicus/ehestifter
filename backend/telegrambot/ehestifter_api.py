@@ -4,6 +4,8 @@ import logging
 from dataclasses import dataclass
 from dotenv import load_dotenv
 from typing import Optional, Tuple, List
+import urllib.parse
+from types import SimpleNamespace
 
 
 def _require_url(name: str) -> str:
@@ -243,62 +245,49 @@ class EhestifterApi:
         await self._safe_post(url, headers=headers, json=payload)
         return True, "ok"
 
-    async def list_user_active_jobs(self, telegram_user_id: int, q: str | None, limit: int, offset: int):
-        ep = f"{API_BASE}/jobs"
-        r = await self._safe_get(
-            ep,
-            headers=self._jobs_hdr(),
-            params={
-                "user_id": telegram_user_id,
-                "exclude_final": True,
-                "q": q or "",
-                "limit": limit,
-                "offset": offset,
-                "sort": "-first_seen_at",
-            },
-        )
-        # TEMP DEBUG: dump raw body when enabled
-        if os.getenv("DEBUG_DUMP_MYJOBS") == "1":
-            try:
-                logging.warning("[DEBUG /myjobs] url=%s status=%s body=%s",
-                                ep, r.status_code, (r.text[:2000] + ("…[trunc]" if len(r.text) > 2000 else "")))
-            except Exception:
-                pass
+    async def list_user_active_jobs(
+        self,
+        telegram_user_id: int,
+        q: str | None = None,
+        limit: int = 10,
+        offset: int = 0,
+    ) -> tuple[list[SimpleNamespace], int | None]:
+        """
+        Uses Jobs API: GET /jobs/with-statuses?userId=...&q=...&limit=...&offset=...
+        Returns: ([items], next_offset or None)
+        """
+        user_id = await self._resolve_user_id(telegram_user_id)
+        params = [
+            ("userId", user_id),
+            ("limit", str(limit)),
+            ("offset", str(offset)),
+        ]
+        if q:
+            params.append(("q", q))
+        qs = "&".join(f"{k}={urllib.parse.quote_plus(v)}" for k, v in params)
+        url = f"{JOBS_BASE}/jobs/with-statuses?{qs}"
 
-        payload = r.json()
-        items = payload if isinstance(payload, list) else payload.get("items", payload)
-        if not isinstance(items, list):
-            items = []
-        raw_count = len(items)
-        next_offset = offset + limit if raw_count == limit else None
+        r = await self._safe_get(url, headers=self._user_hdr())
+        data = r.json() or []
+        if not isinstance(data, list):
+            raise ApiError(url, status=r.status_code, body=f"Invalid payload: {data}")
 
-        mapped: list[ApiListedJob] = []
-        for raw in items:
-            if not isinstance(raw, dict):
-                continue
-            job_id, title, company = self._normalize_job_basic(raw)
-            if job_id is None:
-                # Skip entries without an id to avoid KeyError
-                continue
-            user_status, first_seen = self._normalize_user_fields(raw)
-            link = f"https://ehestifter.azurewebsites.net/jobs/{job_id}"
-            mapped.append(ApiListedJob(
-                id=job_id,
-                title=title or "?",
-                company=company or "?",
-                user_status=user_status or "?",
-                first_seen_at=first_seen or "",
-                link=link
-            ))
-        # TEMP DEBUG: if everything was dropped, log shape of first item
-        if raw_count and not mapped:
-            sample = items[0]
-            try:
-                sample_shape = list(sample.keys()) if isinstance(sample, dict) else type(sample).__name__
-            except Exception:
-                sample_shape = "<uninspectable>"
-            logging.warning("[DEBUG /myjobs] raw_count=%d mapped_count=%d sample_shape=%s sample=%s",
-                            raw_count, 0, sample_shape,
-                            (str(sample)[:800] + ("…[trunc]" if len(str(sample)) > 800 else "")))
+        items: list[SimpleNamespace] = []
+        for it in data:
+            # Prefer HiringCompanyName, fall back to PostingCompanyName, then "?"
+            company = it.get("HiringCompanyName") or it.get("PostingCompanyName") or "?"
+            link = it.get("FoundOn") or it.get("ExternalId") or ""
+            items.append(
+                SimpleNamespace(
+                    id=it.get("Id"),
+                    title=it.get("Title"),
+                    company=company,
+                    user_status=it.get("userStatus"),
+                    first_seen_at=it.get("FirstSeenAt"),
+                    link=link,
+                )
+            )
 
-        return mapped, next_offset
+        # Simple pagination heuristic: if we got a full page, offer next page
+        next_offset: int | None = offset + len(items) if len(items) == limit else None
+        return items, next_offset
