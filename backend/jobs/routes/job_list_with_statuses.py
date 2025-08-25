@@ -34,6 +34,7 @@ def register(app: func.FunctionApp):
             if not is_guid(user_id):
                 return func.HttpResponse("Invalid 'userId' GUID", status_code=400)
             user_id = normalize_guid(user_id)
+            logging.info("User for /jobs/with-statuses is ", user_id)
 
             #for valid limit and offset
             try:
@@ -105,8 +106,8 @@ def register(app: func.FunctionApp):
             """
 
             params: List = [user_id] + search_params + status_params + [offset, limit]
-            logging.debug("SQL (raw): %s", sql)
-            logging.debug("SQL params: %s", params)
+            logging.info("SQL (raw): %s", sql)
+            logging.info("SQL params: %s", params)
 
             cur.execute(sql, params)
 

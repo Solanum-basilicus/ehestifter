@@ -2,6 +2,7 @@ import os
 import pytest
 from dotenv import load_dotenv
 import uuid
+import time
 import copy
 
 load_dotenv()
@@ -9,6 +10,13 @@ load_dotenv()
 class RedactedDict(dict):
     def __repr__(self):
         return "{'x-functions-key': '<redacted>'}"
+
+@pytest.fixture(autouse=True)
+def delay_between_tests():
+    # run before each test
+    time.sleep(2)
+    yield
+    # could also sleep after test if needed
 
 @pytest.fixture(scope="session")
 def base_url():
