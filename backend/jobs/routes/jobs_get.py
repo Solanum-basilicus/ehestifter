@@ -7,7 +7,7 @@ from ids import normalize_guid, normalize_guid_in_dict
 
 def register(app: func.FunctionApp):
 
-    @app.route(route="jobs/{id}", methods=["GET"])
+    @app.route(route="jobs/{id:guid}", methods=["GET"])
     def get_job(req: func.HttpRequest) -> func.HttpResponse:
         job_id = req.route_params.get("id")
         logging.info(f"GET /jobs/{job_id}")
