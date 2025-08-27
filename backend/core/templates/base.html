@@ -79,17 +79,31 @@
         if (data && !data.error) {
           const username = data.name || data.preferred_username || data.username || data.email || 'me';
           setUser('To profile: ' + username, "{{ url_for('me') }}");
+          // Expose CURRENT_USER_ID globally and notify listeners
+          const uid = String(
+            data.id ?? data.userId ?? data.user_id ?? data.sub ?? ''
+          );
+          // keep as empty string if not present
+          window.CURRENT_USER_ID = uid;
+          try {
+            window.dispatchEvent(new CustomEvent('user-hydrated', { detail: { id: uid, raw: data } }));
+          } catch (_) { /* no-op */ }
         } else {
           showError((data && data.message) || 'please try again');
+          // do not clobber an existing value, but ensure the symbol exists
+          if (typeof window.CURRENT_USER_ID === 'undefined') window.CURRENT_USER_ID = '';
         }
       } catch {
         showError('please try again');
+        if (typeof window.CURRENT_USER_ID === 'undefined') window.CURRENT_USER_ID = '';
       } finally {
         // allow manual retry even after first pass
         inited = false;
       }
     }
 
+    // expose so other pages may force-refresh user on demand
+    window.initUser = initUser;
     document.addEventListener('DOMContentLoaded', initUser);
   })();
 

@@ -34,3 +34,7 @@ def fx_get_json(url, headers, params=None, timeout=10):
 def fx_post_json(url, headers, json_body, timeout=15):
     # returns the raw Response; caller decides how to parse / handle status
     return requests.post(url, headers=headers, json=json_body, timeout=timeout)
+
+def fx_delete(url, headers, timeout=15):
+    # returns the raw Response; caller decides how to parse / handle status
+    return requests.delete(url, headers=headers, timeout=timeout)

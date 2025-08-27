@@ -8,6 +8,7 @@ from .ui_job_history_get import create_blueprint as bp_job_history_get
 from .ui_jobs_status_bulk import create_blueprint as bp_jobs_status_bulk
 from .ui_users_me import create_blueprint as bp_users_me
 from .ui_users_link_code import create_blueprint as bp_users_link_code
+from .ui_jobs_delete import create_blueprint as bp_jobs_delete
 
 def register_all(app, auth):
     app.register_blueprint(bp_jobs_list(auth))
@@ -19,3 +20,4 @@ def register_all(app, auth):
     app.register_blueprint(bp_jobs_status_bulk(auth))
     app.register_blueprint(bp_users_me(auth))
     app.register_blueprint(bp_users_link_code(auth))
+    app.register_blueprint(bp_jobs_delete(auth))

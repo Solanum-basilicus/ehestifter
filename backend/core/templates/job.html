@@ -10,6 +10,12 @@
   .btn { padding:6px 10px; border-radius:8px; border:1px solid #e5e7eb; background:#f9fafb; cursor:not-allowed; opacity:.7; }
   .btn.primary { background:#eef2ff; border-color:#c7d2fe; }
   .btn.ghost { background:transparent; }
+  .btn.danger { background:#fee2e2; border-color:#fecaca; }
+  .btn[disabled] { cursor:not-allowed; opacity:.5; }
+  .modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.35); display:none; align-items:center; justify-content:center; z-index:1000; }
+  .modal { width:min(520px,92vw); background:#fff; border-radius:12px; border:1px solid #e5e7eb; box-shadow:0 10px 30px rgba(0,0,0,.1); } 
+  /* two-column layout for status + actions block */
+  .row-actions { display:grid; grid-template-columns: 1fr; gap:12px; } @media (min-width: 900px){ .row-actions { grid-template-columns: 1fr 280px; } }
   .btn[aria-disabled="false"] { cursor:pointer; opacity:1; }
   .skeleton { background:linear-gradient(90deg,#f4f4f5 25%,#e5e7eb 37%,#f4f4f5 63%); background-size:400% 100%; animation:shimmer 1.2s infinite; border-radius:6px; }
   @keyframes shimmer { 0% { background-position:100% 0; } 100% { background-position:-100% 0; } }
@@ -116,75 +122,101 @@
   </div>
 
   <!-- App controls -->
-  <div class="card private-block"
-      style="padding:12px 16px; margin-top:12px;"
-      x-data="jobStatusComponent({ jobId: '{{ job_id }}' })"
-      x-init="init()">
+  <div class="row-actions">
+    <div class="card private-block"
+        style="padding:12px 16px; margin-top:12px;"
+        x-data="jobStatusComponent({ jobId: '{{ job_id }}' })"
+        x-init="init()">
+      
+        <!-- LEFT COLUMN: status controls -->
+        <div class="flex" style="min-width:0; flex-wrap:wrap; gap:10px; align-items:center;">
+          <!-- label styled like your section headers -->
+          <div style="font-weight:600;">This position and you:</div>
+          <span class="chip-private" style="margin-left:2px;">🔒 Only you</span>
 
-    <div class="flex-between" style="align-items:center;">
-      <!-- LEFT: label + status text + time + buttons (inline) -->
-      <div class="flex" style="min-width:0; flex-wrap:wrap; gap:10px; align-items:center;">
-        <!-- label styled like your section headers -->
-        <div style="font-weight:600;">This position and you:</div>
+          <!-- status text (unchanged logic, no pill) -->
+          <span class="status-badge"
+                :data-k="pending ? 'unset' : statusKey(app.state)"
+                x-text="pending ? 'loading…' : (app.state || 'Unset')"></span>
 
-        <!-- status text (unchanged logic, no pill) -->
-        <span class="status-badge"
-              :data-k="pending ? 'unset' : statusKey(app.state)"
-              x-text="pending ? 'loading…' : (app.state || 'Unset')"></span>
+          <!-- relative time, if you later surface changedAtUtc -->
+          <template x-if="app.changedAtUtc">
+            <div class="flex muted" style="font-size:14px;">
+              <span x-text="relativeFromLocal(app.changedAtUtc)"></span>
+            </div>
+          </template>
 
-        <!-- relative time, if you later surface changedAtUtc -->
-        <template x-if="app.changedAtUtc">
-          <div class="flex muted" style="font-size:14px;">
-             <span x-text="relativeFromLocal(app.changedAtUtc)"></span>
+          <!-- buttons inline next to status -->
+          <div class="flex" style="gap:.5rem;">
+            <button class="btn"
+                    x-show="!editing"
+                    @click="startEditing()"
+                    :disabled="pending"
+                    :aria-disabled="pending ? 'true' : 'false'">change</button>
+
+            <button class="btn primary"
+                    x-show="editing"
+                    @click="save()"
+                    :disabled="pending"
+                    :aria-disabled="pending ? 'true' : 'false'">
+              <span x-show="!pending">save</span>
+              <span x-show="pending">saving…</span>
+            </button>
+
+            <button class="btn"
+                    x-show="editing"
+                    @click="cancelEditing()"
+                    :disabled="pending"
+                    :aria-disabled="pending ? 'true' : 'false'">cancel</button>
           </div>
-        </template>
-
-        <!-- buttons inline next to status -->
-        <div class="flex" style="gap:.5rem;">
-          <button class="btn"
-                  x-show="!editing"
-                  @click="startEditing()"
-                  :disabled="pending"
-                  :aria-disabled="pending ? 'true' : 'false'">change</button>
-
-          <button class="btn primary"
-                  x-show="editing"
-                  @click="save()"
-                  :disabled="pending"
-                  :aria-disabled="pending ? 'true' : 'false'">
-            <span x-show="!pending">save</span>
-            <span x-show="pending">saving…</span>
-          </button>
-
-          <button class="btn"
-                  x-show="editing"
-                  @click="cancelEditing()"
-                  :disabled="pending"
-                  :aria-disabled="pending ? 'true' : 'false'">cancel</button>
         </div>
-      </div>
 
-      <!-- RIGHT: private chip -->
-      <div class="flex" style="gap:.5rem;">
-        <span class="chip-private">🔒 Only you</span>
+      <!-- Editor row -->
+      <div x-show="editing" style="margin-top:10px;">
+        <label for="statusSelect" class="muted" style="display:block; font-size:14px; margin-bottom:6px;">Select status</label>
+        <select id="statusSelect"
+                x-model="selected"
+                @change="selected = $event.target.value"
+                :disabled="pending"
+                style="min-width:260px;">
+          <template x-for="opt in statusOptions" :key="opt">
+            <option :value="opt" x-text="opt"></option>
+          </template>
+        </select>
+        <p class="muted" x-show="error" x-text="error" style="margin-top:8px; color:#a00;"></p>
       </div>
     </div>
 
-    <!-- Editor row -->
-    <div x-show="editing" style="margin-top:10px;">
-      <label for="statusSelect" class="muted" style="display:block; font-size:14px; margin-bottom:6px;">Select status</label>
-      <select id="statusSelect"
-              x-model="selected"
-              @change="selected = $event.target.value"
-              :disabled="pending"
-              style="min-width:260px;">
-        <template x-for="opt in statusOptions" :key="opt">
-          <option :value="opt" x-text="opt"></option>
-        </template>
-      </select>
-      <p class="muted" x-show="error" x-text="error" style="margin-top:8px; color:#a00;"></p>
-    </div>
+    <!-- RIGHT COLUMN: job actions block (separate from private status area) -->
+    <div class="card" style="padding:12px 16px; margin-top:12px;">
+      <div class="flex" style="gap:8px; align-items:center; flex-wrap:wrap;">
+        <button class="btn" title="Edit job (coming soon)" disabled>✏️ Edit</button>
+        <button class="btn danger"
+                :disabled="!canEdit"
+                :aria-disabled="canEdit ? 'false' : 'true'"
+                :title="deleteDebugTitle()"
+                @click="openDeleteModal()">
+          🗑️ Delete
+        </button>
+      </div>
+    </div>    
   </div>
+
+<!-- Delete confirmation modal -->
+<div id="delete-modal" class="modal-backdrop" x-show="deleteModalOpen" x-transition
+     @click.self="closeDeleteModal()" style="display:none;">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="del-title">
+    <header id="del-title" style="padding:14px 16px; border-bottom:1px solid #e5e7eb; font-weight:600;">Delete job?</header>
+    <div class="body" style="padding:16px; color:#374151;">
+      <p>Once it's gone it's gone, you can't revert that. Really want to delete this job from the system?</p>
+      <div class="err" x-text="deleteError" style="color:#b91c1c; margin-top:8px; min-height:20px;"></div>
+    </div>
+    <footer style="padding:12px 16px; border-top:1px solid #e5e7eb; display:flex; gap:8px; justify-content:flex-end;">
+      <button class="btn" @click="closeDeleteModal()" :disabled="deleteBusy">Cancel</button>
+      <button class="btn danger" @click="confirmDelete()" :disabled="deleteBusy"><span x-show="!deleteBusy">Yes, delete</span><span x-show="deleteBusy">Deleting…</span></button>
+    </footer>
+  </div>
+</div>
 
   <!-- Main grid -->
   <div class="grid grid-main" style="margin-top:12px;">
@@ -475,6 +507,10 @@
       app:{ state:"New", changedAtUtc:null },
       safeDescription:"", descLoaded:false,
       history:{ items:[], nextCursor:null, loaded:false, loadingMore:false, error:"" },
+      createdByUserId: null,
+      canEdit: false,
+      // delete modal state
+      deleteModalOpen: false, deleteBusy: false, deleteError: "",      
 
       async init(){
         if (this._inited) return; this._inited = true;
@@ -498,6 +534,20 @@
         window.addEventListener('job-history-refresh', (e) => {
           if (!e.detail || e.detail.jobId === this.jobId) this.loadHistory();
         });
+
+        // Pick up CURRENT_USER_ID if base already hydrated it
+        if (typeof window.CURRENT_USER_ID !== 'undefined') {
+          this._currentUidCache = String(window.CURRENT_USER_ID || '');
+          this.canEdit = !!(this._currentUidCache && this.createdByUserId && this._currentUidCache === String(this.createdByUserId));
+        }
+        // Listen for late hydration from base.html
+        window.addEventListener('user-hydrated', (ev) => {
+          const uid = String((ev && ev.detail && ev.detail.id) || '');
+          this._currentUidCache = uid;
+          this.canEdit = !!(uid && this.createdByUserId && uid === String(this.createdByUserId));
+        });
+        // In case user bar hasn't fetched yet, politely request it
+        try { window.initUser && window.initUser(); } catch(_) {}        
       },
 
       get(obj, keys){ for (const k of keys) if (obj && obj[k] != null) return obj[k]; },
@@ -555,6 +605,16 @@
           state: this.get(appState, ["state","State"]) || this.app.state,
           changedAtUtc: this.get(appState, ["changedAtUtc","ChangedAtUtc","changed_at_utc"]) || null
         };
+
+        // capture creator for edit/delete permissions
+        const createdBy = this.get(p, ["CreatedByUserId","createdByUserId","createdBy"]);
+        this.createdByUserId = createdBy ? String(createdBy) : null;
+        // server should inject current user id if logged in; fallback to empty
+        const currentUid = (typeof window.CURRENT_USER_ID !== 'undefined')
+          ? String(window.CURRENT_USER_ID || '')
+          : '';
+        this._currentUidCache = currentUid;
+        this.canEdit = !!(currentUid && this.createdByUserId && currentUid === String(this.createdByUserId));
       },
 
       sanitizeDescription(html){
@@ -662,10 +722,52 @@
         }
       },
       copy(text){ navigator.clipboard?.writeText(text).catch(()=>{}); }
+
+      // --- Debug tooltip for Delete button: shows expected/actual IDs and computed flag
+      ,deleteDebugTitle(){
+        const expected = this.createdByUserId ? String(this.createdByUserId) : "(none)";
+        const got = this._currentUidCache ? String(this._currentUidCache) : "(none)";
+        const flag = this.canEdit ? "true" : "false";
+        return `Delete permission\ncreator: ${expected}\nyou: ${got}\ncanEdit: ${flag}`;
+      }
+
+      ,openDeleteModal(){
+        if (!this.canEdit) return;
+        this.deleteError = "";
+        this.deleteBusy = false;
+        this.deleteModalOpen = true;
+        // ensure backdrop is visible for non-Alpine-controlled initial style
+        const el = document.getElementById('delete-modal'); if (el) el.style.display = 'flex';
+      }
+      ,closeDeleteModal(){
+        this.deleteModalOpen = false;
+        const el = document.getElementById('delete-modal'); if (el) el.style.display = 'none';
+      }
+      ,async confirmDelete(){
+        if (!this.canEdit || this.deleteBusy) return;
+        this.deleteBusy = True ? true : true; // keep boolean for minifier safety
+        this.deleteError = "";
+        try{
+          const resp = await fetch(`/ui/jobs/${encodeURIComponent(this.jobId)}`, {
+            method: 'DELETE',
+            credentials: 'same-origin'
+          });
+          if (resp.status === 204) {
+            this.closeDeleteModal();
+            window.location.assign('/jobs');
+            return;
+          }
+          const text = await resp.text();
+          this.deleteError = text || `Delete failed (HTTP ${resp.status})`;
+        }catch(e){
+          this.deleteError = 'Network error. Please try again.';
+        }finally{
+          this.deleteBusy = false;
+        }
+      }      
     }));
   });
 
 </script>
-
 
 {% endblock %}
