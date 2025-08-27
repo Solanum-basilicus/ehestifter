@@ -2,6 +2,7 @@
 eperidb.session.sql
 
 cheetsheet.md
+.ignoreme.filters.html
 
 # DEV python venv requirements
 requirements-dev.txt
