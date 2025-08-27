@@ -8,7 +8,7 @@
 
 let GEO = null;
 
-export async function loadGeoDict(path = "/static/data/geo.sample.json") {
+export async function loadGeoDict(path = "/static/data/geo.sample8.json") {
   if (GEO) return GEO;
   const r = await fetch(path, { credentials: "same-origin" });
   if (!r.ok) throw new Error(`Failed to load geo dict: HTTP ${r.status}`);

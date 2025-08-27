@@ -1,0 +1,2 @@
+Countries: mledoze/countries (ODbL-1.0)
+Cities: GeoNames (CC BY 4.0) — https://www.geonames.org/
