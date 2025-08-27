@@ -2,6 +2,7 @@ import requests
 
 
 def test_add_user_filter(base_url, auth_headers, default_user, shared_state):
+    assert shared_state["Has_connection"]
     url = f"{base_url}/users/filters"
     headers = {
         "x-user-sub": default_user,

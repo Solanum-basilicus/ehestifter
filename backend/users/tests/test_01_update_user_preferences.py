@@ -1,7 +1,8 @@
 import requests
 
 
-def test_update_user_preferences(base_url, auth_headers, default_user):
+def test_update_user_preferences(base_url, auth_headers, default_user, shared_state):
+    assert shared_state["Has_connection"]
     url = f"{base_url}/users/preferences"
     headers = {
         "x-user-sub": default_user,

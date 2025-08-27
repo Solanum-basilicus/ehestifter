@@ -8,7 +8,8 @@ import pytest
 BOT_KEY = os.getenv("USERS_BOT_FUNCTION_KEY")
 
 @pytest.mark.skipif(not BOT_KEY, reason="USERS_BOT_FUNCTION_KEY not set")
-def test_05_link_code_for_default_user(base_url, auth_headers, default_user):
+def test_05_link_code_for_default_user(base_url, auth_headers, default_user, shared_state):
+    assert shared_state["Has_connection"]
     assert base_url and default_user
 
     s = requests.Session()

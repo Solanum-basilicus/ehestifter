@@ -83,7 +83,7 @@ def register(app):
             filters = []
             for row in rows:
                 filters.append({
-                    "Id": str(row[0]),
+                    "Id": normalize_guid(row[0]),
                     "FilterText": row[1],
                     "NormalizedJson": row[2],
                     "CreatedAt": row[3],

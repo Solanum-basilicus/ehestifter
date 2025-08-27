@@ -3,6 +3,7 @@ import pytest
 
 
 def test_delete_user_filter(base_url, auth_headers, default_user, shared_state):
+    assert shared_state["Has_connection"]
     if "filter_id" not in shared_state:
         pytest.fail("No filter_id in shared state from previous test")
 

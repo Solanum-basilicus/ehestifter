@@ -10,7 +10,9 @@ def test_get_or_create_user(base_url, auth_headers, default_user, shared_state):
 
     response = requests.get(url, headers=headers)
     print("(MEE response:", response.status_code, response.text, ")", end="")
+    shared_state["Has_connection"] = True
     if "Could not connect to the database" in response.text:
+        shared_state["Has_connection"] = False
         raise AssertionError(
             f"Azure Function failed to connect to SQL DB: {response.text} (status {response.status_code})"
         )    
