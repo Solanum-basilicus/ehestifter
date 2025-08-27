@@ -1,6 +1,7 @@
 from flask import Blueprint, jsonify
 from helpers.http import jobs_base, jobs_fx_headers, fx_delete
 from helpers.users import get_in_app_user_id
+from helpers.cache import memo_invalidate_prefix
 
 def create_blueprint(auth):
     bp = Blueprint("ui_jobs_delete", __name__)
@@ -17,11 +18,20 @@ def create_blueprint(auth):
             headers = jobs_fx_headers(context={"userId": uid})
         except Exception:
             headers = jobs_fx_headers()
+            uid = None
 
         upstream = fx_delete(f"{jobs_base()}/jobs/{job_id}", headers=headers)
 
         # 200/204 -> surface as 204 No Content for UI consistency
         if upstream.status_code in (200, 204):
+            # Invalidate ALL cached job lists for this user so deleted job never reappears.
+            # Our list cache keys begin with "jobs:{uid}:".
+            try:
+                if uid:
+                    memo_invalidate_prefix(f"jobs:{uid}:")
+            except Exception:
+                # Cache invalidation is best-effort; do not block successful delete.
+                pass            
             return ("", 204)
 
         # Bubble up upstream error body + content-type

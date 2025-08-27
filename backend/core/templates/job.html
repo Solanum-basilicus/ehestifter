@@ -12,8 +12,10 @@
   .btn.ghost { background:transparent; }
   .btn.danger { background:#fee2e2; border-color:#fecaca; }
   .btn[disabled] { cursor:not-allowed; opacity:.5; }
-  .modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.35); display:none; align-items:center; justify-content:center; z-index:1000; }
+  .modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.35); display:flex; align-items:center; justify-content:center; z-index:1000; }
   .modal { width:min(520px,92vw); background:#fff; border-radius:12px; border:1px solid #e5e7eb; box-shadow:0 10px 30px rgba(0,0,0,.1); } 
+  /* Alpine cloak to prevent FOUC and click races on first render */
+  [x-cloak] { display:none !important; }
   /* two-column layout for status + actions block */
   .row-actions { display:grid; grid-template-columns: 1fr; gap:12px; } @media (min-width: 900px){ .row-actions { grid-template-columns: 1fr 280px; } }
   .btn[aria-disabled="false"] { cursor:pointer; opacity:1; }
@@ -203,8 +205,8 @@
   </div>
 
 <!-- Delete confirmation modal -->
-<div id="delete-modal" class="modal-backdrop" x-show="deleteModalOpen" x-transition
-     @click.self="closeDeleteModal()" style="display:none;">
+<div id="delete-modal" class="modal-backdrop" x-cloak x-show="deleteModalOpen" x-transition
+     @click.self="closeDeleteModal()">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="del-title">
     <header id="del-title" style="padding:14px 16px; border-bottom:1px solid #e5e7eb; font-weight:600;">Delete job?</header>
     <div class="body" style="padding:16px; color:#374151;">
@@ -212,8 +214,12 @@
       <div class="err" x-text="deleteError" style="color:#b91c1c; margin-top:8px; min-height:20px;"></div>
     </div>
     <footer style="padding:12px 16px; border-top:1px solid #e5e7eb; display:flex; gap:8px; justify-content:flex-end;">
-      <button class="btn" @click="closeDeleteModal()" :disabled="deleteBusy">Cancel</button>
-      <button class="btn danger" @click="confirmDelete()" :disabled="deleteBusy"><span x-show="!deleteBusy">Yes, delete</span><span x-show="deleteBusy">Deleting…</span></button>
+      <button class="btn" type="button"
+              @click="closeDeleteModal()"
+              :disabled="deleteBusy"
+              :aria-disabled="deleteBusy ? 'true' : 'false'">Cancel</button>
+      <button class="btn danger" type="button"
+              @click="confirmDelete()" :disabled="deleteBusy" :aria-disabled="deleteBusy ? 'true' : 'false'"><span x-show="!deleteBusy">Yes, delete</span><span x-show="deleteBusy">Deleting…</span></button>
     </footer>
   </div>
 </div>
@@ -735,17 +741,14 @@
         if (!this.canEdit) return;
         this.deleteError = "";
         this.deleteBusy = false;
-        this.deleteModalOpen = true;
-        // ensure backdrop is visible for non-Alpine-controlled initial style
-        const el = document.getElementById('delete-modal'); if (el) el.style.display = 'flex';
+        this.deleteModalOpen = true; // Alpine x-show controls visibility
       }
       ,closeDeleteModal(){
-        this.deleteModalOpen = false;
-        const el = document.getElementById('delete-modal'); if (el) el.style.display = 'none';
+        this.deleteModalOpen = false; // Alpine x-show controls visibility
       }
       ,async confirmDelete(){
         if (!this.canEdit || this.deleteBusy) return;
-        this.deleteBusy = True ? true : true; // keep boolean for minifier safety
+        this.deleteBusy = true;
         this.deleteError = "";
         try{
           const resp = await fetch(`/ui/jobs/${encodeURIComponent(this.jobId)}`, {
@@ -754,7 +757,7 @@
           });
           if (resp.status === 204) {
             this.closeDeleteModal();
-            window.location.assign('/jobs');
+            window.location.assign('/');
             return;
           }
           const text = await resp.text();
