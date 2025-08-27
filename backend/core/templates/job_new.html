@@ -4,17 +4,20 @@
 <link href="{{ url_for('static', filename='css/quill.snow.css') }}" rel="stylesheet">
 <script src="{{ url_for('static', filename='js/quill.min.js') }}"></script>
 <script src="{{ url_for('static', filename='js/job-url-helpers.js') }}" type="module"></script>
+<script src="{{ url_for('static', filename='js/geo-dict.js') }}" type="module"></script>
+ 
 
 <style>
   .card { border:1px solid #e5e7eb; border-radius:12px; background:#fff; }
   .btn { padding:8px 12px; border:1px solid #e5e7eb; border-radius:8px; cursor:pointer; background:#f9fafb; }
   .btn.primary { background:#eef2ff; border-color:#c7d2fe; }
+  .btn[disabled], .btn.disabled { opacity:.6; cursor:not-allowed; }
   .form-shell { max-width: 900px; margin: 0 auto; background: #fff; padding: 16px; border-radius: 8px; border:1px solid #e5e7eb; }
   .grid { display:grid; grid-template-columns: 220px 1fr; gap: 10px 14px; align-items: center; }
   .grid .label { align-self: center; }
   label.required::after { content:" *"; color:#b91c1c; }
   .muted { color:#6b7280; }
-  .err { color:#b91c1c; }
+  .err { color:#b91c1c; margin-top:4px; }
   .hidden { display:none; }
   input[type="text"], input[type="url"], textarea, select {
     width: 100%; box-sizing: border-box; padding: 8px; border:1px solid #d1d5db; border-radius:6px;
@@ -23,11 +26,25 @@
   .help-nuggets { margin-top: 4px; display:flex; flex-wrap: wrap; gap:6px; }
   .help-nuggets .nugget { font-size: 12px; color:#6b7280; border:1px dashed #cbd5e1; padding:2px 6px; border-radius:9999px; cursor:pointer; }
   /* Buttons top */
-  .actions-top { display:flex; gap:8px; margin-bottom:12px; }
+  .actions-top { display:flex; gap:8px; margin-bottom:6px; align-items:center; }
+  .actions-top a[aria-disabled="true"] { pointer-events:none; opacity:.6; }
 
   /* Locations editor */
-  .loc-row { display:grid; grid-template-columns: 160px 90px 1fr auto; gap:8px; align-items:center; margin-bottom:8px; }
-  .loc-row input { width:100%; }
+  /* Country | City | Delete */
+  .loc-row {
+    display:grid;
+    /* Use minmax(0,1fr) so long country names don't starve the City column */
+    grid-template-columns: minmax(0,1fr) minmax(0,1fr) max-content;
+    gap:8px; align-items:center; margin-bottom:8px;
+  }
+  .loc-row input { width:100%; min-width:0; }       /* allow shrinking in grid */
+  .loc-row .country, .loc-row .city { min-width:0; } /* belt-and-suspenders */
+  .loc-row .cc { display:none; } /* hide country code */
+  .loc-row button[data-act="del"] {
+    width:28px; height:28px; padding:0;
+    text-align:center; line-height:1; box-sizing:border-box;
+    display:inline-flex; align-items:center; justify-content:center;
+  }  
   .loc-actions { display:flex; gap:8px; }
   .section-subtle { padding:10px; border:1px dashed #e5e7eb; border-radius:8px; background:#fafafa; }
   details.advanced summary { cursor:pointer; color:#374151; }
@@ -45,8 +62,9 @@
 <div class="form-shell">
   <div class="actions-top">
     <button id="btnCreate" class="btn primary">Create</button>
-    <a href="{{ url_for('index') }}" class="btn">Cancel</a>
+    <a id="btnCancel" href="{{ url_for('index') }}" class="btn">Cancel</a>
   </div>
+  <div id="err" class="err hidden" role="alert"></div>
 
   <form id="jobForm" class="grid" onsubmit="return false;">
     <!-- URL first (mandatory) -->
@@ -83,7 +101,8 @@
     <div>
       <div id="locations" class="section-subtle"></div>
       <div class="loc-actions" style="margin-top:8px;">
-        <button type="button" class="btn" id="btnAddLoc">+ Add location</button>
+        <button type="button" class="btn" id="btnAddCountry">+ More countries</button>
+        <button type="button" class="btn" id="btnAddCity">+ More cities</button>
       </div>
       <div class="muted" style="font-size:12px; margin-top:4px;">
         You can add multiple countries and cities. Example: DE: Berlin · ES: Madrid · GB: London
@@ -169,13 +188,14 @@
 
   </form>
 
-  <div id="err" class="err hidden" role="alert"></div>
 </div>
 
 
 
 <script type="module">
   import { deduceFromUrl } from "{{ url_for('static', filename='js/job-url-helpers.js') }}";
+  import { loadGeoDict, countryLookup, prioritizedCountries, citiesByCountry } from "{{ url_for('static', filename='js/geo-dict.js') }}";
+ 
 
   const el = (id) => document.getElementById(id);
 
@@ -189,10 +209,13 @@
   const tenantInput = el('providerTenant');
   const titleInput = el('title');
   const errEl = el('err');
+  const btnCreate = el('btnCreate');
+  const btnCancel = el('btnCancel');  
 
   // Locations editor
   const locHost = el('locations');
-  el('btnAddLoc').addEventListener('click', () => addLocRow());
+  el('btnAddCountry').addEventListener('click', () => addLocRow());
+  el('btnAddCity').addEventListener('click', () => addCityRowFromLast());
 
   // --- Quill init ---
   const quill = new Quill('#descEditor', {
@@ -215,6 +238,15 @@
   }
   quill.on('text-change', updateDescCount);
   updateDescCount();
+
+  // Build countries datalist once geo dict is loaded
+  const countriesList = document.createElement('datalist');
+  countriesList.id = 'countriesList';
+  document.body.appendChild(countriesList);
+
+  await loadGeoDict(); // fetch /static/data/geo.sample.json
+  countriesList.innerHTML = prioritizedCountries().map(c => `<option value="${c.name}"></option>`).join('');
+
 
   // Client-side sanitize: remove dangerous tags/attrs; allow links
   function sanitizeClientHtml(html) {
@@ -266,17 +298,98 @@
   }
 
 
+  function cityDatalistId(cc) { return `cities_${cc}`; }
 
   function addLocRow(init = {}) {
     const row = document.createElement('div');
     row.className = 'loc-row';
     row.innerHTML = `
-      <input type="text" placeholder="Country (name)" value="${init.countryName || ''}" data-k="countryName">
-      <input type="text" placeholder="CC" value="${(init.countryCode || '').toUpperCase()}" maxlength="2" data-k="countryCode" style="text-transform:uppercase;">
-      <input type="text" placeholder="City (optional)" value="${init.cityName || ''}" data-k="cityName">
-      <button type="button" class="btn" data-act="del">✕</button>
+      <input type="text" class="country" placeholder="Country" list="countriesList" value="${init.countryName || ''}">
+      <input type="text" class="city" placeholder="City (optional)" value="${init.cityName || ''}" list="">
+      <button type="button" class="btn" data-act="del" aria-label="Remove location" title="Remove">✕</button>
     `;
     row.querySelector('[data-act="del"]').addEventListener('click', () => row.remove());
+    const countryInput = row.querySelector('.country');
+    const ccInput = row.querySelector('.cc');
+    const cityInput = row.querySelector('.city');
+
+    // Resolve initial country object (for prefilled rows)
+    const ccInit = (init.countryCode || '').toUpperCase();
+    const countryObj =
+      (ccInit && countryLookup(ccInit)) ||
+      (init.countryName && countryLookup(init.countryName)) || null;
+
+    function refreshCities() {
+      const m = countryLookup(countryInput.value);
+      const currentCC = (m?.code || '').toUpperCase();
+      const listId = cityDatalistId(currentCC || 'NONE');
+      let listEl = document.getElementById(listId);
+      if (!listEl) {
+        listEl = document.createElement('datalist');
+        listEl.id = listId;
+        document.body.appendChild(listEl);
+      }
+      const cities = citiesByCountry(currentCC);
+      listEl.innerHTML = cities.map(c => `<option value="${c}"></option>`).join('');
+      cityInput.setAttribute('list', listId);
+    }
+
+    // Do NOT normalize on every keystroke. Keep user control and only accept on Tab (if unambiguous) or on blur/change.
+    function clearCountryTransient() {
+      cityInput.value = '';
+      refreshCities();
+    }
+    function setCountryConfirmed(c) {
+      countryInput.value = c.name; // UI shows full country name only
+      cityInput.value = '';
+      refreshCities();
+    }
+    countryInput.addEventListener('input', () => {
+      // While typing, don't force-fill; just clear code/city until a confirm action happens
+      if (!countryInput.value.trim()) {
+        clearCountryTransient();
+        return;
+      }
+      // if user typed a complete exact match (name/code/Name (CC)), we still don't normalize here
+      // we wait for change/blur or Tab handler to confirm
+      clearCountryTransient();
+    });
+    countryInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Tab' && !e.shiftKey) {
+        const val = countryInput.value.trim();
+        const exact = countryLookup(val);
+        if (exact) {
+          setCountryConfirmed(exact);
+          return; // allow tab to move on naturally
+        }
+        const matches = window.countryMatches
+          ? window.countryMatches(val)
+          : prioritizedCountries().filter(x =>
+              x.name.toLowerCase().startsWith(val.toLowerCase()) ||
+              x.code.toLowerCase().startsWith(val.toLowerCase()));
+        if (matches.length === 1) {
+          setCountryConfirmed(matches[0]);
+        }
+        // In ambiguous cases, do nothing; user can arrow/select or keep typing.
+      }
+    });
+    function confirmOnResolve() {
+      const m = countryLookup(countryInput.value);
+      if (m) setCountryConfirmed(m);
+      else clearCountryTransient();
+    }
+    countryInput.addEventListener('change', confirmOnResolve);
+    countryInput.addEventListener('blur', confirmOnResolve);
+
+    // initialize country & city list for prefilled row
+    if (countryObj) {
+      // confirm normalized display and attach proper city list
+      setCountryConfirmed(countryObj);
+    } else if (ccInit) {
+      // fallback if only a code is known: set cities list based on code inference
+      refreshCities();
+    }
+
     locHost.appendChild(row);
   }
   // start with one empty row
@@ -286,17 +399,29 @@
     const rows = [...locHost.querySelectorAll('.loc-row')];
     const out = [];
     for (const r of rows) {
-      const cn = r.querySelector('[data-k="countryName"]').value.trim();
-      const cc = r.querySelector('[data-k="countryCode"]').value.trim().toUpperCase();
-      const city = r.querySelector('[data-k="cityName"]').value.trim();
-      if (!cn && !cc && !city) continue; // skip empty row
+      const countryDisplay = r.querySelector('.country').value.trim();
+      const city = r.querySelector('.city').value.trim();
+      const cm = countryLookup(countryDisplay);
+      const cn = cm ? cm.name : (countryDisplay || '');
+      const code = cm ? cm.code : null;
+      if (!cn && !code && !city) continue; // skip empty row
       out.push({
         countryName: cn || '', 
-        countryCode: cc || null,
+        countryCode: code || null,
         cityName: city || null
       });
     }
     return out;
+  }
+
+  function addCityRowFromLast() {
+    const rows = [...locHost.querySelectorAll('.loc-row')];
+    const last = rows[rows.length - 1];
+    if (!last) { addLocRow(); return; }
+    const disp = last.querySelector('.country')?.value || '';
+    const m = countryLookup(disp);
+    if (m) addLocRow({ countryName: m.name, countryCode: m.code });
+    else addLocRow();
   }
 
   // FoundOn nuggets
@@ -328,6 +453,22 @@
     if (provider && !providerInput.value.trim()) providerInput.value = provider;
     if (tenant && !tenantInput.value.trim()) tenantInput.value = tenant;
     if (title && !titleInput.value.trim()) titleInput.value = title;
+  });
+
+  // Submit UX: block/unblock
+  function setSubmitting(on) {
+    if (on) {
+      btnCreate.setAttribute('disabled','true');
+      btnCreate.textContent = 'Creating…';
+      btnCancel.setAttribute('aria-disabled','true');
+    } else {
+      btnCreate.removeAttribute('disabled');
+      btnCreate.textContent = 'Create';
+      btnCancel.removeAttribute('aria-disabled');
+    }
+  }
+  btnCancel.addEventListener('click', (e) => {
+    if (btnCancel.getAttribute('aria-disabled') === 'true') e.preventDefault();
   });
 
   // Create
@@ -370,7 +511,8 @@
       locations: readLocations()
     };
     if (!body.locations.length) delete body.locations;
-
+    
+    setSubmitting(true);
     try {
       const resp = await fetch('/ui/jobs', {
         method: 'POST',
@@ -388,6 +530,7 @@
     } catch (err) {
       errEl.textContent = `Create failed: ${err.message || err}`;
       errEl.classList.remove('hidden');
+      setSubmitting(false); // unblock on error
     }
   });
 </script>
