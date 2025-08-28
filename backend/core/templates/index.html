@@ -284,6 +284,8 @@
     const cityInput        = document.getElementById('f-city');
     const countryInput     = document.getElementById('f-country');
     const ignoreSelect     = document.getElementById('f-ignore'); 
+    // Route URLs we need in JS (server-provided)
+    const addNewHref = "{{ url_for('job_new') }}";    
 
     // ---------- Paging state ----------
     let pageSize = Number(sessionStorage.getItem('jobs.pageSize') || 25);
@@ -302,6 +304,17 @@
     let cities = [];       // ['Berlin']
     let countries = [];    // ['DE','Germany']
     let ignoreStatuses = [];// ['applied',...]    
+
+    // Small helper used by both the Filters "Clear" link and empty-state CTA
+    function doClearFilters(){
+      modes = []; cities = []; countries = []; ignoreStatuses = [];
+      modeChecks.forEach(c => c.checked = false);
+      cityInput.value = '';
+      countryInput.value = '';
+      for (const opt of ignoreSelect.options) opt.selected = false;
+      // clear mock chips too
+      document.querySelectorAll('[data-chip]').forEach(el => el.remove());
+    }
 
     // --- URL sync helpers ---
     function paramsFromState(){
@@ -416,6 +429,61 @@
         page = 1;
         loadPage();
       });
+    }
+
+    // ---------- Empty states ----------
+    function renderEmptyMyOnboard(){
+      listEl.innerHTML = `
+        <div class="card" style="padding:16px;">
+          <h4 style="margin:0 0 6px 0;">No personal jobs yet</h4>
+          <p class="muted" style="margin:0 0 10px 0;">
+            Looks like you don’t have anything in <em>My Jobs</em> yet. This tool helps you track applications, statuses, notes—
+            and later we’ll add CV matching and interview pointers.
+          </p>
+          <div style="display:flex; gap:10px; flex-wrap:wrap;">
+            <a class="button" href="${addNewHref}">+ Add a job</a>
+            <a class="button" href="#" id="cta-browse-open">Browse open opportunities</a>
+          </div>
+          <p class="muted" style="margin:10px 0 0 0; font-size:0.95rem;">
+            Tip: you can update statuses from your phone via our Telegram bot once linked.
+          </p>
+        </div>
+      `;
+      const browse = document.getElementById('cta-browse-open');
+      if (browse) {
+        browse.addEventListener('click', (e) => {
+          e.preventDefault();
+          currentCategory = 'open';
+          setActiveTab('open');
+          page = 1;
+          loadPage();
+        });
+      }
+    }
+
+    function renderEmptyGeneric(){
+      listEl.innerHTML = `
+        <div class="card" style="padding:16px;">
+          <h4 style="margin:0 0 6px 0;">Nothing matched</h4>
+          <p class="muted" style="margin:0 0 10px 0;">
+            Try relaxing your search, clearing filters, or add the job manually if you know it.
+            Heads-up: finalized jobs only appear in <strong>All Jobs</strong>.
+          </p>
+          <div style="display:flex; gap:10px; flex-wrap:wrap;">
+            <a class="button" href="#" id="cta-clear-filters">Clear filters</a>
+            <a class="button" href="${addNewHref}">+ Add a job</a>
+          </div>
+        </div>
+      `;
+      const clear = document.getElementById('cta-clear-filters');
+      if (clear) {
+        clear.addEventListener('click', (e) => {
+          e.preventDefault();
+          doClearFilters();
+          page = 1;
+          loadPage();
+        });
+      }
     }
 
     function summarizeLocations(row) {
@@ -535,7 +603,17 @@
           if (dbgJobs) { dbgJobs.style.opacity = 1; dbgJobs.textContent = JSON.stringify(data, null, 2); }
 
           if (items.length === 0) {
-            listEl.innerHTML = `<div class="card" style="padding:12px 16px;"><span class="muted">No data</span></div>`;
+            const defaultFilters =
+              !searchText &&
+              (!modes || modes.length === 0) &&
+              (!cities || cities.length === 0) &&
+              (!countries || countries.length === 0) &&
+              (!ignoreStatuses || ignoreStatuses.length === 0);
+            if (currentCategory === 'my' && defaultFilters) {
+              renderEmptyMyOnboard();
+            } else {
+              renderEmptyGeneric();
+            }
             setStatus('Ready', {ephemeral:true});
             renderPagination();
             return;
@@ -607,19 +685,14 @@
       filtersExpandLink.setAttribute('aria-expanded', String(!expanded));
       filtersPanel.style.display = expanded ? 'none' : 'block';
     });
-    filtersClearBtn.addEventListener('click', (e) => {
+    filtersClearLink.addEventListener('click', (e) => {
       e.preventDefault();
       // clear local state and inputs
-      modes = []; cities = []; countries = []; ignoreStatuses = [];
-      modeChecks.forEach(c => c.checked = false);
-      cityInput.value = ''; countryInput.value = '';
-      for (const opt of ignoreSelect.options) opt.selected = false;
-      // clear mock chips too
-      document.querySelectorAll('[data-chip]').forEach(el => el.remove());      
+      doClearFilters();
       page = 1;
       triggerSearch(); // reuse apply path
     });
-    filtersApplyBtn.addEventListener('click', (e) => {
+    filtersApplyLink.addEventListener('click', (e) => {
       e.preventDefault();
       // minimal wiring: collect current UI into state
       modes = modeChecks.filter(c => c.checked).map(c => c.value);

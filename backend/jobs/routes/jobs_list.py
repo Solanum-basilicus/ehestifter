@@ -48,7 +48,8 @@ def _parse_date(val: str | None) -> datetime | None:
 
 def _require_user_if_needed(req: func.HttpRequest, category: str, ignore_status: list[str]) -> str | None:
     uid = (req.headers.get("x-user-id") or req.params.get("userId") or "").strip()
-    if (category == "my") or ignore_status:
+    # We need a user for per-user status logic in both 'my' and 'open', and for ignore_status.
+    if (category in {"my", "open"}) or ignore_status:
         return normalize_guid(uid) if uid else None
     return normalize_guid(uid) if uid else None
 
@@ -108,8 +109,10 @@ def register(app: func.FunctionApp):
                 return func.HttpResponse("Invalid 'sort'", status_code=400)
 
             user_id = _require_user_if_needed(req, category, ignore_status)
-            if category == "my" and not user_id:
-                return func.HttpResponse("Missing user id (X-User-Id header) for category='my'", status_code=400)
+            if category in {"my", "open"} and not user_id:
+                return func.HttpResponse(
+                    "Missing user id (X-User-Id header) for category='my' or 'open'",
+                    status_code=400)
 
             # ----------------------------
             # Dynamic SQL assembly
@@ -139,12 +142,12 @@ def register(app: func.FunctionApp):
                 params.append(user_id)
                 params_count.append(user_id)
             elif category == "open":
-                # No final status recorded by anyone for this job
-                where.append("NOT EXISTS (SELECT 1 FROM dbo.UserJobStatus s WHERE s.JobOfferingId = j.Id AND LOWER(s.Status) IN (" +
-                             ",".join(["?"] * len(FINAL_STATUSES)) + "))")
-                for s in FINAL_STATUSES:
-                    params.append(s)
-                    params_count.append(s)
+                # For THIS user: no status at all (NULL) AND not created by me
+                # us join must be present (enforced above)
+                where.append("(us.Status IS NULL AND (j.CreatedByUserId IS NULL OR j.CreatedByUserId <> ?))")
+                params.append(user_id)            # for created-by check
+                params_count.append(user_id)
+
             # category 'all' adds nothing beyond IsDeleted = 0
 
             # Search
