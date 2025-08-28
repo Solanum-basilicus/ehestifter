@@ -2,6 +2,7 @@ import requests
 import json
 
 def test_jobs_apply_by_url(base_url, user_headers, shared_state, test_job_url2):
+    assert "job_id" in shared_state, "Job not created"
     """
     POST /jobs/apply-by-url should normalize the URL, create the job if needed,
     and set the user's status to Applied. It should return jobId, title, company, link.
