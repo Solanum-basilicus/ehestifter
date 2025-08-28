@@ -27,8 +27,11 @@ def create_blueprint(auth):
         except Exception:
             uid = "anon"
 
-        # Collect passthrough query params for upstream (future filters/search). Exclude paging.
+        # Collect passthrough query params for upstream Jobs API (category/search/sort/filters). Exclude paging here.
         forward_params = {k: v for k, v in request.args.items() if k not in {"limit", "offset"}}
+        # Provide a sensible default so users see data when jobs are system-created
+        if "category" not in forward_params:
+            forward_params["category"] = "my"
 
         # Build a stable short fingerprint of filters so keys stay compact.
         # Use 'nofilter' if no extra params are provided to avoid collisions/ambiguity.
@@ -48,12 +51,17 @@ def create_blueprint(auth):
             params = {"limit": str(limit), "offset": str(offset), **forward_params}
             # Pass user id in headers for provenance/authorization context (Jobs API may ignore today).
             headers = jobs_fx_headers(context={"userId": uid})
-            items = fx_get_json(
+            # Upstream returns an envelope: { category, limit, offset, total, sort, items: [...] }
+            envelope = fx_get_json(
                 f"{jobs_base()}/jobs",
                 headers=headers,
                 params=params
             )
-            return {"items": items, "limit": limit, "offset": offset, "received": len(items)}
+            # Be defensive: ensure limit/offset in envelope reflect what we asked
+            if isinstance(envelope, dict):
+                envelope.setdefault("limit", limit)
+                envelope.setdefault("offset", offset)
+            return envelope
 
         data = retry_until_ready(call, attempts=4, base_delay=0.75)
         if not data.get("error"): memo_put(cache_key, data)

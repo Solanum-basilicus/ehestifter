@@ -20,43 +20,155 @@
   tbody td.col-status { background: linear-gradient(90deg, rgba(124,58,237,.05), transparent 12px); }
   .chip { border:1px solid #ddd; border-radius:999px; padding:2px 8px; font-size:12px; line-height:20px; }
   .chip.muted { opacity:.75; }
-
+  /* --- Controls for categories / search / filters / sort / pagination --- */
+  .tabs { display:flex; gap:8px; margin: 8px 0 12px; flex-wrap:wrap; }
+  .tab { padding:6px 12px; border:1px solid #e5e7eb; border-radius:999px; background:#fff; cursor:pointer; }
+  .tab.active { background:#111827; color:#fff; border-color:#111827; }
+  .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  .input, .select, .button { border:1px solid #e5e7eb; border-radius:8px; padding:8px 10px; background:#fff; }
+  .button { cursor:pointer; }
+  .list-controls { border:1px solid #e5e7eb; border-radius:12px; background:#fff; padding:10px 12px; margin:12px 0; }
+  .filters { border-top:1px dashed #e5e7eb; padding-top:10px; margin-top:8px; }
+  .filters-header { display:flex; align-items:center; gap:12px; }
+  .chips { display:flex; gap:8px; flex-wrap:wrap; }
+  .sort-inline { display:flex; gap:8px; align-items:center; margin-left:auto; }
+  .pagination { margin-top:10px; display:flex; justify-content:flex-end; gap:8px; align-items:center; flex-wrap:wrap; color:#111827; }
+  .pagination .select { padding:6px 8px; }
+  .page-link { padding:2px 6px; border-radius:6px; border:1px solid transparent; cursor:pointer; }
+  .page-link.current { border-color:#e5e7eb; font-weight:600; }
+  /* Category bar with status left and +Add new right */
+  .catsbar { display:flex; justify-content:space-between; align-items:center; gap:12px; margin: 8px 0 8px; }
+  .catsbar-left { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .status-ephemeral { font-size:.9rem; color:#6b7280; transition: opacity .35s ease, visibility .35s ease; }
+  .status-ephemeral.fade { opacity:0; visibility:hidden; }  
+  @media (max-width: 720px) {
+    .sort-inline { width:100%; justify-content:flex-end; }
+    .pagination { justify-content:center; }
+    .catsbar { flex-direction:column; align-items:stretch; gap:8px; }
+    .catsbar > a { align-self:flex-end; }    
+  }
 </style>
 {% endblock %}
 
 {% block content %}
   <div style="max-width:1100px; margin:0 auto; padding:16px;">
-    <h3 style="display:flex; align-items:center; gap:10px; margin: 14px 0;">
-      I have those jobs for you
-      <a href="{{ url_for('job_new') }}"
-        style="font-size:.95rem; padding:6px 10px; border:1px solid #bbb; border-radius:6px; text-decoration:none;">
-        + Add new
-      </a>
-    </h3>
-
-    <div class="toolbar">
-      <div>
-        <label for="page-size">Rows per page:</label>
-        <select id="page-size">
-          <option value="10">10</option>
-          <option value="25" selected>25</option>
-          <option value="50">50</option>
-          <option value="100">100</option>
-        </select>
-        <span class="text-dim" id="jobs-status">Loading…</span>
+    <!-- Category bar: tabs + status (left), +Add new (right) -->
+    <div class="catsbar">
+      <div class="catsbar-left">
+        <div class="tabs" role="tablist" aria-label="Categories">
+          <button class="tab" data-cat="my"    role="tab" aria-selected="true">My Jobs</button>
+          <button class="tab" data-cat="open"  role="tab">Open Opportunities</button>
+          <button class="tab active" data-cat="all"  role="tab">All Jobs</button>
+        </div>
+        <span id="jobs-status" class="status-ephemeral">Loading…</span>
       </div>
-      <div class="pager">
-        <button id="prev" disabled>&larr; Prev</button>
-        <span class="nowrap">Page <span id="page-num">1</span></span>
-        <button id="next" disabled>Next &rarr;</button>
-        <button id="refresh">Refresh</button>
+      <a href="{{ url_for('job_new') }}" class="button">+ Add new</a>
+    </div>
+
+    <!-- List controls: Search + Filters (collapsed/expanded) + inline Sort -->
+    <div class="list-controls" aria-label="List controls">
+      <div class="row" aria-label="Search and sort">
+        <input class="input" id="searchText" style="flex:1; min-width:260px;" placeholder="Search…" aria-label="Search text" />
+        <label class="select" for="searchField">
+          <select id="searchField" aria-label="Search field">
+            <option value="title_company">Title+Company</option>
+            <option value="company">Company</option>
+            <option value="title">Title</option>
+            <option value="location">Location</option>
+            <option value="description">Description</option>
+          </select>
+        </label>
+        <button class="button" id="searchBtn">Search</button>
+        <div class="sort-inline" aria-label="Sort">
+          <span class="muted">Sort:</span>
+          <label class="select" for="sortSelect">
+            <select id="sortSelect" aria-label="Sort">
+              <option value="created_desc" selected>Created desc</option>
+              <option value="updated_desc">Last status update</option>
+              <option value="status_progression">Status progression</option>
+              <option value="location_az">Location (A→Z)</option>
+              <option value="created_asc">Created asc</option>
+              <option value="updated_asc">Last update asc</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      <!-- Filters (collapsed header) -->
+      <div class="filters" aria-label="Filters">
+        <div class="filters-header">
+          <div class="chips" id="activeChips" aria-label="Active filters">
+            <!-- Collapsed chips preview; filled dynamically later -->
+            <!-- Example placeholder chips for look & feel: -->
+            <!-- <span class="chip">Remote ×</span> <span class="chip">HQ: Berlin ×</span> -->
+          </div>
+          <div class="row" style="margin-left:auto;">
+            <button class="button" id="filtersExpandBtn" aria-expanded="false">Filters ⌄</button>
+            <button class="button" id="filtersClearBtn">Clear</button>
+          </div>
+        </div>
+        <!-- Expanded filter panel (mock) -->
+        <div id="filtersPanel" style="display:none; margin-top:10px;">
+          <div class="row" style="gap:16px; align-items:flex-start;">
+            <div>
+              <div class="muted" style="font-size:12px;">Mode</div>
+              <label><input type="checkbox" class="f-mode" value="remote"> Remote</label>
+              <label><input type="checkbox" class="f-mode" value="onsite"> Onsite</label>
+              <label><input type="checkbox" class="f-mode" value="hybrid"> Hybrid</label>
+            </div>
+            <div>
+              <div class="muted" style="font-size:12px;">Location (city)</div>
+              <input class="input" id="f-city" placeholder="e.g. Berlin" style="min-width:180px;">
+            </div>
+            <div>
+              <div class="muted" style="font-size:12px;">Location (country)</div>
+              <input class="input" id="f-country" placeholder="e.g. DE or Germany" style="min-width:200px;">
+            </div>
+            <div>
+              <div class="muted" style="font-size:12px;">Ignore status</div>
+              <select id="f-ignore" class="select" multiple size="4" style="min-width:220px;">
+                <!-- Mocked options; wire later to STATUS_OPTIONS -->
+                <option value="applied">Applied</option>
+                <option value="screening booked">Screening Booked</option>
+                <option value="screening done">Screening Done</option>
+                <option value="interview">Interview</option>
+                <option value="offer">Got Offer</option>
+              </select>
+            </div>
+            <div style="margin-left:auto; align-self:flex-end;">
+              <button class="button" id="filtersApplyBtn">Apply</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
+
+
 
     <div id="jobs-error" class="hidden"></div>
 
     <!-- Cards list -->
     <div id="jobs-list" class="cards" aria-busy="true"></div>
+
+    <!-- Compact bottom pagination -->
+    <div class="pagination" id="pagination" aria-label="Pagination">
+      <label class="select" for="pageSize">
+        <select id="pageSize" aria-label="Items per page">
+          <option value="10">10</option>
+          <option value="25" selected>25</option>
+          <option value="50">50</option>
+          <option value="100">100</option>
+        </select>
+      </label>
+      <span id="pageline">of <strong>0</strong> per page:</span>
+      <span class="page-link" data-act="first">« First</span>
+      <span class="page-link" data-act="prev">‹ Prev</span>
+      <span class="page-link current" data-page="1">1</span>
+      <span class="page-link" data-page="2">2</span>
+      <span class="page-link" data-page="3">3</span>
+      <span class="page-link">…</span>
+      <span class="page-link" data-act="last">Last »</span>
+      <span class="page-link" data-act="next">Next ›</span>
+    </div>    
 
     <details style="margin-top:16px;">
       <summary><p style="display:inline">Debug: Jobs API</p></summary>
@@ -136,30 +248,118 @@
     const statusEl = document.getElementById('jobs-status');
     const errEl = document.getElementById('jobs-error');
     const dbgJobs = document.getElementById('dbg-jobs');
-    const pageSizeSel = document.getElementById('page-size');
-    const prevBtn = document.getElementById('prev');
-    const nextBtn = document.getElementById('next');
     const refreshBtn = document.getElementById('refresh');
-    const pageNumEl = document.getElementById('page-num');
+    const tabs = Array.from(document.querySelectorAll('.tab[data-cat]'));
+    const searchFieldSel = document.getElementById('searchField');
+    const searchTextEl = document.getElementById('searchText');
+    const searchBtn = document.getElementById('searchBtn');
+    const sortSel = document.getElementById('sortSelect');
+    const pageline = document.getElementById('pageline');
+    const pageSizeSel = document.getElementById('pageSize');
+    const paginationEl = document.getElementById('pagination');
+    // Filters (mock wiring)
+    const filtersExpandBtn = document.getElementById('filtersExpandBtn');
+    const filtersClearBtn  = document.getElementById('filtersClearBtn');
+    const filtersPanel     = document.getElementById('filtersPanel');
+    const modeChecks       = Array.from(document.querySelectorAll('.f-mode'));
+    const cityInput        = document.getElementById('f-city');
+    const countryInput     = document.getElementById('f-country');
+    const ignoreSelect     = document.getElementById('f-ignore');
+    const filtersApplyBtn  = document.getElementById('filtersApplyBtn');    
 
     // ---------- Paging state ----------
     let pageSize = Number(sessionStorage.getItem('jobs.pageSize') || 25);
     if (![10,25,50,100].includes(pageSize)) pageSize = 25;
+
     pageSizeSel.value = String(pageSize);
 
-    let page = 1;
-    let lastReceived = 0;
+    let page = 1;             // 1-based
+    let total = 0;            // from API
+    let currentCategory = 'my'; // default to 'my' for user convinience
+    let currentSort = 'created_desc';
+    let searchField = 'title_company';
+    let searchText = '';
+    // Filter state (mocked; wire progressively)
+    let modes = [];        // ['remote','onsite','hybrid']
+    let cities = [];       // ['Berlin']
+    let countries = [];    // ['DE','Germany']
+    let ignoreStatuses = [];// ['applied',...]    
 
+    function setStatus(text, {error=false, ephemeral=false} = {}){
+      if (!statusEl) return;
+      statusEl.classList.remove('fade');
+      statusEl.textContent = text;
+      if (error) {
+        statusEl.style.color = '#9b1c1c'; // subtle red
+        return;
+      }
+      statusEl.style.color = '#6b7280';
+      if (ephemeral) {
+        // fade out after 5s
+        setTimeout(() => statusEl.classList.add('fade'), 5000);
+      }
+    }
     function setLoading(loading, note='') {
       listEl?.setAttribute('aria-busy', loading ? 'true' : 'false');
-      statusEl.textContent = loading ? (note || 'Loading…') : (note || `Showing ${lastReceived} row(s)`);
-      if (loading) errEl?.setAttribute('hidden', 'hidden');
+      if (loading) {
+        errEl?.setAttribute('hidden', 'hidden');
+        setStatus(note || 'Loading…', {error:false, ephemeral:false});
+      }
     }
 
-    function setPagerState() {
-      pageNumEl.textContent = String(page);
-      prevBtn.disabled = page <= 1;
-      nextBtn.disabled = lastReceived < pageSize;
+    function buildApiUrl(){
+      const offset = (page - 1) * pageSize;
+      const p = new URLSearchParams();
+      p.set('category', currentCategory);
+      if (searchText) {
+        p.set('q', searchText);
+        p.set('search_field', searchField);
+      }
+      p.set('sort', currentSort);
+      // Apply filters if present (minimal wiring now: mode, city, country, ignore_status)
+      modes.forEach(m => p.append('mode', m));
+      cities.forEach(c => p.append('city', c));
+      countries.forEach(cn => p.append('country', cn));
+      ignoreStatuses.forEach(s => p.append('ignore_status', s));      
+      p.set('limit', String(pageSize));
+      p.set('offset', String(offset));
+      return `/ui/jobs?${p.toString()}`;
+    }
+
+    function renderPagination(){
+      const lastPage = Math.max(1, Math.ceil(total / pageSize));
+      // Build simple window around current page: 1 2 3 ... last
+      const nums = [];
+      const pushNum = (n) => nums.push(`<span class="page-link ${n===page?'current':''}" data-page="${n}">${n}</span>`);
+      const windowSize = 3;
+      const start = 1;
+      const end = Math.min(lastPage, windowSize);
+      for (let n = start; n <= end; n++) pushNum(n);
+      if (lastPage > end) {
+        nums.push('<span class="page-link">…</span>');
+        nums.push(`<span class="page-link" data-page="${lastPage}">${lastPage}</span>`);
+      }
+      pageline.innerHTML = `of <strong>${total}</strong> per page:`;
+      // Replace number links block (between prev/next clusters)
+      const parts = [
+        // left cluster already in DOM as labeled spans; rebuild whole line for simplicity:
+        `<label class="select"><select id="pageSize"><option value="10"${pageSize===10?' selected':''}>10</option><option value="25"${pageSize===25?' selected':''}>25</option><option value="50"${pageSize===50?' selected':''}>50</option><option value="100"${pageSize===100?' selected':''}>100</option></select></label>`,
+        `<span id="pageline">of <strong>${total}</strong> per page:</span>`,
+        `<span class="page-link" data-act="first">« First</span>`,
+        `<span class="page-link" data-act="prev">‹ Prev</span>`,
+        ...nums,
+        `<span class="page-link" data-act="next">Next ›</span>`,
+        `<span class="page-link" data-act="last">Last »</span>`
+      ];
+      paginationEl.innerHTML = parts.join('\n');
+      // rewire pageSize element after re-render
+      const newSel = paginationEl.querySelector('#pageSize');
+      newSel.addEventListener('change', () => {
+        pageSize = Number(newSel.value);
+        sessionStorage.setItem('jobs.pageSize', String(pageSize));
+        page = 1;
+        loadPage();
+      });
     }
 
     function summarizeLocations(row) {
@@ -270,22 +470,23 @@
       const offset = (page - 1) * pageSize;
       setLoading(true, `Loading page ${page}…`);
       try {
-        const data = await fetchWithRetry(`/ui/jobs?limit=${pageSize}&offset=${offset}`, 4);
+        const url = buildApiUrl();
+        const data = await fetchWithRetry(url, 4);
         if (data && !data.error) {
           const items = Array.isArray(data.items) ? data.items : [];
-          lastReceived = data.received || items.length;
+          total = Number(data.total || 0);
           if (dbgJobs) { dbgJobs.style.opacity = 1; dbgJobs.textContent = JSON.stringify(data, null, 2); }
 
           if (items.length === 0) {
             listEl.innerHTML = `<div class="card" style="padding:12px 16px;"><span class="muted">No data</span></div>`;
-            setLoading(false, 'No rows');
-            setPagerState();
+            setStatus('Ready', {ephemeral:true});
+            renderPagination();
             return;
           }
 
           renderCards(items);
-          setLoading(false);
-          setPagerState();
+          setStatus('Ready', {ephemeral:true});
+          renderPagination();
 
           // Fetch statuses asynchronously
           loadStatusesFor(items.map(x => x.Id).filter(Boolean));
@@ -303,20 +504,87 @@
           errEl.style.display = 'none';
           loadPage();
         });
-        setLoading(false, 'Failed to load');
+        setStatus('Failed to load', {error:true, ephemeral:false});
       }
     }
 
     // ---------- Wiring ----------
-    pageSizeSel.addEventListener('change', () => {
-      pageSize = Number(pageSizeSel.value);
-      sessionStorage.setItem('jobs.pageSize', String(pageSize));
+    refreshBtn.addEventListener('click', loadPage);
+
+    // Category tabs
+    tabs.forEach(btn => {
+      btn.addEventListener('click', () => {
+        tabs.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentCategory = btn.dataset.cat || 'all';
+        page = 1;
+        loadPage();
+      });
+    });
+
+    // Search
+    function triggerSearch(){
+      searchField = searchFieldSel.value || 'title_company';
+      searchText = (searchTextEl.value || '').trim();
+      page = 1;
+      loadPage();
+    }
+    searchBtn.addEventListener('click', triggerSearch);
+    searchTextEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') triggerSearch();
+    });
+    searchFieldSel.addEventListener('change', () => {
+      // sticky field selection; only reload when query exists
+      if ((searchTextEl.value || '').trim()) triggerSearch();
+    });
+
+    // Sort
+    sortSel.addEventListener('change', () => {
+      currentSort = sortSel.value || 'created_desc';
       page = 1;
       loadPage();
     });
-    prevBtn.addEventListener('click', () => { if (page > 1) { page -= 1; loadPage(); } });
-    nextBtn.addEventListener('click', () => { if (!nextBtn.disabled) { page += 1; loadPage(); } });
-    refreshBtn.addEventListener('click', loadPage);
+
+    // Filters (mock behavior)
+    filtersExpandBtn.addEventListener('click', () => {
+      const expanded = filtersExpandBtn.getAttribute('aria-expanded') === 'true';
+      filtersExpandBtn.setAttribute('aria-expanded', String(!expanded));
+      filtersPanel.style.display = expanded ? 'none' : 'block';
+    });
+    filtersClearBtn.addEventListener('click', () => {
+      // clear local state and inputs
+      modes = []; cities = []; countries = []; ignoreStatuses = [];
+      modeChecks.forEach(c => c.checked = false);
+      cityInput.value = ''; countryInput.value = '';
+      for (const opt of ignoreSelect.options) opt.selected = false;
+      page = 1;
+      triggerSearch(); // reuse apply path
+    });
+    filtersApplyBtn.addEventListener('click', () => {
+      // minimal wiring: collect current UI into state
+      modes = modeChecks.filter(c => c.checked).map(c => c.value);
+      const cval = (cityInput.value || '').trim();   cities = cval ? [cval] : [];
+      const kval = (countryInput.value || '').trim();countries = kval ? [kval] : [];
+      ignoreStatuses = Array.from(ignoreSelect.selectedOptions).map(o => o.value);
+      page = 1;
+      triggerSearch(); // Search acts as Apply
+    });
+
+    // Pagination (delegate)
+    paginationEl.addEventListener('click', (e) => {
+      const t = e.target.closest('.page-link');
+      if (!t) return;
+      const act = t.getAttribute('data-act');
+      const toPageAttr = t.getAttribute('data-page');
+      const lastPage = Math.max(1, Math.ceil(total / pageSize));
+      if (act === 'first') page = 1;
+      else if (act === 'prev') page = Math.max(1, page - 1);
+      else if (act === 'next') page = Math.min(lastPage, page + 1);
+      else if (act === 'last') page = lastPage;
+      else if (toPageAttr) page = Math.max(1, Math.min(lastPage, Number(toPageAttr)));
+      else return;
+      loadPage();
+    });
 
     document.addEventListener('DOMContentLoaded', loadPage);
   })();
