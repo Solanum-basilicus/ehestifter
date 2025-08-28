@@ -27,6 +27,11 @@ def test_job_url():
     return os.getenv("TEST_JOB_LINK")
 
 @pytest.fixture(scope="session")
+def test_job_url2():
+    # this one is botched, with tow "?" in url
+    return os.getenv("TEST_JOB_LINK2")    
+
+@pytest.fixture(scope="session")
 def function_key():
     return os.getenv("AZURE_FUNCTION_KEY")
 

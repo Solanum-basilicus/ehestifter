@@ -8,6 +8,39 @@ from helpers.ids import normalize_guid, is_guid
 from helpers.history import insert_history
 
 
+def upsert_user_status(cur, job_id: str, user_id: str, status: str) -> None:
+    """
+    Core status upsert logic extracted so it can be reused (e.g., by /jobs/apply-by-url).
+    Accepts an open cursor and DOES NOT commit.
+    Raises 404-equivalent by returning False if job missing is the caller's concern.
+    """
+    # Ensure job exists
+    cur.execute("SELECT 1 FROM dbo.JobOfferings WHERE Id = ? AND IsDeleted = 0", job_id)
+    if cur.fetchone() is None:
+        raise ValueError("Job not found")
+
+    cur.execute("""
+        SELECT Status FROM dbo.UserJobStatus
+        WHERE JobOfferingId = ? AND UserId = ?
+    """, (job_id, user_id))
+    row = cur.fetchone()
+    prev_status = row[0] if row else "Unset"
+
+    cur.execute("""
+        MERGE dbo.UserJobStatus AS target
+        USING (SELECT ? AS JobOfferingId, ? AS UserId) AS src
+        ON target.JobOfferingId = src.JobOfferingId AND target.UserId = src.UserId
+        WHEN MATCHED THEN
+          UPDATE SET Status = ?, LastUpdated = SYSDATETIME()
+        WHEN NOT MATCHED THEN
+          INSERT (JobOfferingId, UserId, Status, LastUpdated)
+          VALUES (src.JobOfferingId, src.UserId, ?, SYSDATETIME());
+    """, (job_id, user_id, status, status))
+
+    insert_history(cur, job_id, "status_changed",
+                   {"userId": user_id, "from": prev_status, "to": status},
+                   "user", user_id)
+
 def register(app: func.FunctionApp):
 
     @app.route(route="jobs/{jobId}/status", methods=["PUT"])
@@ -33,31 +66,12 @@ def register(app: func.FunctionApp):
             conn = get_connection()
             cur = conn.cursor()
 
-            cur.execute("SELECT 1 FROM dbo.JobOfferings WHERE Id = ? AND IsDeleted = 0", job_id)
-            if cur.fetchone() is None:
-                return func.HttpResponse("Job not found", status_code=404)
-
-            cur.execute("""
-                SELECT Status FROM dbo.UserJobStatus
-                WHERE JobOfferingId = ? AND UserId = ?
-            """, (job_id, user_id))
-            row = cur.fetchone()
-            prev_status = row[0] if row else "Unset"
-
-            cur.execute("""
-                MERGE dbo.UserJobStatus AS target
-                USING (SELECT ? AS JobOfferingId, ? AS UserId) AS src
-                ON target.JobOfferingId = src.JobOfferingId AND target.UserId = src.UserId
-                WHEN MATCHED THEN
-                  UPDATE SET Status = ?, LastUpdated = SYSDATETIME()
-                WHEN NOT MATCHED THEN
-                  INSERT (JobOfferingId, UserId, Status, LastUpdated)
-                  VALUES (src.JobOfferingId, src.UserId, ?, SYSDATETIME());
-            """, (job_id, user_id, status, status))
-
-            insert_history(cur, job_id, "status_changed",
-                           {"userId": user_id, "from": prev_status, "to": status},
-                           "user", user_id)
+            try:
+                upsert_user_status(cur, job_id, user_id, status)
+            except ValueError as ve:
+                if str(ve) == "Job not found":
+                    return func.HttpResponse("Job not found", status_code=404)
+                return func.HttpResponse(str(ve), status_code=400)
 
             conn.commit()
             return func.HttpResponse(

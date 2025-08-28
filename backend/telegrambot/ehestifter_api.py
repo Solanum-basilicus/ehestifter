@@ -172,9 +172,11 @@ class EhestifterApi:
         return True, "ok"
 
     async def mark_applied_by_url(self, telegram_user_id: int, url: str):
-        ep = f"{JOBS_BASE}/user-statuses/applied-by-url"
-        r = await self._safe_post(ep, headers=self._jobs_hdr(),
-                                  json={"telegram_user_id": telegram_user_id, "url": url})
+        user_id = await self._resolve_user_id(telegram_user_id)
+        ep = f"{JOBS_BASE}/jobs/apply-by-url"
+        hdrs = self._jobs_hdr().copy()
+        hdrs["X-User-Id"] = str(user_id)
+        r = await self._safe_post(ep, headers=hdrs, json={"url": url, "status": "Applied"})
         data = r.json()
         job = ApiJob(id=data["jobId"], title=data["title"], company=data["company"])
         return job, data["link"]
