@@ -131,13 +131,13 @@ def register(app: func.FunctionApp):
             # Category constraints
             if category == "my":
                 # created by me OR I have a non-final status on it
-                where.append("(j.CreatedByUserId = ? OR (us.Status IS NOT NULL AND LOWER(us.Status) NOT IN (" +
-                             ",".join(["?"] * len(FINAL_STATUSES)) + ")))")
+                where.append("(LOWER(us.Status) NOT IN (" + ",".join(["?"] * len(FINAL_STATUSES)) + 
+                                ") AND (j.CreatedByUserId = ? OR us.Status IS NOT NULL ))")
+                for s in FINAL_STATUSES:
+                    params.append(s.lower())
+                    params_count.append(s.lower())
                 params.append(user_id)
                 params_count.append(user_id)
-                for s in FINAL_STATUSES:
-                    params.append(s)
-                    params_count.append(s)
             elif category == "open":
                 # No final status recorded by anyone for this job
                 where.append("NOT EXISTS (SELECT 1 FROM dbo.UserJobStatus s WHERE s.JobOfferingId = j.Id AND LOWER(s.Status) IN (" +
