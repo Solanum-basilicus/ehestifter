@@ -526,7 +526,7 @@
       const title = displayTitle(row);
       const company = row.HiringCompanyName || '';
       const geo = summarizeLocations(row);
-      const firstSeen = row.FirstSeenAt || '';
+      const firstSeen = row.FirstSeenAt || row.CreatedAt || row.LastUpdateAt || '';
       const sid = `ust_${row.Id}`;
       const via = (row.FoundOn || '').trim();
 

@@ -304,6 +304,7 @@ def register(app: func.FunctionApp):
                   j.Id, j.Title, j.ExternalId, j.FoundOn,
                   j.HiringCompanyName, j.PostingCompanyName,
                   j.RemoteType,
+                  j.FirstSeenAt,
                   j.CreatedAt, j.UpdatedAt,
                   us.Status AS UserStatus,
                   us.LastUpdated AS UserStatusLastUpdated,
