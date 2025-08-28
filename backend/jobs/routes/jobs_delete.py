@@ -1,8 +1,8 @@
 import logging
 import azure.functions as func
-from db import get_connection
-from auth import detect_actor
-from history import insert_history
+from helpers.db import get_connection
+from helpers.auth import detect_actor
+from helpers.history import insert_history
 
 def register(app: func.FunctionApp):
 

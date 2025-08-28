@@ -1,9 +1,9 @@
 import json
 import logging
 import azure.functions as func
-from db import get_connection
-from ids import normalize_guid, is_guid
-from history import make_history_cursor, parse_history_cursor
+from helpers.db import get_connection
+from helpers.ids import normalize_guid, is_guid
+from helpers.history import make_history_cursor, parse_history_cursor
 
 def register(app: func.FunctionApp):
 

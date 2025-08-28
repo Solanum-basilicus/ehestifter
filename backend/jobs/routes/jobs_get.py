@@ -1,9 +1,9 @@
 import json
 import logging
 import azure.functions as func
-from db import get_connection
-from history import DatetimeEncoder
-from ids import normalize_guid, normalize_guid_in_dict
+from helpers.db import get_connection
+from helpers.history import DatetimeEncoder
+from helpers.ids import normalize_guid, normalize_guid_in_dict
 
 def register(app: func.FunctionApp):
 

@@ -1,10 +1,10 @@
 import json
 import logging
 import azure.functions as func
-from db import get_connection
-from auth import detect_actor
-from history import insert_history
-from validation import validate_job_payload
+from helpers.db import get_connection
+from helpers.auth import detect_actor
+from helpers.history import insert_history
+from helpers.validation import validate_job_payload
 
 # mapping: JSON -> DB column
 _MAPPING = {

@@ -1,9 +1,9 @@
 import json
 import logging
 import azure.functions as func
-from db import get_connection
-from auth import UnauthorizedError, get_current_user_id
-from ids import normalize_guid, is_guid
+from helpers.db import get_connection
+from helpers.auth import UnauthorizedError, get_current_user_id
+from helpers.ids import normalize_guid, is_guid
 
 def register(app: func.FunctionApp):
 

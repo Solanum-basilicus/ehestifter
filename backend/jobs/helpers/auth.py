@@ -1,7 +1,7 @@
 # auth.py
 import uuid
 import azure.functions as func
-from ids import is_guid, normalize_guid
+from helpers.ids import is_guid, normalize_guid
 
 class UnauthorizedError(Exception):
     pass

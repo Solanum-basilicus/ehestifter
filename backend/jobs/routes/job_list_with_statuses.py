@@ -4,10 +4,10 @@ from typing import List, Tuple
 
 import azure.functions as func
 
-from db import get_connection
-from history import DatetimeEncoder
-from ids import normalize_guid, is_guid
-from domain_constants import FINAL_STATUSES
+from helpers.db import get_connection
+from helpers.history import DatetimeEncoder
+from helpers.ids import normalize_guid, is_guid
+from helpers.domain_constants import FINAL_STATUSES
 
 def register(app: func.FunctionApp):
 
