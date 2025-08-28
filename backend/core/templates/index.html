@@ -36,6 +36,23 @@
   .pagination .select { padding:6px 8px; }
   .page-link { padding:2px 6px; border-radius:6px; border:1px solid transparent; cursor:pointer; }
   .page-link.current { border-color:#e5e7eb; font-weight:600; }
+  /* Link-like action buttons (compact, not nav) */
+  .linklike { background:none; border:none; padding:0; margin:0 6px; color:#111827; cursor:pointer; text-decoration:underline dotted; }
+  .linklike:hover { text-decoration:underline; }
+  /* Filters header layout: keep left/right on top row, chips can wrap */
+  .filters-header { display:flex; align-items:flex-start; gap:12px; flex-wrap:wrap; }
+  .filters-left { display:flex; align-items:center; gap:8px; }
+  .filters-right { margin-left:auto; display:flex; gap:8px; align-items:flex-start; }
+  .chips { flex:1 1 auto; min-width:200px; }  
+  /* Link-like action buttons (compact) */
+  .linklike { background:none; border:none; padding:0; margin:0 6px; color:#111827; cursor:pointer; text-decoration:underline dotted; }
+  .linklike:hover { text-decoration:underline; }
+  .filters-header { display:flex; align-items:flex-start; gap:12px; flex-wrap:wrap; }
+  .filters-left { display:flex; align-items:center; gap:8px; }
+  .filters-right { margin-left:auto; display:flex; gap:8px; align-items:flex-start; }
+  /* Keep left & right controls on top row while chips can wrap below */
+  .filters { display:block; }
+  .chips { flex:1 1 auto; min-width:200px; }  
   /* Category bar with status left and +Add new right */
   .catsbar { display:flex; justify-content:space-between; align-items:center; gap:12px; margin: 8px 0 8px; }
   .catsbar-left { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
@@ -56,9 +73,9 @@
     <div class="catsbar">
       <div class="catsbar-left">
         <div class="tabs" role="tablist" aria-label="Categories">
-          <button class="tab" data-cat="my"    role="tab" aria-selected="true">My Jobs</button>
+          <button class="tab active" data-cat="my"    role="tab" aria-selected="true">My Jobs</button>
           <button class="tab" data-cat="open"  role="tab">Open Opportunities</button>
-          <button class="tab active" data-cat="all"  role="tab">All Jobs</button>
+          <button class="tab" data-cat="all"   role="tab">All Jobs</button>
         </div>
         <span id="jobs-status" class="status-ephemeral">Loading…</span>
       </div>
@@ -96,14 +113,17 @@
       <!-- Filters (collapsed header) -->
       <div class="filters" aria-label="Filters">
         <div class="filters-header">
-          <div class="chips" id="activeChips" aria-label="Active filters">
-            <!-- Collapsed chips preview; filled dynamically later -->
-            <!-- Example placeholder chips for look & feel: -->
-            <!-- <span class="chip">Remote ×</span> <span class="chip">HQ: Berlin ×</span> -->
+          <div class="filters-left">
+            <a href="#" class="linklike" id="filtersExpandLink" aria-expanded="false">Filters ⌄</a>
           </div>
-          <div class="row" style="margin-left:auto;">
-            <button class="button" id="filtersExpandBtn" aria-expanded="false">Filters ⌄</button>
-            <button class="button" id="filtersClearBtn">Clear</button>
+          <div class="chips" id="activeChips" aria-label="Active filters">
+            <!-- Prefilled mock chips -->
+            <span class="chip" data-chip="mode:remote">Mode: Remote ×</span>
+            <span class="chip" data-chip="country:Germany">Country: Germany ×</span>
+          </div>
+          <div class="filters-right">
+            <a href="#" class="linklike" id="filtersApplyLink" title="Apply filters">Apply</a>
+            <a href="#" class="linklike" id="filtersClearLink" title="Clear filters">Clear</a>
           </div>
         </div>
         <!-- Expanded filter panel (mock) -->
@@ -134,9 +154,7 @@
                 <option value="offer">Got Offer</option>
               </select>
             </div>
-            <div style="margin-left:auto; align-self:flex-end;">
-              <button class="button" id="filtersApplyBtn">Apply</button>
-            </div>
+            <div style="margin-left:auto; align-self:flex-end;"></div>
           </div>
         </div>
       </div>
@@ -248,7 +266,6 @@
     const statusEl = document.getElementById('jobs-status');
     const errEl = document.getElementById('jobs-error');
     const dbgJobs = document.getElementById('dbg-jobs');
-    const refreshBtn = document.getElementById('refresh');
     const tabs = Array.from(document.querySelectorAll('.tab[data-cat]'));
     const searchFieldSel = document.getElementById('searchField');
     const searchTextEl = document.getElementById('searchText');
@@ -258,14 +275,15 @@
     const pageSizeSel = document.getElementById('pageSize');
     const paginationEl = document.getElementById('pagination');
     // Filters (mock wiring)
-    const filtersExpandBtn = document.getElementById('filtersExpandBtn');
-    const filtersClearBtn  = document.getElementById('filtersClearBtn');
+    const filtersExpandLink = document.getElementById('filtersExpandLink');
+    const filtersClearLink  = document.getElementById('filtersClearLink');
+    const filtersApplyLink  = document.getElementById('filtersApplyLink');
     const filtersPanel     = document.getElementById('filtersPanel');
+    const activeChips       = document.getElementById('activeChips');
     const modeChecks       = Array.from(document.querySelectorAll('.f-mode'));
     const cityInput        = document.getElementById('f-city');
     const countryInput     = document.getElementById('f-country');
-    const ignoreSelect     = document.getElementById('f-ignore');
-    const filtersApplyBtn  = document.getElementById('filtersApplyBtn');    
+    const ignoreSelect     = document.getElementById('f-ignore'); 
 
     // ---------- Paging state ----------
     let pageSize = Number(sessionStorage.getItem('jobs.pageSize') || 25);
@@ -275,7 +293,7 @@
 
     let page = 1;             // 1-based
     let total = 0;            // from API
-    let currentCategory = 'my'; // default to 'my' for user convinience
+    let currentCategory = 'my'; // default to 'my' (URL can override)
     let currentSort = 'created_desc';
     let searchField = 'title_company';
     let searchText = '';
@@ -284,6 +302,58 @@
     let cities = [];       // ['Berlin']
     let countries = [];    // ['DE','Germany']
     let ignoreStatuses = [];// ['applied',...]    
+
+    // --- URL sync helpers ---
+    function paramsFromState(){
+      const p = new URLSearchParams();
+      p.set('category', currentCategory);
+      if (searchText) {
+        p.set('q', searchText);
+        p.set('search_field', searchField);
+      }
+      p.set('sort', currentSort);
+      modes.forEach(m => p.append('mode', m));
+      cities.forEach(c => p.append('city', c));
+      countries.forEach(cn => p.append('country', cn));
+      ignoreStatuses.forEach(s => p.append('ignore_status', s));
+      p.set('limit', String(pageSize));
+      p.set('offset', String((page - 1) * pageSize));
+      return p;
+    }
+    function syncUrl(){
+      const p = paramsFromState();
+      const newUrl = `${location.pathname}?${p.toString()}`;
+      history.replaceState(null, '', newUrl);
+    }
+    function stateFromUrl(){
+      const sp = new URLSearchParams(location.search);
+      currentCategory = sp.get('category') || currentCategory;
+      currentSort     = sp.get('sort') || currentSort;
+      pageSize        = Number(sp.get('limit') || pageSize);
+      if (![10,25,50,100].includes(pageSize)) pageSize = 25;
+      pageSizeSel.value = String(pageSize);
+      const off       = Number(sp.get('offset') || 0);
+      page            = Math.max(1, Math.floor(off / pageSize) + 1);
+      searchText      = sp.get('q') || '';
+      searchField     = sp.get('search_field') || searchField;
+      // filters
+      modes           = sp.getAll('mode');
+      cities          = sp.getAll('city');
+      countries       = sp.getAll('country');
+      ignoreStatuses  = sp.getAll('ignore_status');
+      // reflect in UI
+      searchTextEl.value = searchText;
+      searchFieldSel.value = searchField;
+      // tabs
+      setActiveTab(currentCategory);
+    }
+    function setActiveTab(cat){
+      tabs.forEach(b => {
+        if ((b.dataset.cat || '') === cat) b.classList.add('active');
+        else b.classList.remove('active');
+      });
+    }
+
 
     function setStatus(text, {error=false, ephemeral=false} = {}){
       if (!statusEl) return;
@@ -308,21 +378,7 @@
     }
 
     function buildApiUrl(){
-      const offset = (page - 1) * pageSize;
-      const p = new URLSearchParams();
-      p.set('category', currentCategory);
-      if (searchText) {
-        p.set('q', searchText);
-        p.set('search_field', searchField);
-      }
-      p.set('sort', currentSort);
-      // Apply filters if present (minimal wiring now: mode, city, country, ignore_status)
-      modes.forEach(m => p.append('mode', m));
-      cities.forEach(c => p.append('city', c));
-      countries.forEach(cn => p.append('country', cn));
-      ignoreStatuses.forEach(s => p.append('ignore_status', s));      
-      p.set('limit', String(pageSize));
-      p.set('offset', String(offset));
+      const p = paramsFromState();
       return `/ui/jobs?${p.toString()}`;
     }
 
@@ -471,6 +527,7 @@
       setLoading(true, `Loading page ${page}…`);
       try {
         const url = buildApiUrl();
+        syncUrl();
         const data = await fetchWithRetry(url, 4);
         if (data && !data.error) {
           const items = Array.isArray(data.items) ? data.items : [];
@@ -509,8 +566,6 @@
     }
 
     // ---------- Wiring ----------
-    refreshBtn.addEventListener('click', loadPage);
-
     // Category tabs
     tabs.forEach(btn => {
       btn.addEventListener('click', () => {
@@ -546,21 +601,26 @@
     });
 
     // Filters (mock behavior)
-    filtersExpandBtn.addEventListener('click', () => {
-      const expanded = filtersExpandBtn.getAttribute('aria-expanded') === 'true';
-      filtersExpandBtn.setAttribute('aria-expanded', String(!expanded));
+    filtersExpandLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      const expanded = filtersExpandLink.getAttribute('aria-expanded') === 'true';
+      filtersExpandLink.setAttribute('aria-expanded', String(!expanded));
       filtersPanel.style.display = expanded ? 'none' : 'block';
     });
-    filtersClearBtn.addEventListener('click', () => {
+    filtersClearBtn.addEventListener('click', (e) => {
+      e.preventDefault();
       // clear local state and inputs
       modes = []; cities = []; countries = []; ignoreStatuses = [];
       modeChecks.forEach(c => c.checked = false);
       cityInput.value = ''; countryInput.value = '';
       for (const opt of ignoreSelect.options) opt.selected = false;
+      // clear mock chips too
+      document.querySelectorAll('[data-chip]').forEach(el => el.remove());      
       page = 1;
       triggerSearch(); // reuse apply path
     });
-    filtersApplyBtn.addEventListener('click', () => {
+    filtersApplyBtn.addEventListener('click', (e) => {
+      e.preventDefault();
       // minimal wiring: collect current UI into state
       modes = modeChecks.filter(c => c.checked).map(c => c.value);
       const cval = (cityInput.value || '').trim();   cities = cval ? [cval] : [];
@@ -586,7 +646,11 @@
       loadPage();
     });
 
-    document.addEventListener('DOMContentLoaded', loadPage);
+    document.addEventListener('DOMContentLoaded', () => {
+      stateFromUrl();   // deep-link support
+      syncUrl();        // write defaults if nothing present
+      loadPage();
+    });
   })();
 </script>
 {% endblock %}
