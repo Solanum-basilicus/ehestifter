@@ -14,42 +14,43 @@
   .muted { color:#6b7280; }
   .err { color:#b91c1c; margin-top:4px; }
   .hidden { display:none; }
-  input[type="text"], input[type="url"], textarea, select { width: 100%; box-sizing: border-box; padding: 8px; border:1px solid #d1d5db; border-radius:6px; }
+  input[type="text"], input[type="url"], textarea, select {
+    width: 100%; box-sizing: border-box; padding: 8px; border:1px solid #d1d5db; border-radius:6px;
+  }
   .help-nuggets { margin-top: 4px; display:flex; flex-wrap: wrap; gap:6px; }
   .help-nuggets .nugget { font-size: 12px; color:#6b7280; border:1px dashed #cbd5e1; padding:2px 6px; border-radius:9999px; cursor:pointer; }
   .actions-top { display:flex; gap:8px; margin-bottom:6px; align-items:center; }
   .actions-top a[aria-disabled="true"] { pointer-events:none; opacity:.6; }
-  .loc-row { display:grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr) max-content; gap:8px; align-items:center; margin-bottom:8px; }
+
+  .loc-row { display:grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr) max-content;
+    gap:8px; align-items:center; margin-bottom:8px; }
   .loc-row input { width:100%; min-width:0; }
+  .loc-row .country, .loc-row .city { min-width:0; }
+  .loc-row button[data-act="del"] { width:28px; height:28px; padding:0;
+    text-align:center; line-height:1; box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center; }
   .loc-actions { display:flex; gap:8px; }
   .section-subtle { padding:10px; border:1px dashed #e5e7eb; border-radius:8px; background:#fafafa; }
+
   .ql-toolbar.ql-snow { border:1px solid #e5e7eb; border-radius:8px 8px 0 0; }
   .ql-container.ql-snow { border:1px solid #e5e7eb; border-top:0; border-radius:0 0 8px 8px; min-height:180px; }
   .ql-editor { min-height:160px; }
+
   .desc-meta { display:flex; justify-content:space-between; align-items:center; font-size:12px; color:#6b7280; margin-top:6px; }
   .desc-count.over { color:#b91c1c; font-weight:600; }
 </style>
 {% endblock %}
 
 {% block content %}
-{% set mode = 'create' %}
-{% set disable_ats = false %}
-{% set initial_json = {} %}
-{% set submit_label = 'Create' %}
-{% set cancel_href = url_for('index') %}
-{% include "jobs/_job_form.html" %}
+{% include "jobs/_job_form.html" with context %}
 <script>
+  // wire submit for edit mode (PUT to /ui/jobs/<id>)
   document.addEventListener('DOMContentLoaded', () => {
     window.initJobForm({
-      mode: 'create',
-      submitUrl: '/ui/jobs',
-      method: 'POST',
-      disableAts: false
+      mode: 'edit',
+      submitUrl: `/ui/jobs/${encodeURIComponent(window.__JOB_FORM_CTX__.initial.id)}`,
+      method: 'PUT',
+      disableAts: window.__JOB_FORM_CTX__.disableAts
     });
   });
-  // expose blank initial for consistency
-  window.__JOB_FORM_CTX__ = { mode: "create", initial: {}, disableAts: false };
-  // Add default remoteType preselect for create
-  (function(){ const r = document.querySelector('input[name="remoteType"][value="Unknown"]'); if (r) r.checked = true; })();
 </script>
 {% endblock %}

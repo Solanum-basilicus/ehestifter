@@ -192,7 +192,13 @@
     <!-- RIGHT COLUMN: job actions block (separate from private status area) -->
     <div class="card" style="padding:12px 16px; margin-top:12px;">
       <div class="flex" style="gap:8px; align-items:center; flex-wrap:wrap;">
-        <button class="btn" title="Edit job (coming soon)" disabled>✏️ Edit</button>
+        <button class="btn"
+                :disabled="!canEdit"
+                :aria-disabled="canEdit ? 'false' : 'true'"
+                :title="editDebugTitle()"
+                @click="if (canEdit) window.location.assign('/jobs/' + encodeURIComponent(jobId) + '/edit')">
+          ✏️ Edit
+        </button>
         <button class="btn danger"
                 :disabled="!canEdit"
                 :aria-disabled="canEdit ? 'false' : 'true'"
@@ -735,6 +741,14 @@
         const got = this._currentUidCache ? String(this._currentUidCache) : "(none)";
         const flag = this.canEdit ? "true" : "false";
         return `Delete permission\ncreator: ${expected}\nyou: ${got}\ncanEdit: ${flag}`;
+      }
+
+      // Debug tooltip for Edit button (mirrors delete)
+      ,editDebugTitle(){
+        const expected = this.createdByUserId ? String(this.createdByUserId) : "(none)";
+        const got = this._currentUidCache ? String(this._currentUidCache) : "(none)";
+        const flag = this.canEdit ? "true" : "false";
+        return `Edit permission\ncreator: ${expected}\nyou: ${got}\ncanEdit: ${flag}`;
       }
 
       ,openDeleteModal(){

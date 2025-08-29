@@ -1,0 +1,158 @@
+{# Shared job form. Expects:
+    mode: "create" | "edit"
+    disable_ats: bool
+    initial_json: safe JSON object with current values ({} for create)
+    submit_label: string ("Create" | "Save changes")
+    cancel_href: string
+#}
+
+<div class="form-shell">
+  <div class="actions-top">
+    <button id="btnSubmit" class="btn primary">{{ submit_label }}</button>
+    <a id="btnCancel" href="{{ cancel_href }}" class="btn">Cancel</a>
+  </div>
+  <div id="err" class="err hidden" role="alert"></div>
+
+  <form id="jobForm" class="grid" onsubmit="return false;">
+    <!-- URL first (mandatory) -->
+    <label for="url" class="label required">URL</label>
+    <div>
+      <input type="url" id="url" name="url" placeholder="https://..." required>
+      <div class="muted" style="font-size:12px; margin-top:4px;">
+        You can fill only that, leaving everything else empty. It'll work, but wouldn't be pretty.
+      </div>
+    </div>
+
+    <!-- RemoteType -->
+    <label class="label">Remote Type</label>
+    <div class="radio-row">
+      <label><input type="radio" name="remoteType" value="Remote"> Remote</label>
+      <label><input type="radio" name="remoteType" value="Hybrid"> Hybrid</label>
+      <label><input type="radio" name="remoteType" value="On-Site"> On-Site</label>
+      <label><input type="radio" name="remoteType" value="Unknown"> Unknown</label>
+    </div>
+
+    <!-- Title -->
+    <label for="title" class="label">Title</label>
+    <input type="text" id="title" name="title" placeholder="Job title">
+
+    <!-- Company + Talent Agency -->
+    <label for="hiringCompanyName" class="label">Company</label>
+    <input type="text" id="hiringCompanyName" name="hiringCompanyName" placeholder="Hiring company">
+
+    <label for="postingCompanyName" class="label">Talent Agency</label>
+    <input type="text" id="postingCompanyName" name="postingCompanyName" placeholder="(if applicable)">
+
+    <!-- Locations (multi) -->
+    <label class="label">Locations</label>
+    <div>
+      <div id="locations" class="section-subtle"></div>
+      <div class="loc-actions" style="margin-top:8px;">
+        <button type="button" class="btn" id="btnAddCountry">+ More countries</button>
+        <button type="button" class="btn" id="btnAddCity">+ More cities</button>
+      </div>
+      <div class="muted" style="font-size:12px; margin-top:4px;">
+        You can add multiple countries and cities. Example: DE: Berlin · ES: Madrid · GB: London
+      </div>
+    </div>
+
+    <!-- FoundOn -->
+    <label for="foundOn" class="label">Found on</label>
+    <div>
+      <input type="text" id="foundOn" name="foundOn" placeholder="e.g. linkedin, stepstone">
+      <div class="help-nuggets" id="foundOnNuggets">
+        <span class="nugget">linkedin</span>
+        <span class="nugget">stepstone</span>
+        <span class="nugget">indeed</span>
+        <span class="nugget">xing</span>
+        <span class="nugget">arbeitnow</span>
+        <span class="nugget">weworkremotely</span>
+        <span class="nugget">dynamitejobs</span>
+      </div>
+    </div>
+
+    <!-- Advanced ATS details (optional, auto-filled) -->
+    <label class="label">Advanced</label>
+    <div>
+      <details class="advanced" {{ 'open' if mode == 'edit' else '' }}>
+        <summary>ATS & identifiers (optional)</summary>
+        <div class="grid" style="grid-template-columns: 160px 1fr; gap:8px 12px; margin-top:8px;">
+          <label for="provider" class="label">Provider</label>
+          <input type="text" id="provider" name="provider" placeholder="workday / greenhouse / join / corporate-site" {{ 'disabled' if disable_ats else '' }}>
+
+          <label for="providerTenant" class="label">Provider tenant</label>
+          <input type="text" id="providerTenant" name="providerTenant" placeholder="tenant or slug (optional)" {{ 'disabled' if disable_ats else '' }}>
+
+          <label for="externalId" class="label">External ID</label>
+          <input type="text" id="externalId" name="externalId" placeholder="auto or custom id" {{ 'disabled' if disable_ats else '' }}>
+        </div>
+      </details>
+      <div class="muted" style="font-size:12px; margin-top:4px;">
+        We’ll try to fill these from the URL. You can override them. {{ ' (disabled in edit mode)' if disable_ats else '' }}
+      </div>
+    </div>
+
+    <!-- Description (rich) -->
+    <label class="label">Description</label>
+    <div>
+      <div id="descToolbar">
+        <span class="ql-formats">
+          <select class="ql-header">
+            <option selected></option>
+            <option value="2">H2</option>
+            <option value="3">H3</option>
+          </select>
+        </span>
+        <span class="ql-formats">
+          <button class="ql-bold"></button>
+          <button class="ql-italic"></button>
+          <button class="ql-underline"></button>
+          <button class="ql-strike"></button>
+        </span>
+        <span class="ql-formats">
+          <button class="ql-blockquote"></button>
+          <button class="ql-code-block"></button>
+        </span>
+        <span class="ql-formats">
+          <button class="ql-list" value="ordered"></button>
+          <button class="ql-list" value="bullet"></button>
+        </span>
+        <span class="ql-formats">
+          <button class="ql-link"></button>
+        </span>
+        <span class="ql-formats">
+          <button class="ql-clean"></button>
+        </span>
+      </div>
+      <div id="descEditor"></div>
+      <div class="desc-meta">
+        <span>No images. Links are allowed.</span>
+        <span>Length: <span id="descCount" class="desc-count">0</span>/20000</span>
+      </div>
+    </div>
+  </form>
+</div>
+
+<!-- Option 3: emit JSON then parse it into a global before job-form.js loads -->
+<script id="job-form-data" type="application/json">
+{{ {
+  "mode": "edit" if mode == "edit" else "create",
+  "initial": initial_json,
+  "disableAts": disable_ats
+}|tojson }}
+</script>
+<script>
+  (function(){
+    try {
+      window.__JOB_FORM_CTX__ = JSON.parse(document.getElementById('job-form-data').textContent);
+    } catch (e) {
+      window.__JOB_FORM_CTX__ = { mode: 'create', initial: {}, disableAts: false };
+    }
+  })();
+  // expose for debugging
+  window.__dumpJobFormCtx = () => window.__JOB_FORM_CTX__;
+</script>
+<script src="{{ url_for('static', filename='js/quill.min.js') }}"></script>
+<script src="{{ url_for('static', filename='js/job-url-helpers.js') }}" type="module"></script>
+<script src="{{ url_for('static', filename='js/geo-dict.js') }}" type="module"></script>
+<script src="{{ url_for('static', filename='js/job-form.js') }}" type="module"></script>

@@ -26,6 +26,9 @@ def jobs_fx_headers(context=None) -> dict:
         h["X-Actor-Type"] = "system"
     return h
 
+def fx_get(url: str, headers: dict | None = None, timeout: int = 15):
+    return requests.get(url, headers=headers or {}, timeout=timeout)
+
 def fx_get_json(url, headers, params=None, timeout=10):
     r = requests.get(url, headers=headers, params=params, timeout=timeout)
     r.raise_for_status()
@@ -34,6 +37,12 @@ def fx_get_json(url, headers, params=None, timeout=10):
 def fx_post_json(url, headers, json_body, timeout=15):
     # returns the raw Response; caller decides how to parse / handle status
     return requests.post(url, headers=headers, json=json_body, timeout=timeout)
+
+def fx_put_json(url: str, headers: dict | None = None, json_body: dict | None = None, timeout: int = 20):
+    h = {"Content-Type": "application/json"}
+    if headers:
+        h.update(headers)
+    return requests.put(url, headers=h, json=json_body or {}, timeout=timeout)
 
 def fx_delete(url, headers, timeout=15):
     # returns the raw Response; caller decides how to parse / handle status

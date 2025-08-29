@@ -1,35 +1,7 @@
 from flask import Blueprint, request, jsonify
 from helpers.http import jobs_base, jobs_fx_headers, fx_post_json
 from helpers.users import get_in_app_user_id
-
-_ALLOWED = {"url","title","hiringCompanyName","postingCompanyName",
-            "foundOn","provider","providerTenant","externalId",
-            "remoteType","description","locations"}
-
-def _clean(body: dict) -> dict:
-    out = {}
-    for k in list(body.keys()):
-        if k in _ALLOWED:
-            v = body[k]
-            if v in ("", None): 
-                continue
-            if k == "locations":
-                # accept list of dicts with keys countryName,countryCode,cityName,region
-                if isinstance(v, list):
-                    locs = []
-                    for item in v:
-                        if not isinstance(item, dict): 
-                            continue
-                        locs.append({
-                            "countryName": (item.get("countryName") or "").strip(),
-                            "countryCode": (item.get("countryCode") or None),
-                            "cityName": (item.get("cityName") or None),
-                            "region": (item.get("region") or None),
-                        })
-                    if locs: out[k] = locs
-                continue
-            out[k] = v.strip() if isinstance(v, str) else v
-    return out
+from helpers.job_form import clean_job_payload
 
 def create_blueprint(auth):
     bp = Blueprint("ui_jobs_create", __name__)
@@ -38,7 +10,7 @@ def create_blueprint(auth):
     @auth.login_required
     def ui_jobs_create(*, context):
         body = request.get_json(silent=True) or {}
-        payload = _clean(body)
+        payload = clean_job_payload(body, for_update=False)
         url = (payload.get("url") or "").strip()
         if not url or not (url.startswith("http://") or url.startswith("https://")):
             return jsonify({"error":"bad_request","message":"Field 'url' (http/https) is required"}), 400
