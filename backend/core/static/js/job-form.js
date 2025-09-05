@@ -121,6 +121,7 @@ import { loadGeoDict, countryLookup, prioritizedCountries, citiesByCountry } fro
       else if (ccInit) refreshCities();
 
       locHost.appendChild(row);
+      return row; // allow callers to focus fields
     }
 
     function readLocations() {
@@ -365,6 +366,45 @@ import { loadGeoDict, countryLookup, prioritizedCountries, citiesByCountry } fro
         setSubmitting(false);
       }
     }
+
+    // -- Activate "+ More countries" / "+ More cities" (keep defaults elsewhere) --
+    const btnAddCountry = el('btnAddCountry');
+    const btnAddCity = el('btnAddCity');
+    function enableBtn(b) {
+      if (!b) return;
+      b.removeAttribute('disabled');
+      b.classList.remove('disabled');
+      // override global disabled-by-default safely, only for these two
+      b.style.pointerEvents = 'auto';
+      b.style.cursor = 'pointer';
+      b.style.opacity = '';
+    }
+    enableBtn(btnAddCountry);
+    enableBtn(btnAddCity);
+
+    if (btnAddCountry) {
+      btnAddCountry.addEventListener('click', (e) => {
+        e.preventDefault();
+        const row = locApi.addLocRow();
+        row.querySelector('.country')?.focus();
+      });
+    }
+    if (btnAddCity) {
+      btnAddCity.addEventListener('click', (e) => {
+        e.preventDefault();
+        // Prefer last valid country so user can add multiple cities in same country.
+        const rows = [...locHost.querySelectorAll('.loc-row')];
+        let init = {};
+        for (let i = rows.length - 1; i >= 0; i--) {
+          const cn = rows[i].querySelector('.country')?.value?.trim() || '';
+          const cm = countryLookup(cn);
+          if (cm) { init = { countryName: cm.name, countryCode: cm.code }; break; }
+        }
+        const row = locApi.addLocRow(init);
+        row.querySelector('.city')?.focus();
+      });
+    }    
+
 
     document.getElementById('btnSubmit').addEventListener('click', (e) => {
       e.preventDefault();
