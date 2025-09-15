@@ -1,5 +1,6 @@
 .vscode/settings.json
 eperidb.session.sql
+local.settings.json
 
 cheetsheet.md
 .ignoreme.*
@@ -115,3 +116,6 @@ venv.bak/
 
 # mypy
 .mypy_cache/
+
+# Other
+.idea/
