@@ -1,4 +1,4 @@
-# Ehestifter – Aplicant's Application Tracking Service
+# Ehestifter – Applicant's Application Tracking Service
 
 Ehestifter is a hobby project to explore **Azure cloud services** and **agentic AI workflows** while building something marginally useful:  
 a system that scrapes job offerings, normalizes and enriches them, checks user compatibility, and exposes APIs and a lightweight UI.
