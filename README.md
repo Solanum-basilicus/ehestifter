@@ -49,18 +49,19 @@ So far it doesn't scrape or enrich anyting with AI, but we'll getting there. One
 4. **User API** manages authentication, user records, and preference filters.  
 5. **UI** lets users log in, see compatible jobs, and set alerts.  
 6. **Storage + Synapse** enable historical data analysis.
+
 Only 3-5 exists for now, you are expected to input job applications manually. Still better than sorting auto-replies into subfolders in your email box, eh.
 
 ![Architecture Diagram](docs/architecture.png)  
 
 ## Repository Layout
-infrastructure/ # SQL schemas, IaC templates
-backend/core/ # Web app that provides UI
-backend/jobs/ # jobs API azure function (CRUD jobs, statuses, search and filters for job list)
-backend/telegrambot/ # web app that hosts telegram bot
-backend/users/ # users API azure function (auth, preferences)
-tools/ # simple scripts to help with setup (e.g. generate a list of counrtries and cities to be used in dropdown lists in filters and on create/edit application pages)
-docs/ # Diagrams, notes
+- infrastructure/ # SQL schemas, IaC templates
+- backend/core/ # Web app that provides UI
+- backend/jobs/ # jobs API azure function (CRUD jobs, statuses, search and filters for job list)
+- backend/telegrambot/ # web app that hosts telegram bot
+- backend/users/ # users API azure function (auth, preferences)
+- tools/ # simple scripts to help with setup (e.g. generate a list of counrtries and cities to be used in dropdown lists in filters and on create/edit application pages)
+- docs/ # Diagrams, notes
 
 Each component should have its own `README.md` with setup & deployment details. If it does not - I got distracted, please ping me and I'll help you to setup.
 
