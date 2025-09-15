@@ -7,7 +7,7 @@ def _iso(dt: datetime) -> str:
     return dt.replace(microsecond=0).isoformat()
 
 
-def status_reports_aggregate_and_flat(base_url, user_headers, shared_state):
+def test_status_reports_aggregate_and_flat(base_url, user_headers, shared_state):
     """
     Ensures:
       - second status change recorded for the shared job

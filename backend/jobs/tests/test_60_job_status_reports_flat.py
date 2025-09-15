@@ -7,7 +7,7 @@ def _iso(dt: datetime) -> str:
     # Route accepts plain ISO without timezone - keep consistent with your other tests
     return dt.replace(microsecond=0).isoformat()
 
-def status_reports_non_aggregated_base(base_url, user_headers, shared_state):
+def test_status_reports_non_aggregated_base(base_url, user_headers, shared_state):
     """
     Basic smoke test for non-aggregated report:
       - 'end' omitted -> up to this moment

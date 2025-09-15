@@ -10,6 +10,7 @@ from .job_history_post import register as _reg_history_post
 from .job_history_get import register as _reg_history_get
 from .job_list_with_statuses import register as _reg_list_with_statuses
 from .apply_by_url import register as _register_apply_by_url
+from .jobs_status_report import register as _register_jobs_status_report
 
 def register_all(app):
     _reg_create(app)
@@ -23,3 +24,4 @@ def register_all(app):
     _reg_history_post(app)
     _reg_history_get(app)
     _register_apply_by_url(app)
+    _register_jobs_status_report(app)
