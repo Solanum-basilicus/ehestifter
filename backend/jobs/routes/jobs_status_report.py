@@ -7,6 +7,7 @@ import azure.functions as func
 
 from helpers.db import get_connection
 from helpers.auth import UnauthorizedError, get_current_user_id
+from helpers.ids import normalize_guid
 
 
 ISO_LAYOUTS = [
@@ -153,7 +154,7 @@ def register(app: func.FunctionApp):
                     job_id, title, posting_co, hiring_co, url, ts, action, details = r
                     status = _extract_status(action, details) or ""
                     items.append({
-                        "jobId": str(job_id),
+                        "jobId": normalize_guid(job_id),
                         "jobTitle": title,
                         "postingCompanyName": posting_co,
                         "hiringCompanyName": hiring_co,
@@ -163,7 +164,7 @@ def register(app: func.FunctionApp):
                     })
 
                 payload = {
-                    "userId": str(user_id),
+                    "userId": normalize_guid(user_id),
                     "aggregate": False,
                     "start": start_dt.isoformat(),
                     "end": end_dt.isoformat(),
@@ -176,7 +177,7 @@ def register(app: func.FunctionApp):
             for r in rows:
                 job_id, title, posting_co, hiring_co, url, ts, action, details = r
                 status = _extract_status(action, details) or ""
-                key = str(job_id)
+                key = normalize_guid(job_id)
                 if key not in by_job:
                     by_job[key] = {
                         "jobId": key,
@@ -196,7 +197,7 @@ def register(app: func.FunctionApp):
                 v["statuses"].sort(key=lambda x: x["timestamp"])
 
             payload = {
-                "userId": str(user_id),
+                "userId": normalize_guid(user_id),
                 "aggregate": True,
                 "start": start_dt.isoformat(),
                 "end": end_dt.isoformat(),

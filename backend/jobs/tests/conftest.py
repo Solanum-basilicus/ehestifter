@@ -14,7 +14,7 @@ class RedactedDict(dict):
 @pytest.fixture(autouse=True)
 def delay_between_tests():
     # run before each test
-    time.sleep(0.5)
+    time.sleep(0.1)
     yield
     # could also sleep after test if needed
 

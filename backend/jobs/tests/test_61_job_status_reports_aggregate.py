@@ -22,7 +22,7 @@ def test_status_reports_aggregate_and_flat(base_url, user_headers, shared_state)
     # Choose a distinct value to avoid no-op updates.
     put_url = f"{base_url}/api/jobs/{job_id}/status"
     r_put = requests.put(put_url, headers=user_headers, json={"status": "Rejected with Unfortunately"})
-    print("PUT job status:", r_put.status_code, r_put.text[:200])
+    print("PUT job status:", r_put.status_code, r_put.text)
     assert r_put.status_code == 200, r_put.text
     time.sleep(1.0)  # small delay to avoid identical-second timestamps in CI
 
@@ -35,7 +35,7 @@ def test_status_reports_aggregate_and_flat(base_url, user_headers, shared_state)
         "start": start,
         "aggregate": "false"
     })
-    print("GET report flat:", r_flat.status_code, r_flat.text[:300])
+    print("GET report flat:", r_flat.status_code, r_flat.text)
     assert r_flat.status_code == 200, r_flat.text
     flat = r_flat.json()
     assert flat.get("aggregate") is False
@@ -58,7 +58,7 @@ def test_status_reports_aggregate_and_flat(base_url, user_headers, shared_state)
         "start": start,
         "aggregate": "true"
     })
-    print("GET report agg:", r_agg.status_code, r_agg.text[:300])
+    print("GET report agg:", r_agg.status_code, r_agg.text)
     assert r_agg.status_code == 200, r_agg.text
     agg = r_agg.json()
     assert agg.get("aggregate") is True
