@@ -489,7 +489,7 @@
       const locs = Array.isArray(row.locations) ? row.locations : [];
       const remote = row.RemoteType && row.RemoteType !== 'Unknown' ? row.RemoteType : '';
 
-      if (!locs.length) return remote || '';
+      if (!locs.length) return `·&nbsp&nbsp${remote}` || '';
 
       // Group by country (prefer ISO code for compactness)
       const byCountry = new Map(); // key -> Set(cities)
@@ -510,7 +510,7 @@
         if (parts.length >= 4) { parts.push("…"); break; } // keep short
       }
       const geo = parts.join("; ");
-      return remote ? `${geo} · ${remote}` : geo;
+      return remote ? `·&nbsp&nbsp${geo} · ${remote}` : `·&nbsp&nbsp${geo}`;
     }
 
     function displayTitle(row) {
@@ -520,10 +520,23 @@
       return xid || '(no title)';
     }
 
+    function extractCompanyParts(row){
+      const company = (row.HiringCompanyName || '').trim();
+      const posting = (row.PostingCompanyName || row.AgencyName || row.PostingCompany || '').trim();
+      return { company, posting };
+    }
+    function companyLineFromRow(row) {
+      const { company, posting } = extractCompanyParts(row);
+      if (posting) return company ? `${company}, through ${posting}` : `through ${posting}`;
+      return company || '';
+    }
+
     // ---------- Card rendering ----------
     function cardHTML(row) {
       const title = displayTitle(row);
-      const company = row.HiringCompanyName || '';
+      const { company, posting } = extractCompanyParts(row);
+      const companyLine = company && posting ? `<b>${company}</b>, through <b>${posting}</b>` : (`<b>${company}</b>` || (posting ? `through <b>${posting}</b>` : ''));
+          
       const geo = summarizeLocations(row);
       const firstSeen = row.FirstSeenAt || row.CreatedAt || row.LastUpdateAt || '';
       const sid = `ust_${row.Id}`;
@@ -539,7 +552,7 @@
                 <a class="title-link" href="/jobs/${encodeURIComponent(row.Id)}" title="${esc(title)}">${title}</a>
               </h4>
               <div class="flex muted" style="flex-wrap:wrap; font-size:14px; gap:8px;">
-                ${company ? `<span class="truncate-1" style="max-width:36ch;" title="${esc(company)}">${company}</span>` : ''}
+                ${companyLine ? `<span class="truncate-1" style="max-width:36ch;" title="${esc(companyLine)}">${companyLine}</span>` : ''}
                 ${geo ? `<span class="truncate-1" style="max-width:38ch;" title="${esc(geo)}">${geo}</span>` : ''}
                 ${via ? `<span class="chip muted" title="Found on">${esc(via)}</span>` : ''}
               </div>
@@ -551,8 +564,7 @@
           </div>
 
           <div class="flex" style="margin-top:8px; flex-wrap:wrap; gap:10px; align-items:center;">
-            <div class="muted" style="font-size:14px;">Your status</div>
-            <span class="chip-private">🔒 Only you</span>
+            <div class="muted" style="font-size:14px;"> 🔒 Your status</div>
             <span class="status-slot">
               <span class="status-badge" data-k="unset" id="${sid}">loading…</span>
             </span>
