@@ -19,6 +19,9 @@
   .btn:disabled { opacity:.6; cursor:not-allowed; }
   .btn-row { display:flex; gap:8px; flex-wrap:wrap; }
   .small { font-size:12px; }
+  /* Ensure 'hidden' always hides, regardless of other display rules */
+  [hidden] { 
+    display: none !important; }  
 </style>
 {% endblock %}
 
@@ -86,6 +89,51 @@
         <p id="tg-error" class="subtle" hidden></p>
       </section>
 
+      <!-- Reports card -->
+      <section id="reports" class="card">
+        <h2 style="margin:0 0 8px; font-size:18px;">Your job status reports</h2>
+
+        <div class="row">
+          <div class="key">Range</div>
+          <div class="btn-row small" style="gap:12px;">
+            <label><input type="radio" name="rep-range" value="day" checked> Last day</label>
+            <label><input type="radio" name="rep-range" value="week"> Last week</label>
+            <label><input type="radio" name="rep-range" value="month"> Last month</label>
+            <label><input type="radio" name="rep-range" value="custom"> Custom</label>
+          </div>
+        </div>
+
+        <div id="rep-custom-row" class="row" hidden>
+          <div class="key">Custom</div>
+          <div class="btn-row">
+            <input id="rep-start" type="datetime-local" class="btn" />
+            <input id="rep-end" type="datetime-local" class="btn" />
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="key">Aggregation</div>
+          <label class="small"><input id="rep-agg" type="checkbox"> Aggregate by job</label>
+        </div>
+
+        <div class="row">
+          <div class="key">Format</div>
+          <select id="rep-format" class="btn">
+            <option value="csv" selected>CSV</option>
+            <!-- future: <option value="text">Text</option> -->
+          </select>
+        </div>
+
+        <div class="btn-row" style="margin-top:8px;">
+          <button id="btn-download-report" class="btn" type="button">Download report</button>
+          <span id="rep-note" class="subtle small">Custom range max 6 months.</span>
+        </div>
+
+        <p id="rep-error" class="subtle" hidden></p>
+      </section>
+
+
+      
       <!-- Filters placeholder -->
       <section class="card">
         <h2 style="margin:0 0 8px; font-size:18px;">Your filters</h2>
@@ -216,10 +264,103 @@
       await initTelegram();
     });
 
-    document.addEventListener('DOMContentLoaded', async () => {
-      await initProfile();
-      await initTelegram();
+    // Reports UI wiring
+    const repCard   = document.getElementById('reports');
+    const rangeRadios = Array.from(document.querySelectorAll('input[name="rep-range"]'));
+    const rowCustom = document.getElementById('rep-custom-row');
+    const inpStart  = document.getElementById('rep-start');
+    const inpEnd    = document.getElementById('rep-end');
+    const inpAgg    = document.getElementById('rep-agg');
+    const selFmt    = document.getElementById('rep-format');
+    const btnDl     = document.getElementById('btn-download-report');
+    const repErr    = document.getElementById('rep-error');
+
+    function syncCustomRowVisibility() {
+      clearRepError();
+      const val = rangeRadios.find(x=>x.checked)?.value;
+      const custom = val === 'custom';
+      rowCustom.hidden = !custom;
+      if (custom) {
+        // Pre-fill only if empty
+        if (!inpStart.value) {
+          const dayAgo = new Date(Date.now() - 24*3600*1000);
+          inpStart.value = currentIso(dayAgo);
+        }
+        if (!inpEnd.value) {
+          inpEnd.value = currentIso(new Date());
+        }
+      }
+    }
+
+    function showRepError(msg){
+      repErr.hidden = false;
+      repErr.textContent = msg;
+    }
+    function clearRepError(){
+      repErr.hidden = true;
+      repErr.textContent = '';
+    }
+
+    function currentIso(dt){ // YYYY-MM-DDTHH:MM
+      const pad = n => String(n).padStart(2,'0');
+      return dt.getFullYear() + '-' + pad(dt.getMonth()+1) + '-' + pad(dt.getDate())
+           + 'T' + pad(dt.getHours()) + ':' + pad(dt.getMinutes());
+    }
+
+    // (kept, but no longer used to auto-show dates)
+    function pickStartEnd(range){ /* noop helper kept for future */ return { start:null, end:null }; }
+ 
+
+    rangeRadios.forEach(r => r.addEventListener('change', syncCustomRowVisibility));
+
+    btnDl?.addEventListener('click', async () => {
+      clearRepError();
+      try {
+        const chosen = rangeRadios.find(x=>x.checked)?.value || 'day';
+        let params = new URLSearchParams();
+        params.set('format', selFmt.value || 'csv');
+        params.set('aggregate', inpAgg.checked ? 'true' : 'false');
+
+        // NEW: send browser tz
+        try {
+          const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+          if (tz) params.set('tz', tz);
+        } catch {}
+
+        if (chosen === 'custom') {
+          const s = (inpStart.value || '').trim();
+          if (!s) return showRepError('Please select custom start');
+          params.set('start', s);
+
+          const e = (inpEnd.value || '').trim();
+          if (e) params.set('end', e);
+        } else {
+          params.set('range', chosen); // day|week|month
+        }
+
+        // Trigger a download via UI endpoint
+        const url = '/ui/reports/status?' + params.toString();
+        // Create an <a download> to respect filename from headers if provided
+        const a = document.createElement('a');
+        a.href = url;
+        a.rel = 'noopener';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(()=>a.remove(), 0);
+      } catch (e) {
+        showRepError('Failed to start download. Please try again.');
+      }
     });
+
+
+    document.addEventListener('DOMContentLoaded', () => {
+      // Hide/show the custom row immediately, without waiting on network
+      syncCustomRowVisibility();
+      // Kick off the async in parallel (no await to avoid blocking UI)
+      initProfile();
+      initTelegram();
+    });
+
   })();
 </script>
 {% endblock %}
