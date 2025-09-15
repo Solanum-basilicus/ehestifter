@@ -40,6 +40,7 @@ def test_status_reports_aggregate_and_flat(base_url, user_headers, shared_state)
     flat = r_flat.json()
     assert flat.get("aggregate") is False
     assert isinstance(flat.get("items"), list)
+    assert flat["items"], "Report returned empty items list"
 
     # rows for our job
     flat_rows = [it for it in flat["items"] if it.get("jobId") == job_id]
@@ -62,6 +63,7 @@ def test_status_reports_aggregate_and_flat(base_url, user_headers, shared_state)
     agg = r_agg.json()
     assert agg.get("aggregate") is True
     assert isinstance(agg.get("items"), list)
+    assert agg["items"], "Report returned empty items list"
 
     # exactly one block for our job
     blocks = [it for it in agg["items"] if it.get("jobId") == job_id]

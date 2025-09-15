@@ -26,6 +26,7 @@ def test_status_reports_non_aggregated_base(base_url, user_headers, shared_state
     data = r.json()
     assert data.get("aggregate") is False
     assert "items" in data and isinstance(data["items"], list)
+    assert data["items"], "Report returned empty items list"
 
     if data["items"]:
         row = data["items"][0]

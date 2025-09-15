@@ -40,23 +40,41 @@ def _parse_bool(value: Optional[str]) -> bool:
 
 def _extract_status(action: Optional[str], details: Optional[str]) -> Optional[str]:
     """
-    Try to get the resulting status from either:
+    Supports:
       - action like 'status:applied'
-      - action == 'status-changed' with details json having {"to":"applied"} or {"status":"applied"}
+      - action in {'status-changed','status_changed'} with Details JSON
+        * Either raw {"to":"applied"} / {"status":"applied"}
+        * Or wrapped {"v":1,"kind":"status_changed","data":{...}}
     """
-    if action:
-        if action.startswith("status:") and len(action) > 7:
-            return action[7:]
-        if action == "status-changed" and details:
-            try:
-                d = json.loads(details)
-                if isinstance(d, dict):
-                    if "to" in d and isinstance(d["to"], str):
-                        return d["to"]
-                    if "status" in d and isinstance(d["status"], str):
-                        return d["status"]
-            except Exception:
-                pass
+    if not action:
+        return None
+
+    # Simple "status:<value>" form
+    if action.startswith("status:") and len(action) > 7:
+        return action[7:]
+
+    # Generic forms: hyphen or underscore
+    if action in ("status-changed", "status_changed") and details:
+        try:
+            d = json.loads(details)
+            if isinstance(d, dict):
+                # Unwrapped (raw) variant
+                if "to" in d and isinstance(d["to"], str):
+                    return d["to"]
+                if "status" in d and isinstance(d["status"], str):
+                    return d["status"]
+
+                # Wrapped variant per your insert_history()
+                # {"v":1,"kind":"status_changed","data":{"userId":...,"from":"X","to":"Y"}}
+                data = d.get("data")
+                if isinstance(data, dict):
+                    if "to" in data and isinstance(data["to"], str):
+                        return data["to"]
+                    if "status" in data and isinstance(data["status"], str):
+                        return data["status"]
+        except Exception:
+            pass
+
     return None
 
 
@@ -119,7 +137,7 @@ def register(app: func.FunctionApp):
                     AND h.Timestamp >= ?
                     AND h.Timestamp <= ?
                     AND (
-                        h.Action = N'status-changed'
+                        h.Action = N'status_changed'
                         OR h.Action LIKE N'status:%'
                     )
                 ORDER BY h.Timestamp ASC
