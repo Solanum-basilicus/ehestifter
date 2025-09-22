@@ -3,7 +3,7 @@ from flask import Flask, render_template
 from identity.flask import Auth
 import app_config
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from routes import register_all
 
 
@@ -41,8 +41,8 @@ def index(*, context):
         user=context['user'],
         edit_profile_url=auth.get_edit_profile_url(),
         api_endpoint=os.getenv("ENDPOINT"),
-        title=f"Ehestifter application tracking app",
-        now=datetime.utcnow(),
+        title="Ehestifter application tracking app",
+        now=datetime.now(timezone.utc),
     )
 
 @app.route("/jobs/<job_id>")
@@ -54,7 +54,7 @@ def job_details(job_id: str, *, context):
         user=context['user'],
         title=f"Job {job_id}",
         job_id=job_id,
-        now=datetime.utcnow(),
+        now=datetime.now(timezone.utc),
     )
 
 @app.route("/jobs/new")
@@ -64,7 +64,7 @@ def job_new(*, context):
         "job_new.html",
         user=context['user'],
         title="Create job offering",
-        now=datetime.utcnow(),
+        now=datetime.now(timezone.utc),
     )
 
 @app.route("/me")
@@ -74,7 +74,7 @@ def me(*, context):
         "me.html", 
         user=context['user'], 
         title="Your profile",
-        now=datetime.utcnow(),
+        now=datetime.now(timezone.utc),
     )
 
 @app.route("/health")
