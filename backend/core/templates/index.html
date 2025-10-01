@@ -64,6 +64,42 @@
     .catsbar { flex-direction:column; align-items:stretch; gap:8px; }
     .catsbar > a { align-self:flex-end; }    
   }
+  /* Option underline tweaks (lighter & clean) */
+  .optlist { display:flex; gap:10px; flex-wrap:wrap; max-width:100%; }
+  .opt {
+    cursor:pointer;
+    text-decoration: underline dotted rgba(17,24,39,.35);
+    text-underline-offset: 2px;
+  }
+  .opt:hover { text-decoration-color: rgba(17,24,39,.45); }
+  .opt.is-active { color:#6b7280; text-decoration:none; cursor:default; }
+
+  /* Filters grid: label left, values right; stack rows */
+  .filters-grid {
+    display:grid;
+    grid-template-columns: 160px minmax(0,1fr);
+    gap:8px 14px;
+    align-items:center;
+    margin-bottom: 8px;
+  }
+  .fg-label { font-size:12px; }
+  .fg-values { min-width:0; display:flex; align-items:center; flex-wrap:wrap; gap:6px; }
+  .fg-sep { grid-column: 1 / -1; border-top:1px dashed #e5e7eb; margin:4px 0; }
+
+  /* inline label preceding a list */
+  .inline-label { font-size:12px; }  
+
+  /* Autocomplete dropdowns */
+  .ac-wrap { position:relative; }
+  .ac-menu {
+    position:absolute; left:0; right:0; top: calc(100% + 2px);
+    background:#fff; border:1px solid #e5e7eb; border-radius:8px;
+    box-shadow: 0 6px 16px rgba(0,0,0,.06);
+    z-index: 20; display:none; max-height: 240px; overflow:auto;
+  }
+  .ac-item { padding:6px 10px; cursor:pointer; }
+  .ac-item[aria-selected="true"], .ac-item:hover { background:#f3f4f6; }
+  
 </style>
 {% endblock %}
 
@@ -115,45 +151,48 @@
           <div class="filters-left">
             <a href="#" class="linklike" id="filtersExpandLink" aria-expanded="false">Filters ⌄</a>
           </div>
-          <div class="chips" id="activeChips" aria-label="Active filters">
-            <!-- Prefilled mock chips -->
-            <span class="chip" data-chip="mode:remote">Mode: Remote ×</span>
-            <span class="chip" data-chip="country:Germany">Country: Germany ×</span>
-          </div>
+          <div class="chips" id="activeChips" aria-label="Active filters"></div>
           <div class="filters-right">
-            <a href="#" class="linklike" id="filtersApplyLink" title="Apply filters">Apply</a>
-            <a href="#" class="linklike" id="filtersClearLink" title="Clear filters">Clear</a>
+            <a href="#" class="linklike" id="filtersClearLink" title="Clear all filters">Clear all</a>
           </div>
         </div>
         <!-- Expanded filter panel (mock) -->
         <div id="filtersPanel" style="display:none; margin-top:10px;">
-          <div class="row" style="gap:16px; align-items:flex-start;">
-            <div>
-              <div class="muted" style="font-size:12px;">Mode</div>
-              <label><input type="checkbox" class="f-mode" value="remote"> Remote</label>
-              <label><input type="checkbox" class="f-mode" value="onsite"> Onsite</label>
-              <label><input type="checkbox" class="f-mode" value="hybrid"> Hybrid</label>
+          <div class="filters-grid">
+            <!-- Row 1: Mode -->
+            <div class="fg-label muted">Mode</div>
+            <div class="fg-values"><div id="optlist-mode" class="optlist"></div></div>
+
+            <!-- separator row (spans both columns) -->
+            <div class="fg-sep" aria-hidden="true"></div>
+
+            <!-- Row 2: Ignore status (label inline at the very beginning) -->
+            <div class="fg-label muted">Ignore status</div>
+            <div class="fg-values">
+              <div id="optlist-status" class="optlist"></div>
             </div>
-            <div>
-              <div class="muted" style="font-size:12px;">Location (city)</div>
-              <input class="input" id="f-city" placeholder="e.g. Berlin" style="min-width:180px;">
+          </div>
+            <!-- separator row (spans both columns) -->
+            <div class="fg-sep" aria-hidden="true"></div>
+          <!-- Locations row in the same grid look -->
+          <div class="filters-grid">
+            <div class="fg-label muted">Locations</div>
+            <div class="fg-values">
+              <div class="row" style="gap:10px; position:relative; flex-wrap:wrap;">
+                <div class="ac-wrap">
+                  <input class="input" id="f-country" placeholder="Country (e.g., Germany)" style="min-width:200px;">
+                  <div id="ac-country" class="ac-menu" role="listbox" aria-label="Country suggestions"></div>
+                </div>
+                <div class="ac-wrap">
+                  <input class="input" id="f-city" placeholder="City (e.g., Berlin)" style="min-width:200px;">
+                  <div id="ac-city" class="ac-menu" role="listbox" aria-label="City suggestions"></div>
+                </div>
+                <a href="#" id="geoAddLink" class="opt" style="align-self:center;">add to filters</a>
+              </div>
             </div>
-            <div>
-              <div class="muted" style="font-size:12px;">Location (country)</div>
-              <input class="input" id="f-country" placeholder="e.g. DE or Germany" style="min-width:200px;">
-            </div>
-            <div>
-              <div class="muted" style="font-size:12px;">Ignore status</div>
-              <select id="f-ignore" class="select" multiple size="4" style="min-width:220px;">
-                <!-- Mocked options; wire later to STATUS_OPTIONS -->
-                <option value="applied">Applied</option>
-                <option value="screening booked">Screening Booked</option>
-                <option value="screening done">Screening Done</option>
-                <option value="interview">Interview</option>
-                <option value="offer">Got Offer</option>
-              </select>
-            </div>
-            <div style="margin-left:auto; align-self:flex-end;"></div>
+          </div>
+          <div class="muted" style="font-size:12px; margin-top:6px;">
+            Tip: changing country resets city suggestions. Adding with an empty city adds the country.
           </div>
         </div>
       </div>
@@ -202,8 +241,6 @@
     const dfHM = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
     const dfDM = new Intl.DateTimeFormat(undefined, { day: '2-digit', month: 'short' });
     const dfDMY = new Intl.DateTimeFormat(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
-
-    
     
     function formatWhen(iso) {
       if (!iso) return '';
@@ -276,15 +313,17 @@
     // Filters (mock wiring)
     const filtersExpandLink = document.getElementById('filtersExpandLink');
     const filtersClearLink  = document.getElementById('filtersClearLink');
-    const filtersApplyLink  = document.getElementById('filtersApplyLink');
     const filtersPanel     = document.getElementById('filtersPanel');
     const activeChips       = document.getElementById('activeChips');
-    const modeChecks       = Array.from(document.querySelectorAll('.f-mode'));
     const cityInput        = document.getElementById('f-city');
     const countryInput     = document.getElementById('f-country');
     const ignoreSelect     = document.getElementById('f-ignore'); 
     // Route URLs we need in JS (server-provided)
     const addNewHref = "{{ url_for('job_new') }}";    
+    // For filters' graying out of selected chips
+    const optlistMode   = document.getElementById('optlist-mode');
+    const optlistStatus = document.getElementById('optlist-status');
+    const geoAddLink    = document.getElementById('geoAddLink');    
 
     // ---------- Paging state ----------
     let pageSize = Number(sessionStorage.getItem('jobs.pageSize') || 25);
@@ -299,15 +338,18 @@
     let searchField = 'title_company';
     let searchText = '';
     // Filter state (mocked; wire progressively)
-    let modes = [];        // ['remote','onsite','hybrid']
-    let cities = [];       // ['Berlin']
-    let countries = [];    // ['DE','Germany']
-    let ignoreStatuses = [];// ['applied',...]    
+    let modes = [];        // e.g. ['remote','onsite','hybrid']
+    let cities = [];       // e.g. ['Berlin', 'Munich']
+    let countries = [];    // e.g. ['Germany', 'DE']
+    let ignoreStatuses = [];   // exact labels from STATUS_OPTIONS, e.g. ['Screening Done']
+    let ignoreStatusesK = [];  // normalized keys via Status.statusKey(label)  
+    // Small normalizer for modes, to be used in filters
+    const VALID_MODES = ['remote','onsite','hybrid'];
+    function normMode(x){ return (x || '').toLowerCase().trim(); }    
 
     // Small helper used by both the Filters "Clear" link and empty-state CTA
     function doClearFilters(){
       modes = []; cities = []; countries = []; ignoreStatuses = [];
-      modeChecks.forEach(c => c.checked = false);
       cityInput.value = '';
       countryInput.value = '';
       for (const opt of ignoreSelect.options) opt.selected = false;
@@ -328,15 +370,18 @@
       cities.forEach(c => p.append('city', c));
       countries.forEach(cn => p.append('country', cn));
       ignoreStatuses.forEach(s => p.append('ignore_status', s));
+      ignoreStatusesK.forEach(s => p.append('ignore_status_k', s)); // for backend robustness
       p.set('limit', String(pageSize));
       p.set('offset', String((page - 1) * pageSize));
       return p;
     }
+
     function syncUrl(){
       const p = paramsFromState();
       const newUrl = `${location.pathname}?${p.toString()}`;
       history.replaceState(null, '', newUrl);
     }
+
     function stateFromUrl(){
       const sp = new URLSearchParams(location.search);
       currentCategory = sp.get('category') || currentCategory;
@@ -344,21 +389,34 @@
       pageSize        = Number(sp.get('limit') || pageSize);
       if (![10,25,50,100].includes(pageSize)) pageSize = 25;
       pageSizeSel.value = String(pageSize);
-      const off       = Number(sp.get('offset') || 0);
-      page            = Math.max(1, Math.floor(off / pageSize) + 1);
-      searchText      = sp.get('q') || '';
-      searchField     = sp.get('search_field') || searchField;
+      const off   = Number(sp.get('offset') || 0);
+      page        = Math.max(1, Math.floor(off / pageSize) + 1);
+      searchText  = sp.get('q') || '';
+      searchField = sp.get('search_field') || searchField;
+
       // filters
-      modes           = sp.getAll('mode');
-      cities          = sp.getAll('city');
-      countries       = sp.getAll('country');
-      ignoreStatuses  = sp.getAll('ignore_status');
-      // reflect in UI
+      modes      = sp.getAll('mode').map(normMode).filter(x => VALID_MODES.includes(x));
+      cities     = sp.getAll('city').filter(Boolean);
+      countries  = sp.getAll('country').filter(Boolean);
+
+      // statuses: prefer labels in URL; fall back to keys -> labels when only _k given
+      const lbls = sp.getAll('ignore_status').filter(Boolean);
+      const ks   = sp.getAll('ignore_status_k').filter(Boolean);
+      let fromK  = [];
+      if (lbls.length === 0 && ks.length > 0) {
+        // We only have keys; try to back-map using STATUS_OPTIONS by comparing statusKey
+        fromK = Status.STATUS_OPTIONS.filter(l => ks.includes(Status.statusKey(l)));
+      }
+      ignoreStatuses = (lbls.length ? lbls : fromK).filter(Boolean);
+      ignoreStatusesK = ignoreStatuses.map((l) => Status.statusKey(l)).filter(Boolean);
+
+      // reflect in UI widgets (we don't clear country/city inputs on reload by design)
       searchTextEl.value = searchText;
       searchFieldSel.value = searchField;
-      // tabs
       setActiveTab(currentCategory);
+      afterStateChangedRender();
     }
+
     function setActiveTab(cat){
       tabs.forEach(b => {
         if ((b.dataset.cat || '') === cat) b.classList.add('active');
@@ -459,6 +517,26 @@
         });
       }
     }
+
+    function renderModeOptions(){
+      const active = new Set(modes);
+      const html = VALID_MODES.map(m => {
+        const label = m[0].toUpperCase() + m.slice(1);
+        const activeCls = active.has(m) ? 'is-active' : '';
+        return `<span class="opt ${activeCls}" data-opt="mode" data-val="${m}">${label}</span>`;
+      }).join(' ');
+      optlistMode.innerHTML = html;
+    }
+
+    function renderStatusOptions(){
+      const active = new Set(ignoreStatuses);
+      const html = Status.STATUS_OPTIONS.map(label => {
+        const isActive = active.has(label);
+        return `<span class="opt ${isActive ? 'is-active':''}" data-opt="status" data-val="${label}">${label}</span>`;
+      }).join(' ');
+      optlistStatus.innerHTML = html;
+    }
+
 
     function renderEmptyGeneric(){
       listEl.innerHTML = `
@@ -577,6 +655,64 @@
       listEl.innerHTML = items.map(cardHTML).join('');
     }
 
+    function renderChips(){
+      const parts = [];
+
+      // Mode chips
+      for (const m of modes) {
+        const label = m[0].toUpperCase() + m.slice(1);
+        parts.push(`<span class="chip" data-chip="mode" data-val="${m}">Mode: ${label} <span aria-hidden="true">×</span></span>`);
+      }
+
+      // Countries
+      for (const c of countries) {
+        parts.push(`<span class="chip" data-chip="country" data-val="${c}">Country: ${escapeHtml(c)} <span aria-hidden="true">×</span></span>`);
+      }
+
+      // Cities
+      for (const c of cities) {
+        parts.push(`<span class="chip" data-chip="city" data-val="${c}">City: ${escapeHtml(c)} <span aria-hidden="true">×</span></span>`);
+      }
+
+      // Ignore statuses (one chip per label)
+      for (const s of ignoreStatuses) {
+        parts.push(`<span class="chip" data-chip="ignore_status" data-val="${escapeHtml(s)}">Ignore: ${escapeHtml(s)} <span aria-hidden="true">×</span></span>`);
+      }
+
+      activeChips.innerHTML = parts.join(' ');
+    }
+
+    function escapeHtml(s){ return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+
+    activeChips.addEventListener('click', (e) => {
+      const chip = e.target.closest('.chip[data-chip]');
+      if (!chip) return;
+      const type = chip.dataset.chip;
+      const val  = chip.dataset.val;
+
+      const removeFrom = (arr, v) => {
+        const i = arr.indexOf(v);
+        if (i >= 0) arr.splice(i,1);
+      };
+
+      if (type === 'mode') removeFrom(modes, val);
+      else if (type === 'country') removeFrom(countries, val);
+      else if (type === 'city') removeFrom(cities, val);
+      else if (type === 'ignore_status') {
+        removeFrom(ignoreStatuses, val);
+        ignoreStatusesK = ignoreStatuses.map(l => Status.statusKey(l)).filter(Boolean);
+      }
+
+      page = 1;
+      loadPage();
+    });
+
+    function afterStateChangedRender(){
+      renderChips();
+      renderModeOptions();
+      renderStatusOptions();
+    }
+
     async function loadStatusesFor(ids) {
       if (!ids || !ids.length) return;
       try {
@@ -627,10 +763,12 @@
             }
             setStatus('Ready', {ephemeral:true});
             renderPagination();
+            afterStateChangedRender();
             return;
           }
 
           renderCards(items);
+          afterStateChangedRender();
           setStatus('Ready', {ephemeral:true});
           renderPagination();
 
@@ -696,22 +834,13 @@
       filtersExpandLink.setAttribute('aria-expanded', String(!expanded));
       filtersPanel.style.display = expanded ? 'none' : 'block';
     });
+
     filtersClearLink.addEventListener('click', (e) => {
       e.preventDefault();
-      // clear local state and inputs
-      doClearFilters();
+      modes = []; cities = []; countries = []; ignoreStatuses = []; ignoreStatusesK = [];
+      // Do NOT clear the country/city inputs on reload (per spec)
       page = 1;
-      triggerSearch(); // reuse apply path
-    });
-    filtersApplyLink.addEventListener('click', (e) => {
-      e.preventDefault();
-      // minimal wiring: collect current UI into state
-      modes = modeChecks.filter(c => c.checked).map(c => c.value);
-      const cval = (cityInput.value || '').trim();   cities = cval ? [cval] : [];
-      const kval = (countryInput.value || '').trim();countries = kval ? [kval] : [];
-      ignoreStatuses = Array.from(ignoreSelect.selectedOptions).map(o => o.value);
-      page = 1;
-      triggerSearch(); // Search acts as Apply
+      loadPage();
     });
 
     // Pagination (delegate)
@@ -730,6 +859,51 @@
       loadPage();
     });
 
+
+    optlistMode.addEventListener('click', (e) => {
+      const t = e.target.closest('.opt[data-opt="mode"]');
+      if (!t || t.classList.contains('is-active')) return;
+      const val = normMode(t.dataset.val);
+      if (VALID_MODES.includes(val) && !modes.includes(val)) {
+        modes.push(val);
+        page = 1;
+        loadPage(); // will rebuild URL + chips + options
+      }
+    });
+
+    optlistStatus.addEventListener('click', (e) => {
+      const t = e.target.closest('.opt[data-opt="status"]');
+      if (!t || t.classList.contains('is-active')) return;
+      const lbl = t.dataset.val;
+      if (lbl && !ignoreStatuses.includes(lbl)) {
+        ignoreStatuses.push(lbl);
+        ignoreStatusesK = ignoreStatuses.map(l => Status.statusKey(l)).filter(Boolean);
+        page = 1;
+        loadPage();
+      }
+    });    
+
+
+    geoAddLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      const ctry = (countryInput.value || '').trim();
+      const city = (cityInput.value || '').trim();
+      // If both empty: do nothing
+      if (!ctry && !city) return;
+
+      // If country provided and not already present, add it
+      if (ctry && !countries.includes(ctry)) countries.push(ctry);
+
+      // City adds independently (OR semantics); avoid duplicates
+      if (city && !cities.includes(city)) cities.push(city);
+
+      // Clear both fields (per spec)
+      countryInput.value = '';
+      cityInput.value = '';
+      page = 1;
+      loadPage();
+    });    
+
     document.addEventListener('DOMContentLoaded', () => {
       stateFromUrl();   // deep-link support
       syncUrl();        // write defaults if nothing present
@@ -737,4 +911,155 @@
     });
   })();
 </script>
+
+<script type="module">
+import { loadGeoDict, countryMatches, countryLookup, citiesByCountry } from "{{ url_for('static', filename='js/geo-dict.js') }}";
+
+const countryInput = document.getElementById('f-country');
+const cityInput    = document.getElementById('f-city');
+const acCountry    = document.getElementById('ac-country');
+const acCity       = document.getElementById('ac-city');
+
+await loadGeoDict();
+
+// Internal selection cache: show country NAME in the input, keep CODE for city lookups
+let selectedCountry = { name: '', code: '' };
+
+// ---------- Utilities ----------
+function show(el){ if (el) el.style.display = 'block'; }
+function hide(el){ if (el) el.style.display = 'none'; }
+function clear(el){ if (el) el.innerHTML = ''; }
+function clamp(v, min, max){ return Math.max(min, Math.min(max, v)); }
+
+// Close menus on outside click
+document.addEventListener('mousedown', (e) => {
+  if (!acCountry.contains(e.target) && e.target !== countryInput) hide(acCountry);
+  if (!acCity.contains(e.target) && e.target !== cityInput) hide(acCity);
+});
+
+// ---------- Country autocomplete ----------
+let cIdx = -1;
+
+function renderCountryMenu(items) {
+  if (!items.length) { hide(acCountry); clear(acCountry); return; }
+  acCountry.innerHTML = items.slice(0, 20).map((c, i) =>
+    `<div class="ac-item" role="option" data-cc="${c.code}" data-name="${c.name}" aria-selected="${i===cIdx?'true':'false'}">${c.name} (${c.code})</div>`
+  ).join('');
+  show(acCountry);
+}
+
+function pickCountry(name, code) {
+  selectedCountry = { name, code };
+  countryInput.value = name; // NAME ONLY for backend
+  cityInput.value = '';      // reset city when country changes
+  hide(acCountry); clear(acCountry);
+  // Prime city suggestions for the new country if user starts typing immediately
+  const pool = code ? citiesByCountry(code) : [];
+  if ((cityInput.value || '').trim()) renderCityMenu(pool); else { hide(acCity); clear(acCity); }
+  // Move focus to city for quick flow
+  cityInput.focus();
+}
+
+countryInput.addEventListener('input', () => {
+  const q = (countryInput.value || '').trim();
+  cIdx = -1;
+  // While typing, selection is tentative
+  selectedCountry = { name:'', code:'' };
+  if (!q) { hide(acCountry); clear(acCountry); return; }
+  renderCountryMenu(countryMatches(q));
+});
+
+countryInput.addEventListener('keydown', (e) => {
+  const items = Array.from(acCountry.querySelectorAll('.ac-item'));
+  if (!items.length) return;
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    cIdx = clamp(cIdx + 1, 0, items.length - 1);
+    // Re-flag selected item
+    items.forEach((el, i) => el.setAttribute('aria-selected', String(i===cIdx)));
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    cIdx = clamp(cIdx - 1, 0, items.length - 1);
+    items.forEach((el, i) => el.setAttribute('aria-selected', String(i===cIdx)));
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    const el = items[clamp(cIdx, 0, items.length - 1)];
+    if (el) pickCountry(el.dataset.name, el.dataset.cc);
+  } else if (e.key === 'Escape') {
+    hide(acCountry);
+  }
+});
+
+acCountry.addEventListener('mousedown', (e) => {
+  const it = e.target.closest('.ac-item'); if (!it) return;
+  pickCountry(it.dataset.name, it.dataset.cc);
+});
+
+// On blur: if unambiguous, autocomplete to canonical name
+countryInput.addEventListener('blur', () => {
+  const c = countryLookup(countryInput.value);
+  if (c) pickCountry(c.name, c.code);
+  else { hide(acCountry); }
+});
+
+// ---------- City autocomplete (dependent on selectedCountry.code) ----------
+let cityIdx = -1;
+
+function renderCityMenu(allCities) {
+  const q = (cityInput.value || '').trim().toLowerCase();
+  if (!q) { hide(acCity); clear(acCity); return; }
+  const items = allCities.filter(n => n.toLowerCase().startsWith(q)).slice(0, 30);
+  if (!items.length) { hide(acCity); clear(acCity); return; }
+  acCity.innerHTML = items.map((name, i) =>
+    `<div class="ac-item" role="option" data-name="${name}" aria-selected="${i===cityIdx?'true':'false'}">${name}</div>`
+  ).join('');
+  show(acCity);
+}
+
+cityInput.addEventListener('input', () => {
+  cityIdx = -1;
+  const pool = selectedCountry.code ? citiesByCountry(selectedCountry.code) : [];
+  renderCityMenu(pool);
+});
+
+cityInput.addEventListener('keydown', (e) => {
+  const items = Array.from(acCity.querySelectorAll('.ac-item'));
+  if (!items.length) return;
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    cityIdx = clamp(cityIdx + 1, 0, items.length - 1);
+    items.forEach((el, i) => el.setAttribute('aria-selected', String(i===cityIdx)));
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    cityIdx = clamp(cityIdx - 1, 0, items.length - 1);
+    items.forEach((el, i) => el.setAttribute('aria-selected', String(i===cityIdx)));
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    const el = items[clamp(cityIdx, 0, items.length - 1)];
+    if (el) { cityInput.value = el.dataset.name; hide(acCity); clear(acCity); }
+  } else if (e.key === 'Escape') {
+    hide(acCity);
+  }
+});
+
+acCity.addEventListener('mousedown', (e) => {
+  const it = e.target.closest('.ac-item'); if (!it) return;
+  cityInput.value = it.dataset.name;
+  hide(acCity); clear(acCity);
+});
+
+// On blur: close quietly (keep whatever the user typed)
+cityInput.addEventListener('blur', () => { hide(acCity); });
+
+// (Optional) if country is already filled from URL when the page loads,
+// try to resolve it to a known country so city suggestions work immediately.
+(function bootstrapSelectedCountryFromInput(){
+  const name = (countryInput?.value || '').trim();
+  if (!name) return;
+  const c = countryLookup(name);
+  if (c) selectedCountry = { name: c.name, code: c.code };
+})();
+</script>
+
+
 {% endblock %}
