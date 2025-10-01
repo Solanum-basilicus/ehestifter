@@ -229,12 +229,17 @@ def register(app: func.FunctionApp):
                 ignore_keys = [k for k in mapped if k]
 
             if ignore_keys:
-                key_sql = status_key_case_sql("us.Status")
+                key_sql = status_key_case_sql("us2.Status")
                 placeholders = ",".join(["?"] * len(ignore_keys))
-                # If no user status -> row passes; if present and key IN ignore -> exclude
-                where.append(f"(us.Status IS NULL OR {key_sql} NOT IN ({placeholders}))")
-                params += ignore_keys
-                params_count += ignore_keys
+                # Exclude rows where THIS user's status key is in the ignore set
+                where.append(f"""NOT EXISTS (
+                    SELECT 1 FROM dbo.UserJobStatus us2
+                    WHERE us2.JobOfferingId = j.Id
+                      AND us2.UserId = ?
+                      AND {key_sql} IN ({placeholders})
+                )""")
+                params += [user_id] + ignore_keys
+                params_count += [user_id] + ignore_keys
 
             # Date filters
             if date_kind == "updated":

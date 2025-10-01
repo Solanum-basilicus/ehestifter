@@ -40,18 +40,19 @@ def status_key_case_sql(col_sql: str) -> str:
         ... WHERE NOT ( {key_sql} IN (?, ?, ...) )
     """
     # Note: keep labels LOWER()ed to match comparisons
+    base = f"LOWER(LTRIM(RTRIM({col_sql})))"
     return f"""
     CASE
-      WHEN LOWER({col_sql}) = 'applied' THEN 'applied'
-      WHEN LOWER({col_sql}) = 'screening booked' THEN 'booked-screen'
-      WHEN LOWER({col_sql}) = 'hm interview booked' THEN 'booked-hm'
-      WHEN LOWER({col_sql}) = 'more interviews booked' THEN 'booked-more'
-      WHEN LOWER({col_sql}) = 'screening done' THEN 'done-screen'
-      WHEN LOWER({col_sql}) = 'hm interview done' THEN 'done-hm'
-      WHEN LOWER({col_sql}) = 'more interviews done' THEN 'done-more'
-      WHEN LOWER({col_sql}) = 'got offer' THEN 'offer'
-      WHEN LOWER({col_sql}) = 'accepted offer' THEN 'accepted'
-      WHEN LOWER({col_sql}) IN (
+      WHEN {base} = 'applied' THEN 'applied'
+      WHEN {base} = 'screening booked' THEN 'booked-screen'
+      WHEN {base} = 'hm interview booked' THEN 'booked-hm'
+      WHEN {base} IN ('more interviews booked','more interview booked') THEN 'booked-more'
+      WHEN {base} = 'screening done' THEN 'done-screen'
+      WHEN {base} = 'hm interview done' THEN 'done-hm'
+      WHEN {base} IN ('more interviews done','more interview done') THEN 'done-more'
+      WHEN {base} = 'got offer' THEN 'offer'
+      WHEN {base} = 'accepted offer' THEN 'accepted'
+      WHEN {base} IN (
         'rejected with filled',
         'rejected with unfortunately',
         'turned down offer',
