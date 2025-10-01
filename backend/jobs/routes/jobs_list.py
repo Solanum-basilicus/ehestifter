@@ -7,6 +7,7 @@ from helpers.db import get_connection
 from helpers.history import DatetimeEncoder
 from helpers.ids import normalize_guid
 from helpers.domain_constants import FINAL_STATUSES
+from helpers.status_normalize import status_key, status_key_case_sql
 
 
 REMOTE_MAP = {
@@ -46,10 +47,10 @@ def _parse_date(val: str | None) -> datetime | None:
     except Exception:
         return None
 
-def _require_user_if_needed(req: func.HttpRequest, category: str, ignore_status: list[str]) -> str | None:
+def _require_user_if_needed(req: func.HttpRequest, category: str, ignore_status: list[str], ignore_status_k: list[str]) -> str | None:
     uid = (req.headers.get("x-user-id") or req.params.get("userId") or "").strip()
     # We need a user for per-user status logic in both 'my' and 'open', and for ignore_status.
-    if (category in {"my", "open"}) or ignore_status:
+    if (category in {"my", "open"}) or ignore_status or ignore_status_k:
         return normalize_guid(uid) if uid else None
     return normalize_guid(uid) if uid else None
 
@@ -93,7 +94,10 @@ def register(app: func.FunctionApp):
             modes = [m.lower() for m in _parse_multi(req, "mode")]
             cities = _parse_multi(req, "city")
             countries = _parse_multi(req, "country")
-            ignore_status = [s.strip().lower() for s in _parse_multi(req, "ignore_status")]
+            # Accept both label + key variants (multi via repeated keys or commas)
+            ignore_status = [s.strip() for s in _parse_multi(req, "ignore_status")]      # labels as typed/shown in UI
+            ignore_status_k = [k.strip().lower() for k in _parse_multi(req, "ignore_status_k")]  # normalized keys
+
 
             date_kind = (req.params.get("date_kind") or "updated").strip().lower()
             if date_kind not in {"updated", "created"}:
@@ -108,7 +112,7 @@ def register(app: func.FunctionApp):
             if sort not in VALID_SORTS:
                 return func.HttpResponse("Invalid 'sort'", status_code=400)
 
-            user_id = _require_user_if_needed(req, category, ignore_status)
+            user_id = _require_user_if_needed(req, category, ignore_status, ignore_status_k)
             if category in {"my", "open"} and not user_id:
                 return func.HttpResponse(
                     "Missing user id (X-User-Id header) for category='my' or 'open'",
@@ -216,12 +220,21 @@ def register(app: func.FunctionApp):
                     params_count += ccodes + cnames
 
             # Reverse status filter - ignore specific statuses for THIS user
-            if ignore_status:
-                placeholders = ",".join(["?"] * len(ignore_status))
-                # If there's no user status, it passes; if present and in ignore list, exclude.
-                where.append(f"(us.Status IS NULL OR LOWER(us.Status) NOT IN ({placeholders}))")
-                params += [s.lower() for s in ignore_status]
-                params_count += [s.lower() for s in ignore_status]
+            # Priority: if keys present -> use keys; else map labels -> keys; else no filter.
+            ignore_keys = [k for k in ignore_status_k if k]
+            if not ignore_keys and ignore_status:
+                # Map labels to keys using server-side normalizer
+                mapped = [status_key(lbl) for lbl in ignore_status if lbl]
+                # Drop empties like 'default' only if you want strictness; we keep all to match UI intent.
+                ignore_keys = [k for k in mapped if k]
+
+            if ignore_keys:
+                key_sql = status_key_case_sql("us.Status")
+                placeholders = ",".join(["?"] * len(ignore_keys))
+                # If no user status -> row passes; if present and key IN ignore -> exclude
+                where.append(f"(us.Status IS NULL OR {key_sql} NOT IN ({placeholders}))")
+                params += ignore_keys
+                params_count += ignore_keys
 
             # Date filters
             if date_kind == "updated":
