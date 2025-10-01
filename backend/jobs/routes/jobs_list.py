@@ -229,15 +229,20 @@ def register(app: func.FunctionApp):
                 ignore_keys = [k for k in mapped if k]
 
             if ignore_keys:
+                # Deduplicate to keep placeholders stable
+                ignore_keys = list(dict.fromkeys(ignore_keys))
                 key_sql = status_key_case_sql("us2.Status")
-                placeholders = ",".join(["?"] * len(ignore_keys))
-                # Exclude rows where THIS user's status key is in the ignore set
+                # Build a VALUES table constructor: (VALUES (?),(? ), ...) AS k(v)
+                values_rows = ",".join(["(?)"] * len(ignore_keys))
+                in_table = f"(SELECT v FROM (VALUES {values_rows}) AS k(v))"
                 where.append(f"""NOT EXISTS (
-                    SELECT 1 FROM dbo.UserJobStatus us2
+                    SELECT 1
+                    FROM dbo.UserJobStatus us2
                     WHERE us2.JobOfferingId = j.Id
                       AND us2.UserId = ?
-                      AND {key_sql} IN ({placeholders})
+                      AND {key_sql} IN {in_table}
                 )""")
+                # userId goes first to match the ? in UserId = ?, then all keys for the VALUES rows
                 params += [user_id] + ignore_keys
                 params_count += [user_id] + ignore_keys
 
