@@ -232,17 +232,16 @@ def register(app: func.FunctionApp):
                 # Deduplicate to keep placeholders stable
                 ignore_keys = list(dict.fromkeys(ignore_keys))
                 key_sql = status_key_case_sql("us2.Status")
-                # Build a VALUES table constructor: (VALUES (?),(? ), ...) AS k(v)
-                values_rows = ",".join(["(?)"] * len(ignore_keys))
-                in_table = f"(SELECT v FROM (VALUES {values_rows}) AS k(v))"
+                # Build ( {key_sql} = ? OR {key_sql} = ? OR ... )
+                cmp = " OR ".join([f"{key_sql} = ?" for _ in ignore_keys])
                 where.append(f"""NOT EXISTS (
                     SELECT 1
                     FROM dbo.UserJobStatus us2
                     WHERE us2.JobOfferingId = j.Id
                       AND us2.UserId = ?
-                      AND {key_sql} IN {in_table}
+                      AND ({cmp})
                 )""")
-                # userId goes first to match the ? in UserId = ?, then all keys for the VALUES rows
+                # order: userId then all keys
                 params += [user_id] + ignore_keys
                 params_count += [user_id] + ignore_keys
 
