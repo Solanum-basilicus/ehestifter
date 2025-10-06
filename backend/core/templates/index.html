@@ -455,12 +455,8 @@
     function renderPagination(){
       const lastPage = Math.max(1, Math.ceil(total / pageSize));
 
-      // Compute the numeric page buttons as per spec:
-      // - first page: [1(bold), 2]
-      // - second page: [1, 2(bold), 3]
-      // - last page: [last-1, last(bold)]
-      // - general: [page-1, page(bold), page+1]
-      let pages = [];
+      // Determine the numeric pages to show (current ± 1, with edges handled)
+      let pages;
       if (lastPage === 1) {
         pages = [1];
       } else if (page <= 1) {
@@ -471,12 +467,25 @@
         pages = [page - 1, page, page + 1];
       }
 
-      // build the numeric links
-      const nums = pages.map(n =>
-        `<span class="page-link ${n===page ? 'current' : ''}" data-page="${n}" aria-label="Page ${n}" ${n===page ? 'aria-current="page"' : ''}>${n}</span>`
-      );
+      // Ellipsis logic: show "…" where there are hidden pages
+      const firstShown = pages[0];
+      const lastShown  = pages[pages.length - 1];
+      const showLeadingEllipsis  = firstShown > 1;          // there are pages before
+      const showTrailingEllipsis = lastShown  < lastPage;    // there are pages after
 
-      // rewrite the whole control (keeps arrows always visible)
+      // Build number buttons
+      const numParts = [];
+      if (showLeadingEllipsis) {
+        numParts.push(`<span class="page-link" data-ellipsis="1" aria-hidden="true">…</span>`);
+      }
+      numParts.push(...pages.map(n =>
+        `<span class="page-link ${n===page ? 'current' : ''}" data-page="${n}" aria-label="Page ${n}" ${n===page ? 'aria-current="page"' : ''}>${n}</span>`
+      ));
+      if (showTrailingEllipsis) {
+        numParts.push(`<span class="page-link" data-ellipsis="1" aria-hidden="true">…</span>`);
+      }
+
+      // Rebuild the control
       const parts = [
         `<label class="select"><select id="pageSize">
             <option value="10"${pageSize===10?' selected':''}>10</option>
@@ -487,14 +496,14 @@
         `<span id="pageline">of <strong>${total}</strong> per page:</span>`,
         `<span class="page-link" data-act="first">« First</span>`,
         `<span class="page-link" data-act="prev">‹ Prev</span>`,
-        ...nums,
+        ...numParts,
         `<span class="page-link" data-act="next">Next ›</span>`,
         `<span class="page-link" data-act="last">Last »</span>`
       ];
 
       paginationEl.innerHTML = parts.join('\n');
 
-      // re-bind page size change handler after re-render
+      // Re-bind page size
       const newSel = paginationEl.querySelector('#pageSize');
       newSel.addEventListener('change', () => {
         pageSize = Number(newSel.value);
@@ -503,7 +512,7 @@
         loadPage();
       });
 
-      // keep the summary text ("of N per page:") in sync as well
+      // Keep summary text in sync
       const pl = paginationEl.querySelector('#pageline');
       if (pl) pl.innerHTML = `of <strong>${total}</strong> per page:`;
     }
