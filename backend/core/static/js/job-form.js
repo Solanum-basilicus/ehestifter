@@ -79,11 +79,15 @@ import { loadGeoDict, countryLookup, prioritizedCountries, citiesByCountry } fro
         cityInput.setAttribute('list', listId);
       }
 
-      function setCountryConfirmed(c) {
+      function setCountryConfirmed(c, { preserveCity = false } = {}) {
         countryInput.value = c.name;
-        cityInput.value = '';
+        if (!preserveCity) {
+          cityInput.value = '';
+        }
         refreshCities();
       }
+
+
       function clearCountryTransient() {
         cityInput.value = '';
         refreshCities();
@@ -117,7 +121,7 @@ import { loadGeoDict, countryLookup, prioritizedCountries, citiesByCountry } fro
       countryInput.addEventListener('change', confirmOnResolve);
       countryInput.addEventListener('blur', confirmOnResolve);
 
-      if (countryObj) setCountryConfirmed(countryObj);
+      if (countryObj) setCountryConfirmed(countryObj, { preserveCity: !!init.cityName });
       else if (ccInit) refreshCities();
 
       locHost.appendChild(row);
@@ -165,6 +169,7 @@ import { loadGeoDict, countryLookup, prioritizedCountries, citiesByCountry } fro
     const rt = normRT(initial.remoteType || 'Unknown');
     const radio = document.querySelector(`input[name="remoteType"][value="${rt}"]`)
                 || document.querySelector('input[name="remoteType"][value="Unknown"]');
+    if (radio) radio.checked = true;
 
     // description
     if (initial.descriptionHtml) {
