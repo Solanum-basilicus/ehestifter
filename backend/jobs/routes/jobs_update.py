@@ -118,7 +118,19 @@ def register(app: func.FunctionApp):
 
             # include locations diff
             if "locations" in data and isinstance(data["locations"], list) and locs_changed_flag:
-                changed["Locations"] = {"from": before_locs, "to": new_locs}
+                def _fmt_locs(rows):
+                    if not rows: return "(none)"
+                    parts = []
+                    for r in rows:
+                        cc = r.get("countryCode") or ""
+                        cn = r.get("countryName") or ""
+                        city = r.get("cityName") or ""
+                        region = r.get("region") or ""
+                        left = (cc or cn)
+                        right = city or region
+                        parts.append(f"{left}: {right}" if right else left)
+                    return " · ".join(parts)
+                changed["Locations"] = {"from": _fmt_locs(before_locs), "to": _fmt_locs(new_locs)}
 
             if changed or desc_changed:
                 details = {"changed": changed}

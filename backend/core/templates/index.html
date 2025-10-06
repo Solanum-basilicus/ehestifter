@@ -454,22 +454,36 @@
 
     function renderPagination(){
       const lastPage = Math.max(1, Math.ceil(total / pageSize));
-      // Build simple window around current page: 1 2 3 ... last
-      const nums = [];
-      const pushNum = (n) => nums.push(`<span class="page-link ${n===page?'current':''}" data-page="${n}">${n}</span>`);
-      const windowSize = 3;
-      const start = 1;
-      const end = Math.min(lastPage, windowSize);
-      for (let n = start; n <= end; n++) pushNum(n);
-      if (lastPage > end) {
-        nums.push('<span class="page-link">…</span>');
-        nums.push(`<span class="page-link" data-page="${lastPage}">${lastPage}</span>`);
+
+      // Compute the numeric page buttons as per spec:
+      // - first page: [1(bold), 2]
+      // - second page: [1, 2(bold), 3]
+      // - last page: [last-1, last(bold)]
+      // - general: [page-1, page(bold), page+1]
+      let pages = [];
+      if (lastPage === 1) {
+        pages = [1];
+      } else if (page <= 1) {
+        pages = [1, 2].filter(n => n <= lastPage);
+      } else if (page >= lastPage) {
+        pages = [lastPage - 1, lastPage].filter(n => n >= 1);
+      } else {
+        pages = [page - 1, page, page + 1];
       }
-      pageline.innerHTML = `of <strong>${total}</strong> per page:`;
-      // Replace number links block (between prev/next clusters)
+
+      // build the numeric links
+      const nums = pages.map(n =>
+        `<span class="page-link ${n===page ? 'current' : ''}" data-page="${n}" aria-label="Page ${n}" ${n===page ? 'aria-current="page"' : ''}>${n}</span>`
+      );
+
+      // rewrite the whole control (keeps arrows always visible)
       const parts = [
-        // left cluster already in DOM as labeled spans; rebuild whole line for simplicity:
-        `<label class="select"><select id="pageSize"><option value="10"${pageSize===10?' selected':''}>10</option><option value="25"${pageSize===25?' selected':''}>25</option><option value="50"${pageSize===50?' selected':''}>50</option><option value="100"${pageSize===100?' selected':''}>100</option></select></label>`,
+        `<label class="select"><select id="pageSize">
+            <option value="10"${pageSize===10?' selected':''}>10</option>
+            <option value="25"${pageSize===25?' selected':''}>25</option>
+            <option value="50"${pageSize===50?' selected':''}>50</option>
+            <option value="100"${pageSize===100?' selected':''}>100</option>
+          </select></label>`,
         `<span id="pageline">of <strong>${total}</strong> per page:</span>`,
         `<span class="page-link" data-act="first">« First</span>`,
         `<span class="page-link" data-act="prev">‹ Prev</span>`,
@@ -477,8 +491,10 @@
         `<span class="page-link" data-act="next">Next ›</span>`,
         `<span class="page-link" data-act="last">Last »</span>`
       ];
+
       paginationEl.innerHTML = parts.join('\n');
-      // rewire pageSize element after re-render
+
+      // re-bind page size change handler after re-render
       const newSel = paginationEl.querySelector('#pageSize');
       newSel.addEventListener('change', () => {
         pageSize = Number(newSel.value);
@@ -486,6 +502,10 @@
         page = 1;
         loadPage();
       });
+
+      // keep the summary text ("of N per page:") in sync as well
+      const pl = paginationEl.querySelector('#pageline');
+      if (pl) pl.innerHTML = `of <strong>${total}</strong> per page:`;
     }
 
     // ---------- Empty states ----------
