@@ -11,12 +11,14 @@ from .ui_users_link_code import create_blueprint as bp_users_link_code
 from .ui_jobs_delete import create_blueprint as bp_jobs_delete
 from .ui_jobs_edit import create_blueprint as bp_job_edit
 from .ui_reports_status import create_blueprint as bp_reports_status
+from .ui_jobs_exists import create_blueprint as bp_jobs_exists
 
 
 def register_all(app, auth):
     app.register_blueprint(bp_jobs_list(auth))
     app.register_blueprint(bp_jobs_get(auth))
     app.register_blueprint(bp_jobs_create(auth))
+    app.register_blueprint(bp_jobs_exists(auth))
     app.register_blueprint(bp_job_status_get(auth))
     app.register_blueprint(bp_job_status_set(auth))
     app.register_blueprint(bp_job_history_get(auth))

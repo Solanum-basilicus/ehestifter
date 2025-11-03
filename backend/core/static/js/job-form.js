@@ -419,3 +419,88 @@ import { loadGeoDict, countryLookup, prioritizedCountries, citiesByCountry } fro
 
   window.initJobForm = initJobForm;
 })();
+
+// === Duplicate job inline banner logic (appended) ===
+// Shows a compact banner next to Create/Cancel if a job with the same (provider, tenant, externalId) already exists.
+// - No layout jumps: the banner area is pre-reserved by CSS and we just toggle visibility.
+// - Integrates with your existing init via a wrapper around window.initJobForm.
+(function () {
+  const qs = (s) => document.querySelector(s);
+
+  // Simple debounce to avoid spamming the API while typing
+  const debounce = (fn, ms = 400) => {
+    let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+  };
+
+  function readUniqueTriple() {
+    const provider = qs('#provider')?.value?.trim() ?? '';
+    const providerTenant = qs('#providerTenant')?.value?.trim() ?? '';
+    const externalId = qs('#externalId')?.value?.trim() ?? '';
+    return { provider, providerTenant, externalId };
+  }
+
+  function renderBanner(state) {
+    const el = qs('#dupBanner');
+    if (!el) return;
+    if (!state || !state.exists) {
+      el.classList.remove('show');
+      el.textContent = ''; // keep the reserved min-height
+      return;
+    }
+    const id = state.id;
+    const uiHref = `/jobs/${encodeURIComponent(id)}`; // adjust if your UI path differs
+    el.innerHTML = `Already in your tracker. <a href="${uiHref}">Open job →</a>`;
+    el.classList.add('show');
+  }
+
+  async function checkExists() {
+    const { provider, providerTenant, externalId } = readUniqueTriple();
+    // Require provider + externalId; tenant may be intentionally empty-string in your schema
+    if (!provider || externalId === '') {
+      renderBanner(null);
+      return;
+    }
+    const params = new URLSearchParams({
+      provider,
+      providerTenant, // may be empty string
+      externalId
+    });
+    try {
+      const res = await fetch(`/ui/jobs/exists?${params.toString()}`, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' }
+      });
+      if (!res.ok) { renderBanner(null); return; }
+      const body = await res.json();
+      renderBanner(body);
+    } catch {
+      renderBanner(null);
+    }
+  }
+  const checkExistsDebounced = debounce(checkExists, 400);
+
+  // Patch your existing initializer so we don't fight with current logic
+  const originalInit = window.initJobForm;
+  window.initJobForm = function patchedInitJobForm(cfg) {
+    const rv = originalInit ? originalInit(cfg) : undefined;
+
+    // First run after your init (URL heuristics might have auto-filled ATS fields)
+    setTimeout(checkExistsDebounced, 0);
+
+    // Re-check on user edits of the uniqueness triple and URL (URL changes may re-populate ATS)
+    ['#provider', '#providerTenant', '#externalId', '#url'].forEach(sel => {
+      const el = qs(sel);
+      if (el) {
+        el.addEventListener('input', checkExistsDebounced);
+        el.addEventListener('change', checkExistsDebounced);
+        el.addEventListener('blur', checkExistsDebounced);
+      }
+    });
+
+    // If your URL helper dispatches an event after deducing ATS fields, listen for it.
+    // (If it doesn't, this is harmless.)
+    window.addEventListener('job:ats-deduced', checkExistsDebounced);
+
+    return rv;
+  };
+})();

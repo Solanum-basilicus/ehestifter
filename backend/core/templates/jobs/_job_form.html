@@ -9,7 +9,10 @@
 <div class="form-shell">
   <div class="actions-top">
     <button id="btnSubmit" class="btn primary">{{ submit_label }}</button>
-    <a id="btnCancel" href="{{ cancel_href }}" class="btn">Cancel</a>
+    <a id="btnCancel" href="{{ cancel_href }}" class="btn">Cancel</a>    
+    <div class="spacer"></div>
+    <!-- Inline duplicate banner; reserved space, fades in/out -->
+    <div id="dupBanner" class="inline-banner" aria-live="polite" role="status"></div>    
   </div>
   <div id="err" class="err hidden" role="alert"></div>
 

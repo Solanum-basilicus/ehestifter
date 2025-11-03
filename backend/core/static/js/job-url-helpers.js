@@ -178,7 +178,8 @@ const REGISTRY = [
       const seg = lastPathSegment(u.pathname);
       const base = seg || u.pathname.split("/").filter(Boolean).pop() || "";
       const externalId = base ? fnv1a32Hex(base) : fnv1a32Hex(stripQuery(u.href));
-      return { source: "weworkremotely", externalId };
+      // Board → provider is the board, no tenant
+      return { provider: "weworkremotely", providerTenant: "", externalId };
     }
   },
   // Dynamite Jobs
@@ -189,7 +190,8 @@ const REGISTRY = [
       let titleSlug = firstAfter(u.pathname, "remote-job") || lastPathSegment(u.pathname);
       if (!titleSlug) titleSlug = "dynamitejobs";
       return {
-        source: "dynamitejobs",
+        provider: "dynamitejobs",
+        providerTenant: "",
         company: company || undefined,
         externalId: fnv1a32Hex(titleSlug)
       };
@@ -200,7 +202,11 @@ const REGISTRY = [
     domains: ["linkedin.com"],
     match: (u) => {
       const id = firstAfter(u.pathname, "view") || lastPathSegment(u.pathname);
-      return { source: "linkedin", externalId: id && looksLikeNumericId(id) ? id : fnv1a32Hex(stripQuery(u.href)) };
+      return {
+        provider: "linkedin",
+        providerTenant: "",
+        externalId: id && looksLikeNumericId(id) ? id : fnv1a32Hex(stripQuery(u.href))
+      };
     }
   },
   // Wellfound (AngelList Talent)
@@ -209,7 +215,12 @@ const REGISTRY = [
     match: (u) => {
       const id = firstAfter(u.pathname, "jobs") || lastPathSegment(u.pathname);
       const company = firstAfter(u.pathname, "company") || "";
-      return { source: "wellfound", company: company || undefined, externalId: id ? fnv1a32Hex(id) : fnv1a32Hex(stripQuery(u.href)) };
+      return {
+        provider: "wellfound",
+        providerTenant: "",
+        company: company || undefined,
+        externalId: id ? fnv1a32Hex(id) : fnv1a32Hex(stripQuery(u.href))
+      };
     }
   },
   // Join ATS
@@ -229,9 +240,10 @@ const REGISTRY = [
         externalId = fnv1a32Hex(stripQuery(u.href));
       }
 
-      // Source - default to ATS name, but our earlier patch will override with referral params if present
+      // ATS → provider is 'join', tenant is company (like backend)
       return {
-        source: "join",
+        provider: "join",
+        providerTenant: company || "",
         company: company || undefined,
         externalId
       };
@@ -242,7 +254,7 @@ const REGISTRY = [
     domains: ["remotive.com"],
     match: (u) => {
       const id = firstAfter(u.pathname, "remote-jobs") || lastPathSegment(u.pathname);
-      return { source: "remotive", externalId: id ? fnv1a32Hex(id) : fnv1a32Hex(stripQuery(u.href)) };
+      return { provider: "remotive", providerTenant: "", externalId: id ? fnv1a32Hex(id) : fnv1a32Hex(stripQuery(u.href)) };
     }
   },
   // ZipRecruiter
@@ -250,7 +262,7 @@ const REGISTRY = [
     domains: ["ziprecruiter.com"],
     match: (u) => {
       const id = lastPathSegment(u.pathname);
-      return { source: "ziprecruiter", externalId: id && !isGenericWord(id) ? id : fnv1a32Hex(stripQuery(u.href)) };
+      return { provider: "ziprecruiter", providerTenant: "", externalId: id && !isGenericWord(id) ? id : fnv1a32Hex(stripQuery(u.href)) };
     }
   },
   // Indeed
@@ -260,7 +272,7 @@ const REGISTRY = [
       const qp = new URLSearchParams(u.search || "");
       const jk = qp.get("jk") || qp.get("vjk");
       const id = jk || lastPathSegment(u.pathname);
-      return { source: "indeed", externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+      return { provider: "indeed", providerTenant: "", externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
     }
   },
   // StepStone (EU)
@@ -268,7 +280,7 @@ const REGISTRY = [
     domains: ["stepstone.de", "stepstone.fr", "stepstone.nl", "stepstone.co.uk", "stepstone.com"],
     match: (u) => {
       const id = lastPathSegment(u.pathname);
-      return { source: "stepstone", externalId: id && looksLikeAlphaNumId(id) ? id : fnv1a32Hex(stripQuery(u.href)) };
+      return { provider: "stepstone", providerTenant: "", externalId: id && looksLikeAlphaNumId(id) ? id : fnv1a32Hex(stripQuery(u.href)) };
     }
   },
   // Xing
@@ -276,7 +288,7 @@ const REGISTRY = [
     domains: ["xing.com"],
     match: (u) => {
       const id = firstAfter(u.pathname, "jobs") || lastPathSegment(u.pathname);
-      return { source: "xing", externalId: id ? fnv1a32Hex(id) : fnv1a32Hex(stripQuery(u.href)) };
+      return { provider: "xing", providerTenant: "", externalId: id ? fnv1a32Hex(id) : fnv1a32Hex(stripQuery(u.href)) };
     }
   },
   // Glassdoor
@@ -284,7 +296,7 @@ const REGISTRY = [
     domains: ["glassdoor.com", "glassdoor.de", "glassdoor.co.uk", "glassdoor.fr"],
     match: (u) => {
       const id = firstAfter(u.pathname, "job") || lastPathSegment(u.pathname);
-      return { source: "glassdoor", externalId: id && looksLikeAlphaNumId(id) ? id : fnv1a32Hex(stripQuery(u.href)) };
+      return { provider: "glassdoor", providerTenant: "", externalId: id && looksLikeAlphaNumId(id) ? id : fnv1a32Hex(stripQuery(u.href)) };
     }
   },
   // Monster
@@ -292,7 +304,7 @@ const REGISTRY = [
     domains: ["monster.com", "monster.de", "monster.co.uk", "monster.fr", "monster.it"],
     match: (u) => {
       const id = lastPathSegment(u.pathname);
-      return { source: "monster", externalId: id && looksLikeAlphaNumId(id) ? id : fnv1a32Hex(stripQuery(u.href)) };
+      return { provider: "monster", providerTenant: "", externalId: id && looksLikeAlphaNumId(id) ? id : fnv1a32Hex(stripQuery(u.href)) };
     }
   },
   // Workday (common in-company ATS)
@@ -304,12 +316,9 @@ const REGISTRY = [
       const company = host.split(".")[0]; // e.g., azenta.wd1.myworkdayjobs.com -> "azenta"
       // ID often after last slash; sometimes like _R20250574
       const seg = lastPathSegment(u.pathname);
-      const qp = new URLSearchParams(u.search || "");
-      const src = qp.get("source");
-      let source = src ? src.toLowerCase() : "workday";
-      if (source === "linkedin") source = "linkedin"; // propagate referral
       const id = seg && !isGenericWord(seg) ? seg : fnv1a32Hex(stripQuery(u.href));
-      return { source, company, externalId: id };
+      // ATS: provider fixed, tenant = company
+      return { provider: "workday", providerTenant: company || "", company, externalId: id };
     }
   },
   // Greenhouse
@@ -318,7 +327,12 @@ const REGISTRY = [
     match: (u) => {
       const company = firstAfter(u.pathname, "boards") || "";
       const id = firstAfter(u.pathname, "jobs") || lastPathSegment(u.pathname);
-      return { source: "greenhouse", company: company || undefined, externalId: id && looksLikeNumericId(id) ? id : fnv1a32Hex(stripQuery(u.href)) };
+      return {
+        provider: "greenhouse",
+        providerTenant: company || "",
+        company: company || undefined,
+        externalId: id && looksLikeNumericId(id) ? id : fnv1a32Hex(stripQuery(u.href))
+      };
     }
   },
   // Lever
@@ -328,7 +342,12 @@ const REGISTRY = [
       const host = hostnameNoWww(u.hostname).replace(".lever.co","");
       const company = host || "";
       const id = firstAfter(u.pathname, "jobs") || lastPathSegment(u.pathname);
-      return { source: "lever", company: company || undefined, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+      return {
+        provider: "lever",
+        providerTenant: company || "",
+        company: company || undefined,
+        externalId: id ? id : fnv1a32Hex(stripQuery(u.href))
+      };
     }
   },
   // Personio
@@ -338,7 +357,12 @@ const REGISTRY = [
       const host = hostnameNoWww(u.hostname).split(".")[0];
       const company = host || "";
       const id = lastPathSegment(u.pathname);
-      return { source: "personio", company, externalId: id && looksLikeAlphaNumId(id) ? id : fnv1a32Hex(stripQuery(u.href)) };
+      return {
+        provider: "personio",
+        providerTenant: company || "",
+        company,
+        externalId: id && looksLikeAlphaNumId(id) ? id : fnv1a32Hex(stripQuery(u.href))
+      };
     }
   },
   // SmartRecruiters
@@ -347,7 +371,12 @@ const REGISTRY = [
     match: (u) => {
       const company = firstAfter(u.pathname, "SmartRecruiters") || firstAfter(u.pathname, "company") || "";
       const id = firstAfter(u.pathname, "job") || lastPathSegment(u.pathname);
-      return { source: "smartrecruiters", company: company || undefined, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+      return {
+        provider: "smartrecruiters",
+        providerTenant: company || "",
+        company: company || undefined,
+        externalId: id ? id : fnv1a32Hex(stripQuery(u.href))
+      };
     }
   },
   // Teamtailor
@@ -356,7 +385,7 @@ const REGISTRY = [
     match: (u) => {
       const company = hostnameNoWww(u.hostname).split(".")[0];
       const id = lastPathSegment(u.pathname);
-      return { source: "teamtailor", company, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+      return { provider: "teamtailor", providerTenant: company || "", company, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
     }
   },
   // Workable
@@ -365,16 +394,19 @@ const REGISTRY = [
     match: (u) => {
       const id = lastPathSegment(u.pathname);
       const host = hostnameNoWww(u.hostname);
-      const company = host.includes(".workable.com") ? host.split(".")[0] : undefined;
-      return { source: "workable", company, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+      const company = host.includes(".workable.com") ? host.split(".")[0] : host.includes(".applytojob.com") ? "" : undefined;
+      // For applytojob.com we don't always have a tenant; leave tenant empty to mirror backend mapping
+      return { provider: "workable", providerTenant: company || "", company: company || undefined, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
     }
   },
   // JazzHR
   {
-    domains: [/\.applytojob\.com$/i, /\.jazz\.co$/i],
+    // Align with backend: JazzHR only on jazz.co (applytojob.com is handled by Workable)
+    domains: [/\.jazz\.co$/i],
     match: (u) => {
       const id = lastPathSegment(u.pathname);
-      return { source: "jazzhr", externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+      const company = hostnameNoWww(u.hostname).split(".")[0];
+      return { provider: "jazzhr", providerTenant: company || "", company, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
     }
   },
   // Ashby
@@ -383,7 +415,7 @@ const REGISTRY = [
     match: (u) => {
       const company = hostnameNoWww(u.hostname).split(".")[0];
       const id = lastPathSegment(u.pathname);
-      return { source: "ashby", company, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+      return { provider: "ashby", providerTenant: company || "", company, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
     }
   },
   // Recruitee
@@ -392,7 +424,7 @@ const REGISTRY = [
     match: (u) => {
       const company = hostnameNoWww(u.hostname).split(".")[0];
       const id = lastPathSegment(u.pathname);
-      return { source: "recruitee", company, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+      return { provider: "recruitee", providerTenant: company || "", company, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
     }
   },
   // BambooHR
@@ -401,7 +433,7 @@ const REGISTRY = [
     match: (u) => {
       const company = hostnameNoWww(u.hostname).split(".")[0];
       const id = lastPathSegment(u.pathname);
-      return { source: "bamboohr", company, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+      return { provider: "bamboohr", providerTenant: company || "", company, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
     }
   },
   // iCIMS
@@ -409,7 +441,7 @@ const REGISTRY = [
     domains: ["careers.icims.com", "icims.com"],
     match: (u) => {
       const id = firstAfter(u.pathname, "jobs") || lastPathSegment(u.pathname);
-      return { source: "icims", externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+      return { provider: "icims", providerTenant: "", externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
     }
   },
   // Jobvite
@@ -417,7 +449,10 @@ const REGISTRY = [
     domains: [/\.jobvite\.com$/i],
     match: (u) => {
       const id = lastPathSegment(u.pathname);
-      return { source: "jobvite", externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+      const company = hostnameNoWww(u.hostname).split(".")[0];
+      // Some tenants appear as subdomain; fallback to empty if not present
+      const tenant = company && company !== "jobvite" ? company : "";
+      return { provider: "jobvite", providerTenant: tenant, company: tenant || undefined, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
     }
   },
   // BreezyHR
@@ -426,7 +461,7 @@ const REGISTRY = [
     match: (u) => {
       const company = hostnameNoWww(u.hostname).split(".")[0];
       const id = lastPathSegment(u.pathname);
-      return { source: "breezyhr", company, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+      return { provider: "breezyhr", providerTenant: company || "", company, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
     }
   },
   // Comeet
@@ -434,7 +469,8 @@ const REGISTRY = [
     domains: [/\.comeet\.co$/i],
     match: (u) => {
       const id = lastPathSegment(u.pathname);
-      return { source: "comeet", externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+      const company = hostnameNoWww(u.hostname).split(".")[0];
+      return { provider: "comeet", providerTenant: company || "", company, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
     }
   },
   // Pinpoint
@@ -443,29 +479,29 @@ const REGISTRY = [
     match: (u) => {
       const company = hostnameNoWww(u.hostname).split(".")[0];
       const id = lastPathSegment(u.pathname);
-      return { source: "pinpoint", company, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
+      return { provider: "pinpoint", providerTenant: company || "", company, externalId: id ? id : fnv1a32Hex(stripQuery(u.href)) };
     }
   },
   // Job boards UK/EU
   {
     domains: ["reed.co.uk"],
-    match: (u) => ({ source: "reed", externalId: lastPathSegment(u.pathname) || fnv1a32Hex(stripQuery(u.href)) })
+    match: (u) => ({ provider: "reed", providerTenant: "", externalId: lastPathSegment(u.pathname) || fnv1a32Hex(stripQuery(u.href)) })
   },
   {
     domains: ["totaljobs.com", "totaljobs.com.au", "cwjobs.co.uk"],
-    match: (u) => ({ source: "totaljobs", externalId: lastPathSegment(u.pathname) || fnv1a32Hex(stripQuery(u.href)) })
+    match: (u) => ({ provider: "totaljobs", providerTenant: "", externalId: lastPathSegment(u.pathname) || fnv1a32Hex(stripQuery(u.href)) })
   },
   {
     domains: ["cv-library.co.uk"],
-    match: (u) => ({ source: "cv-library", externalId: lastPathSegment(u.pathname) || fnv1a32Hex(stripQuery(u.href)) })
+    match: (u) => ({ provider: "cv-library", providerTenant: "", externalId: lastPathSegment(u.pathname) || fnv1a32Hex(stripQuery(u.href)) })
   },
   {
     domains: ["nofluffjobs.com"],
-    match: (u) => ({ source: "nofluffjobs", externalId: lastPathSegment(u.pathname) || fnv1a32Hex(stripQuery(u.href)) })
+    match: (u) => ({ provider: "nofluffjobs", providerTenant: "", externalId: lastPathSegment(u.pathname) || fnv1a32Hex(stripQuery(u.href)) })
   },
   {
     domains: ["pracuj.pl"],
-    match: (u) => ({ source: "pracuj", externalId: lastPathSegment(u.pathname) || fnv1a32Hex(stripQuery(u.href)) })
+    match: (u) => ({ provider: "pracuj", providerTenant: "", externalId: lastPathSegment(u.pathname) || fnv1a32Hex(stripQuery(u.href)) })
   }
 ];
 
