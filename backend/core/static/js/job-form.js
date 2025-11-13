@@ -484,6 +484,23 @@ import { loadGeoDict, countryLookup, prioritizedCountries, citiesByCountry } fro
   window.initJobForm = function patchedInitJobForm(cfg) {
     const rv = originalInit ? originalInit(cfg) : undefined;
 
+    // Decide whether to enable duplicate checking based on mode.
+    // We only want it on the "create" page, not when editing an existing job.
+    const mode =
+      (cfg && cfg.mode) ||
+      (window.__JOB_FORM_CTX__ && window.__JOB_FORM_CTX__.mode) ||
+      "create";
+
+    if (mode !== "create") {
+      // Ensure banner is hidden on edit pages
+      const banner = qs("#dupBanner");
+      if (banner) {
+        banner.classList.remove("show");
+        banner.textContent = "";
+      }
+      return rv;
+    }
+
     // First run after your init (URL heuristics might have auto-filled ATS fields)
     setTimeout(checkExistsDebounced, 0);
 
