@@ -85,6 +85,31 @@ function companyFromHost(host) {
   return parts[stop] || parts[0] || h;
 }
 
+// Choose provider from host when no specific ATS/board rule matched.
+// Rule:
+//   - Take the *left-most* label before the public suffix (e.g. bosch.newats.ai -> bosch)
+//   - If that label is a generic jobs/career label (jobs, careers, karriere, ...),
+//     fall back to the next one to the right (jobs.siemens.com -> siemens).
+function providerFromHost(host) {
+  const h = hostnameNoWww(host);
+  if (!h) return "corporate-site";
+  const parts = h.split(".");
+  if (parts.length === 1) return parts[0];
+
+  const psLen = getPublicSuffixLength(h);
+  const cutoff = parts.length - psLen;
+  if (cutoff <= 0) return parts[0];
+
+  const pre = parts.slice(0, cutoff); // labels before suffix
+  if (!pre.length) return parts[0];
+
+  let candidate = pre[0] || "";
+  if (GENERIC_JOB_LABELS.has(candidate.toLowerCase()) && pre.length > 1) {
+    candidate = pre[1];
+  }
+  return candidate || parts[0];
+}
+
 // --- Referral source extraction from URL params ---
 // Normalize a board/source name from a free-form value or a domain/URL.
 function normalizeSourceName(v) {
@@ -607,8 +632,8 @@ export function deduceFromUrl(rawUrl) {
     externalId = (last && !STOP_WORDS.has(last.toLowerCase())) ? last : fnv1a32Hex(stripQuery(url.href));
   }
 
-  // Provider = corporate site; Tenant unknown; FoundOn prefers referral param
-  const provider = "corporate-site";
+  // Provider from host; Tenant unknown; FoundOn prefers referral param
+  const provider = providerFromHost(host);
   const providerTenant = "";
   const foundOn = referral || "corporate-site";
 

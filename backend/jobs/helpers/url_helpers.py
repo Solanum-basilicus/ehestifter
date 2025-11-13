@@ -84,6 +84,36 @@ def _company_from_host(host: str) -> str:
             return label
     return parts[-2]  # fallback
 
+def _provider_from_host(host: str) -> str:
+    """
+    Choose provider from host when it is not a known ATS/board:
+      - Take the left-most label before the public suffix (e.g. bosch.newats.ai -> 'bosch')
+      - If that label is a generic jobs/career label (jobs, careers, karriere, ...),
+        fall back to the next one to the right (jobs.siemens.com -> 'siemens').
+    """
+    host = (host or "").lower().lstrip("www.")
+    parts = host.split(".")
+    if not parts or not parts[0]:
+        return "corporate-site"
+    if len(parts) == 1:
+        return parts[0]
+
+    # determine public suffix length: 2 for known multi-level, otherwise 1
+    if len(parts) >= 3 and ".".join(parts[-2:]) in MULTI_LEVEL_TLDS:
+        ps_len = 2
+    else:
+        ps_len = 1
+
+    cutoff = len(parts) - ps_len
+    if cutoff <= 0:
+        return parts[0]
+
+    pre = parts[:cutoff]  # labels before suffix
+    candidate = pre[0]
+    if candidate in GENERIC_JOB_LABELS and len(pre) > 1:
+        candidate = pre[1]
+    return candidate or parts[0]
+
 def _normalize_source_name(v: str) -> str:
     s = (v or "").strip().lower()
     # if it's a URL or domain-like, strip www. and take base
@@ -229,7 +259,7 @@ def deduce_from_url(raw_url: str) -> dict:
             }
 
     # Corporate site (unknown host)
-    provider = "corporate-site"
+    provider = _provider_from_host(host)
     provider_tenant = ""
     company = _company_from_host(host)
     seg = _last_path_segment(path)
