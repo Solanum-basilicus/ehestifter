@@ -4,3 +4,5 @@
 
 azure-functions
 pyodbc
+azure-identity>=1.15.0
+azure-storage-blob>=12.19.0
