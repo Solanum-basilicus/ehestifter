@@ -23,7 +23,19 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+        
+      - name: Debug OIDC subject (temp)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const token = await core.getIDToken('api://AzureADTokenExchange');
+            const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+            core.info(`sub=${payload.sub}`);
+            core.info(`aud=${payload.aud}`);
+            core.info(`iss=${payload.iss}`);
+            core.info(`ref=${context.ref}`);
+            core.info(`environment=${process.env.GITHUB_ENV || ''}`);
+            
       - name: Login to Azure
         uses: azure/login@v2
         with:
