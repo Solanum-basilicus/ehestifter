@@ -11,18 +11,18 @@ from azure.core.exceptions import ResourceNotFoundError
 _CV_CONTAINER = os.getenv("CV_CONTAINER_NAME", "cvblobs")
 
 
-#def _get_blob_service_client() -> BlobServiceClient:
-#    account_url = os.getenv("AzureWebJobsStorage__blobServiceUri")
-#    if not account_url:
-#        raise Exception("Missing AzureWebJobsStorage__blobServiceUri")
-#
-#    # For user-assigned managed identity: DefaultAzureCredential uses AZURE_CLIENT_ID.
-#    client_id = os.getenv("AzureWebJobsStorage__clientId")
-#    if client_id:
-#        os.environ["AZURE_CLIENT_ID"] = client_id
-#
-#    credential = DefaultAzureCredential()
-#    return BlobServiceClient(account_url=account_url, credential=credential)
+def _get_blob_service_client() -> BlobServiceClient:
+    account_url = os.getenv("AzureWebJobsStorage__blobServiceUri")
+    if not account_url:
+        raise Exception("Missing AzureWebJobsStorage__blobServiceUri")
+
+    # For user-assigned managed identity: DefaultAzureCredential uses AZURE_CLIENT_ID.
+    client_id = os.getenv("AzureWebJobsStorage__clientId")
+    if client_id:
+        os.environ["AZURE_CLIENT_ID"] = client_id
+
+    credential = DefaultAzureCredential()
+    return BlobServiceClient(account_url=account_url, credential=credential)
 
 
 def _get_blob_client(blob_path: str):
