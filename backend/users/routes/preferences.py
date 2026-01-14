@@ -5,7 +5,7 @@ import azure.functions as func
 
 from helpers.db import get_connection
 from helpers.b2c_headers import get_b2c_headers
-from helpers.blob_storage import upload_json, upload_text
+from helpers.blob_storage import upload_json, upload_text, download_json, download_text
 from helpers.quill_to_text import canonical_json, quill_delta_to_text, normalize_text
 
 
@@ -98,6 +98,76 @@ def register(app):
         except Exception as e:
             logging.exception("USERS/PREFERENCES: Error m20001")
             # Keep message generic if you prefer; leaving str(e) helps while bootstrapping.
+            return func.HttpResponse(f"Error: {str(e)}", status_code=500)
+
+        finally:
+            try:
+                if conn is not None:
+                    conn.close()
+            except Exception:
+                pass
+
+    @app.route(route="users/preferences", methods=["GET"])
+    def get_user_preferences(req: func.HttpRequest) -> func.HttpResponse:
+        logging.info("USERS/PREFERENCES GET processed a request.")
+
+        conn = None
+        try:
+            b2c_object_id, _, _ = get_b2c_headers(req)
+            if not b2c_object_id:
+                return func.HttpResponse("Unauthorized", status_code=401)
+
+            conn = get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute("SELECT Id FROM Users WHERE B2CObjectId = ?", b2c_object_id)
+            user_row = cursor.fetchone()
+            if not user_row:
+                return func.HttpResponse("User not found", status_code=404)
+
+            user_id = user_row[0]
+
+            cursor.execute(
+                """
+                SELECT
+                    CVBlobPath,
+                    CVTextBlobPath,
+                    CVVersionId,
+                    LastUpdated
+                FROM dbo.UserPreferences
+                WHERE UserId = ?
+                """,
+                (user_id,),
+            )
+            pref = cursor.fetchone()
+            if not pref:
+                return func.HttpResponse("Preferences not found", status_code=404)
+
+            cv_blob_path, cv_text_blob_path, cv_version_id, last_updated = pref
+
+            # For UI/tests: return the Quill JSON and the normalized plaintext.
+            # These reads are optional; if blobs missing, return nulls rather than failing hard.
+            cv_quill_delta = download_json(cv_blob_path) if cv_blob_path else None
+            cv_plain_text = download_text(cv_text_blob_path) if cv_text_blob_path else None
+
+            return func.HttpResponse(
+                body=json.dumps(
+                    {
+                        "UserId": str(user_id),
+                        "CVBlobPath": cv_blob_path,
+                        "CVTextBlobPath": cv_text_blob_path,
+                        "CVVersionId": cv_version_id,
+                        "LastUpdated": last_updated.isoformat() if last_updated else None,
+                        "CVQuillDelta": cv_quill_delta,
+                        "CVPlainText": cv_plain_text,
+                    }
+                ),
+                status_code=200,
+                mimetype="application/json",
+            )
+
+        except Exception as e:
+            logging.exception("USERS/PREFERENCES GET: Error m20002")
             return func.HttpResponse(f"Error: {str(e)}", status_code=500)
 
         finally:
