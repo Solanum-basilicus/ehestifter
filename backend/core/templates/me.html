@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 
 {% block head_extra %}
+<link href="{{ url_for('static', filename='css/quill.snow.css') }}" rel="stylesheet">
+
 <style>
   /* lightweight card + layout */
   .container { max-width:1100px; margin:0 auto; padding:24px 16px; }
@@ -22,6 +24,11 @@
   /* Ensure 'hidden' always hides, regardless of other display rules */
   [hidden] { 
     display: none !important; }  
+  .ql-toolbar.ql-snow { border:1px solid #e5e7eb; border-radius:8px 8px 0 0; }
+  .ql-container.ql-snow { border:1px solid #e5e7eb; border-top:0; border-radius:0 0 8px 8px; min-height:180px; }
+  .ql-editor { min-height:160px; }
+  .err { color:#b91c1c; margin-top:6px; }
+  .muted { color:#6b7280; font-size:12px; }
 </style>
 {% endblock %}
 
@@ -140,8 +147,71 @@
         <p class="subtle" id="user-filters-span">Filters are not implemented yet.</p>
       </section>
 
+      <!-- Preferences card (CV rich text) -->
+      <section id="prefs" class="card" aria-busy="true">
+        <h2 style="margin:0 0 8px; font-size:18px;">Preferences</h2>
+        <p class="subtle" style="margin:0 0 12px;">
+          CV is stored as rich text (Quill delta). Other fields are shown for debugging.
+        </p>
+
+        <div class="btn-row" style="align-items:center; margin-bottom:8px;">
+          <button id="btn-save-prefs" class="btn primary" type="button" disabled>Save changes</button>
+          <span id="prefs-saving" class="subtle small" hidden>Saving…</span>
+        </div>
+        <div id="prefs-error" class="err" hidden></div>
+
+        <!-- Quill toolbar -->
+        <div id="cvToolbar">
+          <span class="ql-formats">
+            <select class="ql-header">
+              <option selected></option>
+              <option value="2">H2</option>
+              <option value="3">H3</option>
+            </select>
+          </span>
+          <span class="ql-formats">
+            <button class="ql-bold"></button>
+            <button class="ql-italic"></button>
+            <button class="ql-underline"></button>
+            <button class="ql-strike"></button>
+          </span>
+          <span class="ql-formats">
+            <button class="ql-blockquote"></button>
+            <button class="ql-code-block"></button>
+          </span>
+          <span class="ql-formats">
+            <button class="ql-list" value="ordered"></button>
+            <button class="ql-list" value="bullet"></button>
+          </span>
+          <span class="ql-formats">
+            <button class="ql-link"></button>
+          </span>
+          <span class="ql-formats">
+            <button class="ql-clean"></button>
+          </span>
+        </div>
+
+        <div id="cvEditor"></div>
+
+        <div class="muted" style="margin-top:6px;">
+          No images. Links are allowed.
+        </div>
+
+        <!-- Debug: collapsed by default -->
+        <details style="margin-top:12px;">
+          <summary class="subtle">Debug (raw preferences payload)</summary>
+          <pre id="prefs-debug" class="mono" style="white-space:pre-wrap; margin-top:8px;"></pre>
+        </details>
+      </section>
+
+
+
+
     </div>
   </div>
+
+<script src="{{ url_for('static', filename='js/quill.min.js') }}"></script>
+
 
 <script>
   (function () {
@@ -353,12 +423,153 @@
     });
 
 
+    
+    // ===== Preferences (CV rich text) =====
+    const prefsBox     = document.getElementById('prefs');
+    const btnSavePrefs = document.getElementById('btn-save-prefs');
+    const prefsErr     = document.getElementById('prefs-error');
+    const prefsSaving  = document.getElementById('prefs-saving');
+    const prefsDebug   = document.getElementById('prefs-debug');
+
+    let cvQuill = null;
+    let prefsBusy = false;
+    let initialDeltaStr = JSON.stringify({ ops: [] });
+
+    function showPrefsError(msg){
+      prefsErr.hidden = false;
+      prefsErr.textContent = msg;
+    }
+    function clearPrefsError(){
+      prefsErr.hidden = true;
+      prefsErr.textContent = '';
+    }
+
+    function setPrefsBusy(b){
+      prefsBusy = b;
+      prefsBox?.setAttribute('aria-busy', b ? 'true' : 'false');
+      prefsSaving.hidden = !b;
+
+      // intentional: disabled by default unless explicitly ready
+      btnSavePrefs.disabled = true;
+
+      if (cvQuill) cvQuill.enable(!b); // greys editor while saving/loading
+    }
+
+    function safeDeltaFromUpstream(x){
+      if (!x) return { ops: [] };
+      if (typeof x === 'string') {
+        try { return JSON.parse(x); } catch { return { ops: [] }; }
+      }
+      if (typeof x === 'object') return x;
+      return { ops: [] };
+    }
+
+    function nowDeltaStr(){
+      if (!cvQuill) return JSON.stringify({ ops: [] });
+      return JSON.stringify(cvQuill.getContents() || { ops: [] });
+    }
+
+    function isDirty(){
+      return nowDeltaStr() !== initialDeltaStr;
+    }
+
+    function syncSaveButton(){
+      if (!btnSavePrefs) return;
+      if (prefsBusy) { btnSavePrefs.disabled = true; return; }
+      btnSavePrefs.disabled = !isDirty();
+    }
+
+    async function initPrefs(){
+      if (!prefsBox) return;
+
+      setPrefsBusy(true);
+      clearPrefsError();
+
+      // init Quill once
+      if (!cvQuill) {
+        cvQuill = new Quill('#cvEditor', {
+          theme: 'snow',
+          modules: { toolbar: '#cvToolbar' }
+        });
+        cvQuill.on('text-change', () => syncSaveButton());
+      }
+
+      try {
+        const data = await window.fetchWithRetry('/ui/users/preferences', 4, 750);
+        // Fill editor with CV delta
+        const delta = safeDeltaFromUpstream(data?.CVQuillDelta);
+        cvQuill.setContents(delta);
+
+        // baseline for dirty tracking (AFTER setContents)
+        initialDeltaStr = nowDeltaStr();
+
+        // Debug block: show whole payload (collapsed in <details>)
+        if (prefsDebug) {
+          try { prefsDebug.textContent = JSON.stringify(data, null, 2); }
+          catch { prefsDebug.textContent = String(data); }
+        }
+
+        // Not dirty after load => keep disabled (your rule)
+        btnSavePrefs && (btnSavePrefs.disabled = true);
+      } catch (e) {
+        showPrefsError('Failed to load preferences. Please try again.');
+      } finally {
+        setPrefsBusy(false);
+        syncSaveButton();
+      }
+    }
+
+    btnSavePrefs?.addEventListener('click', async () => {
+      if (!cvQuill || prefsBusy) return;
+      clearPrefsError();
+
+      // only allow save if dirty
+      if (!isDirty()) { btnSavePrefs.disabled = true; return; }
+
+      setPrefsBusy(true);
+      try {
+        const payload = { CVQuillDelta: cvQuill.getContents() || { ops: [] } };
+
+        const resp = await window.fetchWithRetry(
+          '/ui/users/preferences',
+          2,      // attempts: don't spam writes
+          750,    // baseDelay
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          }
+        );
+
+        // success: reset baseline, disable button
+        initialDeltaStr = nowDeltaStr();
+        btnSavePrefs.disabled = true;
+
+        // merge debug view with latest POST response fields if possible
+        if (prefsDebug) {
+          try {
+            const prev = JSON.parse(prefsDebug.textContent || "{}");
+            prefsDebug.textContent = JSON.stringify({ ...prev, ...resp }, null, 2);
+          } catch {
+            prefsDebug.textContent = JSON.stringify(resp, null, 2);
+          }
+        }
+      } catch (e) {
+        showPrefsError('Failed to save preferences. Please try again.');
+      } finally {
+        setPrefsBusy(false);
+        syncSaveButton();
+      }
+    });
+
+
     document.addEventListener('DOMContentLoaded', () => {
       // Hide/show the custom row immediately, without waiting on network
       syncCustomRowVisibility();
       // Kick off the async in parallel (no await to avoid blocking UI)
       initProfile();
       initTelegram();
+      initPrefs();
     });
 
   })();

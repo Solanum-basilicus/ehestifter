@@ -1,6 +1,7 @@
 import os, time, logging, requests
 from flask import session
 from .retry import retry_until_ready
+import json
 
 base_url = os.getenv("EHESTIFTER_USERS_API_BASE_URL")
 fxkey    = os.getenv("EHESTIFTER_USERS_FUNCTION_KEY")
@@ -75,3 +76,53 @@ def get_link_code(context: dict) -> dict:
     headers = _b2c_headers_from_context(context)
     return retry_until_ready(lambda: _do_get_link_code(url, headers), attempts=4, base_delay=0.75)
 
+def _fx_headers_for_user_actor(context: dict, *, user_id: str | None = None) -> dict:
+    """
+    Headers for Users Function endpoints that expect:
+      - x-functions-key (if configured)
+      - X-User-Id (in-app user id) OR X-Actor-Type=system
+    We keep Accept/Content-Type consistent with other UI proxy calls.
+    """
+    h = {"Accept": "application/json", "Content-Type": "application/json"}
+    if fxkey:
+        h["x-functions-key"] = fxkey
+
+    # Prefer explicit user_id if caller already has it
+    if user_id:
+        h["X-User-Id"] = user_id
+    else:
+        try:
+            uid = get_in_app_user_id(context)
+            h["X-User-Id"] = uid
+        except Exception:
+            h["X-Actor-Type"] = "system"
+    return h
+
+def get_preferences(context: dict) -> dict:
+    """
+    GET /users/preferences from Users Function.
+    """
+    if not base_url or not fxkey:
+        raise ValueError("Users API env is not configured")
+
+    url = f"{base_url}/users/preferences"
+    headers = _fx_headers_for_user_actor(context)
+    r = requests.get(url, headers=headers, timeout=10)
+    r.raise_for_status()
+    return r.json()
+
+def set_preferences(context: dict, *, cv_quill_delta) -> dict:
+    """
+    POST /users/preferences with {"CVQuillDelta": <delta>}
+    Returns the upstream JSON (message + blob paths + version id).
+    """
+    if not base_url or not fxkey:
+        raise ValueError("Users API env is not configured")
+
+    url = f"{base_url}/users/preferences"
+    headers = _fx_headers_for_user_actor(context)
+
+    payload = {"CVQuillDelta": cv_quill_delta}
+    r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=20)
+    r.raise_for_status()
+    return r.json()
