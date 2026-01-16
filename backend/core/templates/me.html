@@ -24,17 +24,41 @@
   /* Ensure 'hidden' always hides, regardless of other display rules */
   [hidden] { 
     display: none !important; }  
-  .ql-toolbar.ql-snow { border:1px solid #e5e7eb; border-radius:8px 8px 0 0; }
-  .ql-container.ql-snow { border:1px solid #e5e7eb; border-top:0; border-radius:0 0 8px 8px; min-height:180px; }
-  .ql-editor { min-height:160px; }
+
+  /* Quill styling for /me (contained, card grows naturally) */
+  #cvToolbar { margin-bottom: 6px; }
+
+  #cvEditor.ql-container.ql-snow {
+    border: 1px solid #e5e7eb;
+    border-top: 0;
+    border-radius: 0 0 8px 8px;
+    box-sizing: border-box;
+
+    /* Key part: do NOT stretch/fill; let it be content-driven */
+    height: auto;
+    min-height: 220px;                      /* visible even when empty */
+    margin-bottom: 8px;                     /* ~5px+ gap to card border */
+  }
+
+  #cvEditor .ql-editor {
+    /* Key part: scroll inside editor for long CVs */
+    min-height: 200px;
+    max-height: 520px;                      /* adjust if you want */
+    overflow-y: auto;
+  }
+
+  /* Keep toolbar border consistent */
+  #cvToolbar.ql-toolbar.ql-snow {
+    border: 1px solid #e5e7eb;
+    border-radius: 8px 8px 0 0;
+    box-sizing: border-box;
+  }
+  #cvEditor .ql-editor { font-size: 14px; line-height: 1.4; }
+
   .err { color:#b91c1c; margin-top:6px; }
   .muted { color:#6b7280; font-size:12px; }
-  .card { overflow: hidden; }
-  #cvEditor { width: 100%; max-width: 100%; }
-  #cvToolbar { margin-bottom: 6px; }
-  #cvEditor { margin-bottom: 12px; }  
-  .ql-container { box-sizing: border-box; }  
-  #cvEditor .ql-editor { max-height: 360px; overflow-y: auto; }
+  .card { border:1px solid #e5e7eb; border-radius:12px; background:#fff; padding:16px; overflow:hidden; }
+  pre { overflow-x: auto; }
 </style>
 {% endblock %}
 
