@@ -101,26 +101,32 @@ def _fx_headers_for_user_actor(context: dict, *, user_id: str | None = None) -> 
 def get_preferences(context: dict) -> dict:
     """
     GET /users/preferences from Users Function.
+    Auth: B2C headers (x-user-sub etc.) via get_b2c_headers(req) upstream.
     """
     if not base_url or not fxkey:
         raise ValueError("Users API env is not configured")
 
     url = f"{base_url}/users/preferences"
-    headers = _fx_headers_for_user_actor(context)
+    headers = _b2c_headers_from_context(context)
+    # Upstream might not require Content-Type for GET, but harmless
+    headers["Content-Type"] = "application/json"
+
     r = requests.get(url, headers=headers, timeout=10)
     r.raise_for_status()
     return r.json()
 
+
 def set_preferences(context: dict, *, cv_quill_delta) -> dict:
     """
     POST /users/preferences with {"CVQuillDelta": <delta>}
-    Returns the upstream JSON (message + blob paths + version id).
+    Auth: B2C headers (x-user-sub etc.) via get_b2c_headers(req) upstream.
     """
     if not base_url or not fxkey:
         raise ValueError("Users API env is not configured")
 
     url = f"{base_url}/users/preferences"
-    headers = _fx_headers_for_user_actor(context)
+    headers = _b2c_headers_from_context(context)
+    headers["Content-Type"] = "application/json"
 
     payload = {"CVQuillDelta": cv_quill_delta}
     r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=20)
