@@ -101,19 +101,33 @@ def _fx_headers_for_user_actor(context: dict, *, user_id: str | None = None) -> 
 def get_preferences(context: dict) -> dict:
     """
     GET /users/preferences from Users Function.
-    Auth: B2C headers (x-user-sub etc.) via get_b2c_headers(req) upstream.
+    If preferences don't exist yet (404), return an empty defaults payload for UI.
     """
     if not base_url or not fxkey:
         raise ValueError("Users API env is not configured")
 
     url = f"{base_url}/users/preferences"
     headers = _b2c_headers_from_context(context)
-    # Upstream might not require Content-Type for GET, but harmless
     headers["Content-Type"] = "application/json"
 
     r = requests.get(url, headers=headers, timeout=10)
+
+    if r.status_code == 404:
+        # UI-friendly default (no saved CV yet)
+        return {
+            "UserId": None,
+            "CVBlobPath": None,
+            "CVTextBlobPath": None,
+            "CVVersionId": None,
+            "LastUpdated": None,
+            "CVQuillDelta": {"ops": []},
+            "CVPlainText": None,
+            "PreferencesMissing": True,
+        }
+
     r.raise_for_status()
     return r.json()
+
 
 
 def set_preferences(context: dict, *, cv_quill_delta) -> dict:

@@ -31,6 +31,8 @@
   .muted { color:#6b7280; font-size:12px; }
   .card { overflow: hidden; }
   #cvEditor { width: 100%; max-width: 100%; }
+  #cvToolbar { margin-bottom: 6px; }
+  #cvEditor { margin-bottom: 12px; }  
   .ql-container { box-sizing: border-box; }  
   #cvEditor .ql-editor { max-height: 360px; overflow-y: auto; }
 </style>
@@ -160,7 +162,7 @@
 
         <div class="btn-row" style="align-items:center; margin-bottom:8px;">
           <button id="btn-save-prefs" class="btn primary" type="button" disabled>Save changes</button>
-          <span id="prefs-saving" class="subtle small" hidden>Saving…</span>
+          <span id="prefs-status" class="subtle small" hidden>Wait for it…</span>
         </div>
         <div id="prefs-error" class="err" hidden></div>
 
@@ -432,7 +434,7 @@
     const prefsBox     = document.getElementById('prefs');
     const btnSavePrefs = document.getElementById('btn-save-prefs');
     const prefsErr     = document.getElementById('prefs-error');
-    const prefsSaving  = document.getElementById('prefs-saving');
+    const prefsSaving  = document.getElementById('prefs-status');
     const prefsDebug   = document.getElementById('prefs-debug');
 
     let cvQuill = null;
@@ -448,15 +450,19 @@
       prefsErr.textContent = '';
     }
 
-    function setPrefsBusy(b){
+    const prefsStatus  = document.getElementById('prefs-status');
+
+    function setPrefsBusy(b, label){
       prefsBusy = b;
       prefsBox?.setAttribute('aria-busy', b ? 'true' : 'false');
-      prefsSaving.hidden = !b;
 
-      // intentional: disabled by default unless explicitly ready
+      if (prefsStatus) {
+        prefsStatus.hidden = !b;
+        prefsStatus.textContent = b ? (label || 'Working…') : '';
+      }
+
       btnSavePrefs.disabled = true;
-
-      if (cvQuill) cvQuill.enable(!b); // greys editor while saving/loading
+      if (cvQuill) cvQuill.enable(!b);
     }
 
     function safeDeltaFromUpstream(x){
@@ -486,7 +492,7 @@
     async function initPrefs(){
       if (!prefsBox) return;
 
-      setPrefsBusy(true);
+      setPrefsBusy(true, 'Loading…');
       clearPrefsError();
 
       // init Quill once
@@ -530,7 +536,7 @@
       // only allow save if dirty
       if (!isDirty()) { btnSavePrefs.disabled = true; return; }
 
-      setPrefsBusy(true);
+      setPrefsBusy(true, 'Saving…');
       try {
         const payload = { CVQuillDelta: cvQuill.getContents() || { ops: [] } };
 
