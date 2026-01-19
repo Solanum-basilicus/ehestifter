@@ -1,0 +1,8 @@
+azure-functions
+pyodbc
+azure-identity
+azure-storage-blob
+
+httpx
+azure-servicebus
+python-dotenv
