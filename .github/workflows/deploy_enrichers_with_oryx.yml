@@ -1,0 +1,42 @@
+name: Deploy Enrichers Function via Oryx (Python v1-decorators)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'backend/enrichers/**'
+  workflow_dispatch:
+
+env:
+  AZURE_FUNCTIONAPP_PACKAGE_PATH: './backend/enrichers' # must be root where host.json is
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: For-deploying-to-Azure
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+            
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Azure Functions using Oryx
+        uses: Azure/functions-action@v1
+        with:
+          app-name: 'ehestifter-enrichers'
+          slot-name: 'Production'
+          package: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
+          scm-do-build-during-deployment: true
+          remote-build: true
+          enable-oryx-build: true
