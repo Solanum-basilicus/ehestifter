@@ -9,12 +9,12 @@ def _get_blob_service_client():
     from azure.identity import DefaultAzureCredential
     from azure.storage.blob import BlobServiceClient
 
-    account_url = os.getenv("AzureWebJobsStorage__blobServiceUri")
+    account_url = os.getenv("CV_STORAGE__blobServiceUri")
     if not account_url:
-        raise Exception("Missing AzureWebJobsStorage__blobServiceUri")
+        raise Exception("Missing CV_STORAGE__blobServiceUri")
 
     # For user-assigned managed identity: DefaultAzureCredential uses AZURE_CLIENT_ID
-    client_id = os.getenv("AzureWebJobsStorage__clientId")
+    client_id = os.getenv("CV_STORAGE__clientId")
     if client_id:
         os.environ["AZURE_CLIENT_ID"] = client_id
 
@@ -23,7 +23,7 @@ def _get_blob_service_client():
 
 
 def _get_container_name() -> str:
-    return os.getenv("CV_CONTAINER_NAME", "cvblobs")
+    return os.getenv("CV_STORAGE_containerName", "cvblobs")
 
 
 def _get_blob_client(blob_path: str):
