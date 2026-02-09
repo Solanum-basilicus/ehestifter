@@ -8,16 +8,38 @@ def register(app: func.FunctionApp):
         run_id = req.route_params["runId"]
         try:
             body = req.get_json()
+        except ValueError:
+            return func.HttpResponse(
+                "Invalid JSON body",
+                status_code=400,
+            )
+
+        status = body.get("status")
+        if status not in ("Succeeded", "Failed"):
+            return func.HttpResponse(
+                "status must be 'Succeeded' or 'Failed'",
+                status_code=400,
+            )
+
+        try:
             svc = RunsService()
             svc.complete_run(
                 run_id=run_id,
-                status=body["status"],  # "Succeeded" or "Failed"
+                status=status,
                 result_json=body.get("resultJson"),
                 attributes_json=body.get("enrichmentAttributesJson"),
                 error_code=body.get("errorCode"),
                 error_message=body.get("errorMessage"),
             )
             return func.HttpResponse(status_code=204)
+
         except Exception:
-            logging.exception("POST /enrichment/runs/{runId}/complete error")
-            return func.HttpResponse("Error", status_code=500)
+            logging.exception(
+                "POST /enrichment/runs/%s/complete failed",
+                run_id,
+            )
+            return func.HttpResponse(
+                "Error completing enrichment run",
+                status_code=500,
+            )
+
