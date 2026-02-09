@@ -1,9 +1,35 @@
-# enrichers/routes/enrichment_latest_get.py
 import json
 import logging
 import azure.functions as func
-
 from domain.runs_service import RunsService
+
+
+def _maybe_parse_json(value):
+    if value is None:
+        return None
+    if isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        try:
+            return json.loads(s)
+        except Exception:
+            # Don't 500 on bad legacy rows; expose as string
+            return value
+    return value
+
+
+def _project_run_public(run: dict) -> dict:
+    # Copy everything except the DB-ish JSON string fields
+    out = {k: v for k, v in run.items() if k not in ("resultJson", "enrichmentAttributesJson")}
+
+    # Add clean public fields
+    out["result"] = _maybe_parse_json(run.get("resultJson"))
+    out["enrichmentAttributes"] = _maybe_parse_json(run.get("enrichmentAttributesJson"))
+
+    return out
 
 
 def register(app: func.FunctionApp):
@@ -21,7 +47,9 @@ def register(app: func.FunctionApp):
             run = svc.get_latest(job_id, user_id, enricher_type)
             if not run:
                 return func.HttpResponse("Not found", status_code=404)
-            return func.HttpResponse(json.dumps(run), mimetype="application/json", status_code=200)
+
+            public_run = _project_run_public(run)
+            return func.HttpResponse(json.dumps(public_run), mimetype="application/json", status_code=200)
         except Exception as e:
             logging.exception("GET latest enrichment failed")
             return func.HttpResponse(f"Error: {str(e)}", status_code=500)
