@@ -86,6 +86,33 @@ def upload_json(
     )
 
 
+def upload_text(
+    *,
+    container: str,
+    blob_path: str,
+    text: str,
+    encoding: str = "utf-8",
+    overwrite: bool = True,
+) -> None:
+    """
+    Back-compat shim for older callers expecting (container, blob_path, text).
+    We map enrichment/enrichments -> storage profile "enrichments".
+    """
+    # We only support the enrichments storage profile here
+    if container not in ("enrichment", "enrichments"):
+        raise ValueError(f"Unsupported container '{container}' for upload_text shim")
+
+    # Store JSON/text bytes; choose a reasonable content type
+    content_type = "application/json; charset=utf-8" if blob_path.endswith(".json") else "text/plain; charset=utf-8"
+    upload_bytes(
+        "enrichments",
+        blob_path,
+        text.encode(encoding),
+        content_type=content_type,
+        overwrite=overwrite,
+    )
+
+
 def upload_bytes(
     storage: StorageName,
     blob_path: str,

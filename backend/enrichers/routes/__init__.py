@@ -4,6 +4,10 @@ from .enrichment_history_get import register as _reg_history_get
 #from .enrichment_run_get import register as _reg_run_get
 from .enrichment_run_complete_post import register as _reg_complete_post
 #from .outbox_publish_timer import register as _reg_outbox_timer  # timer trigger
+from .internal_enrichment_run_get import register as _reg_internal_run_get
+from .internal_latest_id_get import register as _reg_internal_latest_id_get
+from .internal_lease_post import register as _reg_internal_lease_post
+from .internal_input_get import register as _reg_internal_input_get
 
 def register_all(app):
     _reg_runs_post(app)
@@ -12,3 +16,7 @@ def register_all(app):
 #    _reg_run_get(app)
     _reg_complete_post(app)
 #    _reg_outbox_timer(app)
+    _reg_internal_run_get(app)
+    _reg_internal_latest_id_get(app)
+    _reg_internal_lease_post(app)
+    _reg_internal_input_get(app)
