@@ -31,6 +31,14 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Verify function package root
+        run: |
+          ls -la ./backend/gateway
+          test -f ./backend/gateway/host.json
+          test -f ./backend/gateway/function_app.py
+          test -f ./backend/gateway/requirements.txt
+          test -d ./backend/gateway/routes
+
       - name: Deploy to Azure Functions using Oryx
         uses: Azure/functions-action@v1
         with:
