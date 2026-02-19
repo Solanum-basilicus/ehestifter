@@ -3,7 +3,7 @@ import os
 import json
 from typing import Any, Optional, Literal, Dict, Tuple
 
-StorageName = Literal["enrichments", "cv"]  # "cv" maps to cvblobs container
+StorageName = Literal["enrichments", "cv"]
 
 # In-process cache: (account_url, client_id) -> BlobServiceClient
 _BSC_CACHE: Dict[Tuple[str, Optional[str]], Any] = {}
@@ -18,41 +18,41 @@ def _require_env(name: str) -> str:
 
 def _storage_config(storage: StorageName) -> tuple[str, str, Optional[str]]:
     """
-    Returns (account_url, container_name, client_id)
+    Returns (account_url, container_name, client_id).
+    Container name is REQUIRED via env vars (no defaults).
     """
     if storage == "enrichments":
-        account_url = _require_env("ENRICHMENTS_STORAGE__blobServiceUri")
-        container = os.getenv("ENRICHMENTS_STORAGE__containerName", "enrichments")
-        client_id = os.getenv("ENRICHMENTS_STORAGE__clientId")  # UAMI client id
-        return account_url, container, client_id
+        return (
+            _require_env("ENRICHMENTS_STORAGE__blobServiceUri"),
+            _require_env("ENRICHMENTS_STORAGE__containerName"),
+            os.getenv("ENRICHMENTS_STORAGE__clientId"),
+        )
 
     if storage == "cv":
-        account_url = _require_env("CV_STORAGE__blobServiceUri")
-        container = os.getenv("CV_STORAGE__containerName", "cvblobs")
-        client_id = os.getenv("CV_STORAGE__clientId")  # UAMI client id
-        return account_url, container, client_id
+        return (
+            _require_env("CV_STORAGE__blobServiceUri"),
+            _require_env("CV_STORAGE__containerName"),
+            os.getenv("CV_STORAGE__clientId"),
+        )
 
     raise Exception(f"Unknown storage profile: {storage}")
 
 
-def _get_blob_service_client(storage: StorageName):
+def _get_blob_service_client(account_url: str, client_id: Optional[str]):
     # Import lazily so function indexing doesn't die if packages are missing
     from azure.storage.blob import BlobServiceClient
     from azure.identity import ManagedIdentityCredential, DefaultAzureCredential
-
-    account_url, _container, client_id = _storage_config(storage)
 
     cache_key = (account_url, client_id)
     cached = _BSC_CACHE.get(cache_key)
     if cached is not None:
         return cached
 
-    # Prefer explicit user-assigned MI when client_id is provided; else fall back.
-    if client_id:
-        credential = ManagedIdentityCredential(client_id=client_id)
-    else:
-        # This supports system-assigned MI and local dev (Azure CLI login, etc.)
-        credential = DefaultAzureCredential(exclude_managed_identity_credential=False)
+    credential = (
+        ManagedIdentityCredential(client_id=client_id)
+        if client_id
+        else DefaultAzureCredential(exclude_managed_identity_credential=False)
+    )
 
     bsc = BlobServiceClient(account_url=account_url, credential=credential)
     _BSC_CACHE[cache_key] = bsc
@@ -60,21 +60,12 @@ def _get_blob_service_client(storage: StorageName):
 
 
 def _get_blob_client(storage: StorageName, blob_path: str):
-    bsc = _get_blob_service_client(storage)
-    _account_url, container, _client_id = _storage_config(storage)
+    account_url, container, client_id = _storage_config(storage)
+    bsc = _get_blob_service_client(account_url, client_id)
     return bsc.get_blob_client(container=container, blob=blob_path)
 
 
-def upload_json(
-    storage: StorageName,
-    blob_path: str,
-    content: Any,
-    *,
-    overwrite: bool = True,
-) -> None:
-    """
-    Uploads JSON-serializable object as UTF-8 JSON.
-    """
+def upload_json(storage: StorageName, blob_path: str, content: Any, *, overwrite: bool = True) -> None:
     from azure.storage.blob import ContentSettings
 
     bc = _get_blob_client(storage, blob_path)
@@ -83,33 +74,6 @@ def upload_json(
         data,
         overwrite=overwrite,
         content_settings=ContentSettings(content_type="application/json; charset=utf-8"),
-    )
-
-
-def upload_text(
-    *,
-    container: str,
-    blob_path: str,
-    text: str,
-    encoding: str = "utf-8",
-    overwrite: bool = True,
-) -> None:
-    """
-    Back-compat shim for older callers expecting (container, blob_path, text).
-    We map enrichment/enrichments -> storage profile "enrichments".
-    """
-    # We only support the enrichments storage profile here
-    if container not in ("enrichment", "enrichments"):
-        raise ValueError(f"Unsupported container '{container}' for upload_text shim")
-
-    # Store JSON/text bytes; choose a reasonable content type
-    content_type = "application/json; charset=utf-8" if blob_path.endswith(".json") else "text/plain; charset=utf-8"
-    upload_bytes(
-        "enrichments",
-        blob_path,
-        text.encode(encoding),
-        content_type=content_type,
-        overwrite=overwrite,
     )
 
 
@@ -143,9 +107,6 @@ def blob_exists(storage: StorageName, blob_path: str) -> bool:
 
 
 def download_bytes(storage: StorageName, blob_path: str) -> Optional[bytes]:
-    """
-    Returns blob bytes or None if missing.
-    """
     from azure.core.exceptions import ResourceNotFoundError
 
     bc = _get_blob_client(storage, blob_path)
@@ -157,25 +118,23 @@ def download_bytes(storage: StorageName, blob_path: str) -> Optional[bytes]:
 
 def download_text(storage: StorageName, blob_path: str, *, encoding: str = "utf-8") -> Optional[str]:
     data = download_bytes(storage, blob_path)
-    if data is None:
-        return None
-    return data.decode(encoding)
+    return None if data is None else data.decode(encoding)
 
 
 def download_json(storage: StorageName, blob_path: str) -> Optional[Any]:
     txt = download_text(storage, blob_path)
-    if txt is None:
-        return None
-    return json.loads(txt)
+    return None if txt is None else json.loads(txt)
 
 
-# Convenience wrappers (nice ergonomics)
+# Convenience wrappers
 
 def enrichments_upload_json(blob_path: str, content: Any, *, overwrite: bool = True) -> None:
-    return upload_json("enrichments", blob_path, content, overwrite=overwrite)
+    upload_json("enrichments", blob_path, content, overwrite=overwrite)
+
 
 def enrichments_download_json(blob_path: str) -> Optional[Any]:
     return download_json("enrichments", blob_path)
+
 
 def cv_download_text(blob_path: str, *, encoding: str = "utf-8") -> Optional[str]:
     return download_text("cv", blob_path, encoding=encoding)
