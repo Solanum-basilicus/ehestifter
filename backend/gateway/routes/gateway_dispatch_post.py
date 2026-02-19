@@ -12,5 +12,11 @@ def register(app: func.FunctionApp):
         if not isinstance(body, dict) or not body.get("runId"):
             return func.HttpResponse("Missing runId", status_code=400)
 
-        message_id = send_dispatch_message(body)
+        try:
+            message_id = send_dispatch_message(body)
+        except Exception as e:
+            logging.exception("SB dispatch failed")
+            return func.HttpResponse(json.dumps({"code":"SB_DISPATCH_FAILED","message":str(e)}),
+                                    mimetype="application/json", status_code=502)
+
         return json_response({"messageId": message_id, "runId": body.get("runId")}, status_code=202)
