@@ -35,6 +35,23 @@ def register(app: func.FunctionApp):
 
         try:
             run = svc.create_run(job_id, user_id, enricher_type)
+
+            # Minimal snapshot for now; extend with real job+cv later
+            snapshot = {
+                "runId": run["runId"],
+                "enricherType": run["enricherType"],
+                "subjectKey": run["subjectKey"],
+                "jobOfferingId": run["jobOfferingId"],
+                "userId": run["userId"],
+                # TODO: replace with real job snapshot + normalized CV text
+                "job": {"title": None, "description": None},
+                "cv": {"text": None},
+                "meta": {"source": "core", "version": 1},
+            }
+
+            blob_path = write_input_snapshot(run, snapshot)
+            run["inputSnapshotBlobPath"] = blob_path
+
             return func.HttpResponse(json.dumps(run), mimetype="application/json", status_code=201)
         except Exception as e:
             logging.exception("POST /enrichment/runs failed")
