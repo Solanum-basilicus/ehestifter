@@ -9,7 +9,14 @@ from helpers.errors import CoreHttpError
 
 
 def _parse_iso(s: str) -> datetime:
-    return datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+    dt = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+    # If Core ever returns a naive timestamp, assume UTC (or change to your chosen default)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt
+
 
 
 def _pick(run: dict, *keys: str):
