@@ -4,7 +4,7 @@ import logging
 import azure.functions as func
 
 from domain.runs_service import RunsService
-
+from helpers.enrichment_snapshot import write_input_snapshot
 
 def register(app: func.FunctionApp):
     svc = RunsService()
