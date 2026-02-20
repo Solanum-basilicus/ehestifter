@@ -859,9 +859,15 @@
   async function fetchLatest() {
     const url = `/ui/enrichment/subjects/${JOB_ID}/latest?enricherType=${encodeURIComponent(ENRICHER_TYPE)}`;
     const r = await fetch(url, { headers: { "Accept": "application/json" } });
+
     if (r.status === 404) return null;
-    if (!r.ok) throw new Error(`Latest failed: ${r.status}`);
-    return await r.json();
+
+    const payload = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const corr = payload?.diag?.corrId ? ` corr=${payload.diag.corrId}` : "";
+      throw new Error((payload?.error || `Latest failed: ${r.status}`) + corr);
+    }
+    return payload;
   }
 
   async function fetchHistory() {

@@ -70,6 +70,15 @@ def fx_get_json(url, headers, params=None, timeout=10):
     r.raise_for_status()
     return r.json()
 
+def fx_get_json_safe(url, headers, params=None, timeout=10):
+    r = requests.get(url, headers=headers, params=params, timeout=timeout)
+    # Do NOT raise; return response so caller can handle errors.
+    try:
+        data = r.json()
+    except Exception:
+        data = None
+    return r, data
+
 def fx_post_json(url, headers, json_body, timeout=15):
     # returns the raw Response; caller decides how to parse / handle status
     return requests.post(url, headers=headers, json=json_body, timeout=timeout)

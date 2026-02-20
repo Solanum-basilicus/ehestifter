@@ -41,6 +41,12 @@ def create_blueprint(auth):
 
         r = fx_post_json(url, headers=headers, json_body=upstream_body)
 
+        logger.info("User claims keys=%s", list((context.get("user") or {}).keys()))
+        logger.info("Chosen user_id=%s oid=%s sub=%s",
+                    user_id,
+                    (context.get("user") or {}).get("oid"),
+                    (context.get("user") or {}).get("sub"))
+
         # capture some headers even if empty body
         resp_headers = {k: r.headers.get(k) for k in [
             "date", "server", "content-type", "content-length",
