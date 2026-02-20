@@ -2,6 +2,7 @@ import logging
 import uuid
 from flask import Blueprint, jsonify, request
 from helpers.http import enrichers_base, enrichers_fx_headers, fx_post_json
+from helpers.users import get_in_app_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -17,10 +18,10 @@ def create_blueprint(auth):
         if not job_id:
             return jsonify({"error": "Missing jobOfferingId/jobId"}), 400
 
-        user = context.get("user") or {}
-        user_id = context.get("userId") or user.get("oid") or user.get("sub") or user.get("userId")
-        if not user_id:
-            return jsonify({"error": "Missing user id"}), 401
+        try:
+            user_id = get_in_app_user_id(context)
+        except Exception as e:
+            return jsonify({"error": "Could not resolve in-app user id"}), 401
 
         corr_id = str(uuid.uuid4())
 
@@ -41,11 +42,16 @@ def create_blueprint(auth):
 
         r = fx_post_json(url, headers=headers, json_body=upstream_body)
 
+        #######################Remove that once you ensure we use proper id
         logger.info("User claims keys=%s", list((context.get("user") or {}).keys()))
         logger.info("Chosen user_id=%s oid=%s sub=%s",
                     user_id,
                     (context.get("user") or {}).get("oid"),
                     (context.get("user") or {}).get("sub"))
+        claims = context.get("user") or {}
+        logger.info("Enrichers proxy user mapping corr=%s inAppUserId=%s oid=%s sub=%s",
+                    corr_id, user_id, claims.get("oid"), claims.get("sub"))                    
+        ##########################
 
         # capture some headers even if empty body
         resp_headers = {k: r.headers.get(k) for k in [
