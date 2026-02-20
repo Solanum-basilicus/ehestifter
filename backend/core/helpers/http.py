@@ -26,6 +26,42 @@ def jobs_fx_headers(context=None) -> dict:
         h["X-Actor-Type"] = "system"
     return h
 
+def enrichers_base() -> str:
+    """
+    EHESTIFTER_ENRICHERS_API_BASE_URL should point to the Functions '/api' root,
+    e.g. https://<funcapp>.azurewebsites.net/api
+    """
+    base = os.getenv("EHESTIFTER_ENRICHERS_API_BASE_URL", "").rstrip("/")
+    if not base:
+        raise RuntimeError("EHESTIFTER_ENRICHERS_API_BASE_URL is not configured")
+    return base
+
+def enrichers_fx_headers(context=None) -> dict:
+    """
+    Always send x-functions-key if set.
+    If we have a user context, pass X-User-Id; else tell upstream it's a system actor.
+    """
+    h = {"Accept": "application/json", "Content-Type": "application/json"}
+    fxkey = os.getenv("EHESTIFTER_ENRICHERS_FUNCTION_KEY")
+    if fxkey:
+        h["x-functions-key"] = fxkey
+
+    # Your Auth wrapper likely provides user claims in context['user'].
+    # Prefer your canonical user id field (often 'oid' in Entra/B2C).
+    if context and "userId" in context:
+        h["X-User-Id"] = context["userId"]
+    elif context and "user" in context and isinstance(context["user"], dict):
+        # fallback: try common claim names
+        oid = context["user"].get("oid") or context["user"].get("sub") or context["user"].get("userId")
+        if oid:
+            h["X-User-Id"] = oid
+        else:
+            h["X-Actor-Type"] = "system"
+    else:
+        h["X-Actor-Type"] = "system"
+
+    return h
+
 def fx_get(url: str, headers: dict | None = None, timeout: int = 15):
     return requests.get(url, headers=headers or {}, timeout=timeout)
 
