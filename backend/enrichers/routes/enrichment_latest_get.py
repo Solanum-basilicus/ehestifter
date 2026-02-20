@@ -23,7 +23,7 @@ def _maybe_parse_json(value):
 
 def _project_run_public(run: dict) -> dict:
     # Copy everything except the DB-ish JSON string fields
-    out = {k: v for k, v in run.items() if k not in ("resultJson", "enrichmentAttributesJson")}
+    out = {k: v for k, v in run.items() if k not in ("enrichmentAttributesJson")}
 
     # Add clean public fields
     out["result"] = _maybe_parse_json(run.get("resultJson"))

@@ -29,10 +29,6 @@ def register(app: func.FunctionApp):
         if status == "Succeeded":
             if not isinstance(result, dict):
                 return func.HttpResponse("Succeeded runs must include 'result' object", status_code=400)
-            score = result.get("score")
-            summary = result.get("summary")
-            if score is None or summary is None:
-                return func.HttpResponse("Succeeded runs require result.score and result.summary", status_code=400)
 
         # Validate failed payload (lightly; keep flexible)
         if status == "Failed":
