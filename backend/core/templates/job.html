@@ -55,6 +55,32 @@
   .hist-skeleton .line.w40 { width:40%; } .hist-skeleton .line.w60 { width:60%; }
   .hist-skeleton .line.w80 { width:80%; } .hist-skeleton .line.w100 { width:100%; }
   .hist-footer { margin-top:10px; display:flex; gap:8px; }
+  
+  /* --- Compatibility modal --- */
+
+  #compat-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.35);
+    z-index: 1200;              /* higher than sticky-top (10) */
+    display: none;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #compat-modal.is-open {
+    display: flex;
+  }
+
+  #compat-modal > .compat-modal-card {
+    width: min(780px, 92vw);
+    max-height: 80vh;
+    overflow: auto;
+    background: #fff;
+    border-radius: 12px;
+    border: 1px solid #e5e7eb;
+    box-shadow: 0 10px 30px rgba(0,0,0,.1);
+  }  
 </style>
 
 <!-- self-hosted scripts -->
@@ -408,8 +434,8 @@
           </div>
         </div>
         <!-- Simple modal -->
-        <div id="compat-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.35);">
-          <div style="background:#fff; max-width:780px; margin:10vh auto; padding:16px; border-radius:12px;">
+        <div id="compat-modal">
+          <div style="background:#fff; padding:16px; border-radius:12px;">
             <div class="flex-between" style="margin-bottom:12px;">
               <div style="font-weight:600;">Compatibility history</div>
               <button class="btn" id="compat-modal-close">✕</button>
@@ -891,24 +917,14 @@
     return payload;
   }
 
-  async function pollLatestUntilDone({ attempts = 10, delayMs = 1000 } = {}) {
-    for (let i = 0; i < attempts; i++) {
-      const latest = await fetchLatest();
-      if (latest) {
-        renderLatest(latest);
-        const status = (latest.status || latest.Status || "").toLowerCase();
-        // Adjust these terminal states to match your system
-        if (status === "succeeded" || status === "failed" || status === "success" || status === "error") {
-          return latest;
-        }
-      }
-      await new Promise(res => setTimeout(res, delayMs));
-    }
-    return null;
+  async function refreshLatestOnce() {
+    const latest = await fetchLatest();
+    if (latest) renderLatest(latest);
+    return latest;
   }
 
-  function openModal() { modal.style.display = "block"; }
-  function closeModal() { modal.style.display = "none"; }
+  function openModal() { modal.classList.add("is-open"); }
+  function closeModal() { modal.classList.remove("is-open"); }
 
   modalClose.addEventListener("click", closeModal);
   modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
@@ -917,7 +933,7 @@
     try {
       setRunning(true);
       await postRun();
-      await pollLatestUntilDone({ attempts: 12, delayMs: 1000 });
+      await refreshLatestOnce(); 
     } catch (e) {
       elSubtitle.textContent = String(e.message || e);
     } finally {
