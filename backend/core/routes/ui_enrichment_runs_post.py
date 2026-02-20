@@ -1,15 +1,9 @@
-# routes/ui_enrichment_runs_post.py
 import logging
+import uuid
 from flask import Blueprint, jsonify, request
 from helpers.http import enrichers_base, enrichers_fx_headers, fx_post_json
 
 logger = logging.getLogger(__name__)
-
-def _safe_json(resp):
-    try:
-        return resp.json()
-    except Exception:
-        return None
 
 def create_blueprint(auth):
     bp = Blueprint("ui_enrichment_runs_post", __name__)
@@ -20,7 +14,6 @@ def create_blueprint(auth):
         body = request.get_json(silent=True) or {}
         job_id = body.get("jobOfferingId") or body.get("jobId")
         enricher_type = body.get("enricherType") or "compatibility.v1"
-
         if not job_id:
             return jsonify({"error": "Missing jobOfferingId/jobId"}), 400
 
@@ -28,6 +21,8 @@ def create_blueprint(auth):
         user_id = context.get("userId") or user.get("oid") or user.get("sub") or user.get("userId")
         if not user_id:
             return jsonify({"error": "Missing user id"}), 401
+
+        corr_id = str(uuid.uuid4())
 
         upstream_body = {
             "jobOfferingId": job_id,
@@ -37,36 +32,44 @@ def create_blueprint(auth):
 
         url = f"{enrichers_base()}/enrichment/runs"
         headers = enrichers_fx_headers(context)
+        # propagate correlation to enrichers
+        headers["x-correlation-id"] = corr_id
+        headers["x-ms-client-request-id"] = corr_id
 
-        logger.info("POST enrichers /enrichment/runs url=%s job=%s user=%s enricherType=%s",
-                    url, job_id, user_id, enricher_type)
+        logger.info("Enricher run start corr=%s job=%s user=%s enricherType=%s url=%s",
+                    corr_id, job_id, user_id, enricher_type, url)
 
         r = fx_post_json(url, headers=headers, json_body=upstream_body)
 
-        # Try parse JSON; if not, capture text (trim) and a few useful headers
-        payload_json = _safe_json(r)
-        text = (r.text or "").strip()
-        text_preview = text[:2000]  # avoid spewing huge pages
+        # capture some headers even if empty body
+        resp_headers = {k: r.headers.get(k) for k in [
+            "date", "server", "content-type", "content-length",
+            "x-ms-request-id", "x-ms-correlation-request-id",
+            "x-functions-execution-id", "traceparent", "request-context"
+        ] if r.headers.get(k) is not None}
 
-        # Azure Functions / front door often emit some request IDs; keep a few common ones
+        text = (r.text or "").strip()
+        text_preview = text[:2000]
+
         diag = {
             "status": r.status_code,
-            "upstreamRequestId": r.headers.get("x-ms-request-id") or r.headers.get("x-ms-client-request-id"),
-            "upstreamCorrelationId": r.headers.get("x-correlation-id") or r.headers.get("traceparent"),
+            "corrId": corr_id,
+            "upstreamHeaders": resp_headers,
         }
 
         if r.status_code >= 400:
-            logger.error(
-                "Upstream error: status=%s diag=%s body_len=%s body_preview=%r",
-                r.status_code, diag, len(text), text_preview
-            )
+            logger.error("Enricher run failed corr=%s status=%s headers=%s body_len=%s body_preview=%r",
+                         corr_id, r.status_code, resp_headers, len(text), text_preview)
             return jsonify({
                 "error": "Enricher run failed",
-                "details": payload_json if payload_json is not None else {"text": text_preview},
+                "details": {"text": text_preview},
                 "diag": diag,
             }), r.status_code
 
-        # Success path: return json if possible else raw text
-        return jsonify(payload_json if payload_json is not None else {"text": text_preview, "diag": diag}), r.status_code
+        # success
+        try:
+            return jsonify(r.json()), r.status_code
+        except Exception:
+            return jsonify({"text": text_preview, "diag": diag}), r.status_code
 
     return bp

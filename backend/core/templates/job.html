@@ -879,8 +879,8 @@
     });
     const payload = await r.json().catch(() => ({}));
     if (!r.ok) {
-      const diag = payload?.diag ? ` (${JSON.stringify(payload.diag)})` : "";
-      throw new Error((payload?.error || `Run failed: ${r.status}`) + diag);
+      const corr = payload?.diag?.corrId ? ` corr=${payload.diag.corrId}` : "";
+      throw new Error((payload?.error || `Run failed: ${r.status}`) + corr);
     }
     return payload;
   }

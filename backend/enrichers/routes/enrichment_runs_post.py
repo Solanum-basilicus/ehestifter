@@ -21,10 +21,13 @@ def register(app: func.FunctionApp):
         user_id = body.get("userId")
         enricher_type = body.get("enricherType") or "compatibility.v1"
 
+        corr = req.headers.get("x-correlation-id") or req.headers.get("x-ms-client-request-id")
+        logging.info("POST /enrichment/runs corr=%s body=%s", corr, body)
+
         if not job_id or not user_id:
             return func.HttpResponse("Missing jobOfferingId/userId", status_code=400)
 
-        logging.info("POST /enrichment/runs job=%s user=%s enricherType=%s", job_id, user_id, enricher_type)
+        logging.info("POST /enrichment/runs job=%s user=%s enricherType=%s corr=%s", job_id, user_id, enricher_type, corr)
 
         # 1) DB create (Pending)
         run = create_run_db(job_id, user_id, enricher_type)
@@ -53,7 +56,7 @@ def register(app: func.FunctionApp):
             return func.HttpResponse(json.dumps(run), mimetype="application/json", status_code=201)
 
         except Exception as e:
-            logging.exception("POST /enrichment/runs failed after DB create")
+            logging.exception("POST /enrichment/runs failed after DB create corr=%s", corr)
             # Decide your policy: if snapshot/enqueue fails, mark Failed so it’s visible.
             mark_failed(run["runId"], "CreateRunFailed", str(e))
             return func.HttpResponse(f"Error: {str(e)}", status_code=500)
