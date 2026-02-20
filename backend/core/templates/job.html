@@ -7,11 +7,18 @@
   .card { border:1px solid #e5e7eb; border-radius:12px; background:#fff; }
   .muted { color:#6b7280; }
   .badge { display:inline-block; padding:2px 8px; border-radius:999px; border:1px solid #e5e7eb; font-size:12px; }
-  .btn { padding:6px 10px; border-radius:8px; border:1px solid #e5e7eb; background:#f9fafb; cursor:not-allowed; opacity:.7; }
+  .btn { padding:6px 10px; border-radius:8px; border:1px solid #e5e7eb; background:#f9fafb; cursor:pointer; opacity:1; }
   .btn.primary { background:#eef2ff; border-color:#c7d2fe; }
   .btn.ghost { background:transparent; }
   .btn.danger { background:#fee2e2; border-color:#fecaca; }
-  .btn[disabled] { cursor:not-allowed; opacity:.5; }
+  /* True disabled: looks disabled and cannot be clicked */
+  .btn:disabled,
+  .btn[disabled],
+  .btn[aria-disabled="true"] {
+    cursor:not-allowed !important;
+    opacity:.5;
+    pointer-events:none; /* prevents "looks disabled but clickable" */
+  }
   .modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.35); display:flex; align-items:center; justify-content:center; z-index:1000; }
   .modal { width:min(520px,92vw); background:#fff; border-radius:12px; border:1px solid #e5e7eb; box-shadow:0 10px 30px rgba(0,0,0,.1); } 
   /* Alpine cloak to prevent FOUC and click races on first render */
@@ -396,8 +403,8 @@
           <div class="muted" style="font-size:12px; margin-bottom:8px;" id="compat-summary"></div>
 
           <div class="flex" style="gap:.5rem;">
-            <button class="btn" id="compat-run">▶ run</button>
-            <button class="btn" id="compat-inspect">🔎 inspect</button>
+            <button class="btn" id="compat-run" disabled aria-disabled="true">▶ run</button>
+            <button class="btn" id="compat-inspect" disabled aria-disabled="true">🔎 inspect</button>
           </div>
         </div>
         <!-- Simple modal -->
@@ -818,9 +825,14 @@
     return n.toFixed(2);
   }
 
+  function setEnabled(btn, enabled) {
+    btn.disabled = !enabled;
+    btn.setAttribute("aria-disabled", enabled ? "false" : "true");
+  }
+
   function setRunning(running) {
-    btnRun.disabled = running;
-    btnInspect.disabled = running; // optional
+    setEnabled(btnRun, !running);
+    setEnabled(btnInspect, !running);
     elSubtitle.textContent = running ? "running…" : "no autorun";
   }
 
@@ -866,7 +878,10 @@
       body: JSON.stringify({ jobOfferingId: JOB_ID, enricherType: ENRICHER_TYPE })
     });
     const payload = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(payload?.error || `Run failed: ${r.status}`);
+    if (!r.ok) {
+      const diag = payload?.diag ? ` (${JSON.stringify(payload.diag)})` : "";
+      throw new Error((payload?.error || `Run failed: ${r.status}`) + diag);
+    }
     return payload;
   }
 
@@ -945,8 +960,13 @@
   // initial load
   (async () => {
     try {
-      btnRun.disabled = false;
-      btnInspect.disabled = false;
+      // architecture decision: buttons are disabled by default; enable only when ready
+      setEnabled(btnRun, false);
+      setEnabled(btnInspect, false);
+      if (JOB_ID) {
+        setEnabled(btnRun, true);
+        setEnabled(btnInspect, true);
+      }
       const latest = await fetchLatest();
       if (latest) renderLatest(latest);
     } catch (e) {
