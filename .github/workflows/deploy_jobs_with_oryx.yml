@@ -15,6 +15,7 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: For-deploying-to-Azure
     permissions:
       contents: read
       id-token: write
@@ -26,9 +27,9 @@ jobs:
       - name: Login to Azure
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_FDEBE40C2C4346C99A4902ABC2F73BF5 }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_17A5FB42505F477DB8CFBBEDB8A8BF6D }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_EC44C02753DD470894762E10EDCF2515 }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Deploy to Azure Functions using Oryx
         uses: Azure/functions-action@v1
