@@ -42,6 +42,7 @@ jobs:
 
   deploy:
     runs-on: ubuntu-latest
+    environment: For-deploying-to-Azure
     needs: build
     permissions:
       id-token: write #This is required for requesting the JWT
