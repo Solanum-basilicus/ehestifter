@@ -105,7 +105,7 @@ def http():
 
 def _safe_print_response(label: str, resp: requests.Response):
     # Avoid printing headers; response body is fine (should not contain keys)
-    print(f"({label}: {resp.status_code} {resp.text[:500]})", end="")
+    print(f"({label}: {resp.status_code} {resp.text[:1000]})", end="")
 
 
 @pytest.fixture(scope="session")

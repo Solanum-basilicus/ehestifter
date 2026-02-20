@@ -31,4 +31,4 @@ def test_40_work_complete_success_and_verify_core(
 
     assert latest["runId"].lower() == run_id.lower()
     assert latest["status"] == "Succeeded"
-    assert latest.get("resultJson") is not None, "Expected resultJson to be set"
+    assert latest.get("result") is not None, "Expected resultJson to be set"
