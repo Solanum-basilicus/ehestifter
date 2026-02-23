@@ -1,0 +1,99 @@
+import logging
+import time
+
+from azure.servicebus.exceptions import ServiceBusError
+
+from .config import load_settings
+from .logging_setup import setup_logging
+from .sb import make_client, parse_request_message
+from .gateway import GatewayClient
+from .ollama_client import OllamaClient
+from .compatibility import build_prompt, normalize_result
+
+def main() -> None:
+    setup_logging()
+    s = load_settings("/app/config.yaml")
+
+    log = logging.getLogger("compat-worker")
+    log.info("Starting worker enricherType=%s queue=%s gateway=%s ollama=%s model=%s",
+             s.enricher_type, s.sb_queue, s.gateway_base_url, s.ollama_base_url, s.model)
+
+    gw = GatewayClient(s.gateway_base_url, s.gateway_api_key)
+    oll = OllamaClient(s.ollama_base_url)
+
+    sb = make_client(s.sb_conn_str)
+
+    while True:
+        try:
+            with sb:
+                receiver = sb.get_queue_receiver(queue_name=s.sb_queue, max_wait_time=s.poll_wait_seconds)
+                with receiver:
+                    msgs = receiver.receive_messages(max_message_count=1, max_wait_time=s.poll_wait_seconds)
+                    if not msgs:
+                        continue
+
+                    msg = msgs[0]
+                    parsed = parse_request_message(msg)
+                    if not parsed:
+                        log.warning("Bad message body; dead-lettering msgId=%s", msg.message_id)
+                        receiver.dead_letter_message(msg, reason="BadMessage", error_description="JSON parse failed")
+                        continue
+
+                    # Do not consume other enrichers
+                    if parsed.enricher_type != s.enricher_type:
+                        log.info("Ignoring other enricherType=%s msgId=%s; abandoning",
+                                 parsed.enricher_type, msg.message_id)
+                        receiver.abandon_message(msg)
+                        time.sleep(s.backoff_seconds)
+                        continue
+
+                    if not parsed.run_id:
+                        log.warning("Missing runId; dead-lettering msgId=%s", msg.message_id)
+                        receiver.dead_letter_message(msg, reason="BadMessage", error_description="Missing runId")
+                        continue
+
+                    # Lease from gateway
+                    log.info("Leasing runId=%s subjectKey=%s", parsed.run_id, parsed.subject_key)
+                    lease = gw.lease(parsed.run_id, s.lease_ttl_seconds)
+
+                    lease_token = str(lease.get("leaseToken") or "")
+                    if not lease_token:
+                        # e.g. superseded / not latest / not found
+                        log.info("Lease refused for runId=%s; completing SB msgId=%s", parsed.run_id, msg.message_id)
+                        receiver.complete_message(msg)
+                        continue
+
+                    # Expect inline input snapshot (keep v1 simple)
+                    input_obj = lease.get("input") or {}
+                    job = input_obj.get("job") or {}
+                    cv_text = str(input_obj.get("cvText") or "")
+
+                    prompt = build_prompt(job=job, cv_text=cv_text, rubric=s.rubric)
+
+                    # Inference
+                    log.info("Running inference runId=%s model=%s", parsed.run_id, s.model)
+                    raw = oll.generate_json(
+                        model=s.model,
+                        prompt=prompt,
+                        system=s.system_prompt,
+                        temperature=s.temperature,
+                        top_p=s.top_p,
+                    )
+                    result = normalize_result(raw)
+
+                    # Submit back
+                    log.info("Completing runId=%s score=%s", parsed.run_id, result.get("score"))
+                    gw.complete(parsed.run_id, lease_token, result)
+
+                    # Only now consume SB message
+                    receiver.complete_message(msg)
+
+        except ServiceBusError as e:
+            logging.exception("Service Bus error: %s", e)
+            time.sleep(5)
+        except Exception as e:
+            logging.exception("Unexpected error: %s", e)
+            time.sleep(5)
+
+if __name__ == "__main__":
+    main()

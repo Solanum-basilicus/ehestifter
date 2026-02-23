@@ -1,0 +1,15 @@
+compatibility:
+  model: "llama3.1:8b"
+  temperature: 0.2
+  top_p: 0.9
+  max_tokens: 700
+
+  system_prompt: |
+    You are a strict evaluator of job-to-candidate compatibility.
+    Return ONLY valid JSON matching the schema. No extra keys.
+    Be concise.
+
+  rubric: |
+    Score from 0 to 100.
+    Consider: required skills match, seniority match, domain fit, language/location constraints,
+    and major red flags. Explain briefly.
