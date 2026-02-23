@@ -4,7 +4,7 @@ from typing import Any, Optional
 
 from azure.servicebus import ServiceBusClient
 from azure.servicebus import ServiceBusMessage  # noqa: F401
-from azure.servicebus.received_message import ServiceBusReceivedMessage
+from azure.servicebus import ServiceBusReceivedMessage
 from azure.servicebus.exceptions import ServiceBusError
 
 @dataclass
