@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 import azure.functions as func
 from helpers.db import get_connection
 
-logging.warning("cleanup_runs module imported")
+logging.info("cleanup_runs module imported")
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -87,7 +87,7 @@ def _fail_stuck_pending(cur, now: datetime, pending_fail_minutes: int) -> int:
 
 
 def main(mytimer: func.TimerRequest) -> None:
-    logging.warning("cleanup_runs INVOKED past_due=%s", getattr(mytimer, "past_due", None))
+    logging.info("cleanup_runs INVOKED past_due=%s", getattr(mytimer, "past_due", None))
     now = _utcnow()
     if mytimer.past_due:
         logging.warning("cleanup_runs timer is past due!")
@@ -105,6 +105,31 @@ def main(mytimer: func.TimerRequest) -> None:
     try:
         conn.autocommit = False
         cur = conn.cursor()
+
+        # ---- acquire SQL application lock ----
+        cur.execute(
+            """
+            DECLARE @res INT;
+            EXEC @res = sp_getapplock
+                @Resource = 'cleanup_runs',
+                @LockMode = 'Exclusive',
+                @LockOwner = 'Transaction',
+                @LockTimeout = 0;
+            SELECT @res;
+            """
+        )
+        lock_result = cur.fetchone()[0]
+
+        # sp_getapplock return codes:
+        # 0 = lock granted synchronously
+        # 1 = lock granted after waiting
+        # <0 = failure
+        if lock_result < 0:
+            logging.warning("cleanup_runs: could not acquire applock (result=%s), exiting", lock_result)
+            conn.rollback()
+            return
+
+        logging.info("cleanup_runs: acquired applock")
 
         expired_queued = _expire_queued(cur, now, queued_ttl_days)
         expired_leased = _expire_leased(cur, now, lease_grace_min)
