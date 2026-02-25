@@ -420,7 +420,7 @@
           <div class="flex-between">
             <div>
               <div style="font-weight:600;">Compatibility Score</div>
-              <div class="muted" style="font-size:12px;" id="compat-subtitle">no autorun</div>
+              <div class="muted" style="font-size:12px;" id="compat-subtitle">Loading status…</div>
             </div>
             <div class="flex" style="gap:.5rem;"><span class="chip-private">🔒 Only you</span></div>
           </div>
@@ -859,7 +859,6 @@
   function setRunning(running) {
     setEnabled(btnRun, !running);
     setEnabled(btnInspect, !running);
-    elSubtitle.textContent = running ? "running…" : "no autorun";
   }
 
   function renderLatest(latest) {
@@ -932,11 +931,24 @@
   btnRun.addEventListener("click", async () => {
     try {
       setRunning(true);
-      await postRun();
-      await refreshLatestOnce(); 
+      elSubtitle.textContent = "Queueing…";
+
+      const runResp = await postRun();
+
+      // If POST returns the run object with status, render it immediately.
+      // If it returns something else, fallback to fetching latest once.
+      const hasStatus =
+        (runResp && (runResp.status || runResp.Status || runResp.state || runResp.State));
+
+      if (hasStatus) {
+        renderLatest(runResp);
+      } else {
+        await refreshLatestOnce();
+      }
     } catch (e) {
       elSubtitle.textContent = String(e.message || e);
     } finally {
+      // re-enable buttons, BUT DO NOT overwrite subtitle
       setRunning(false);
     }
   });
@@ -989,12 +1001,22 @@
         setEnabled(btnRun, true);
         setEnabled(btnInspect, true);
       }
+
+      // show explicit loading state while we fetch
+      elSubtitle.textContent = "Loading status…";
+
       const latest = await fetchLatest();
-      if (latest) renderLatest(latest);
-    } catch (e) {
-      // Keep widget usable even if latest fails
-      elSubtitle.textContent = "latest unavailable";
-    }
+      if (latest) {
+        renderLatest(latest);
+      } else {
+        // 404 means "no runs yet"
+        elSubtitle.textContent = "No runs yet";
+        elSummary.textContent = "";
+        elScoreLine.textContent = `⬡⬡⬡⬡⬡⬡⬡⬡⬡⬡ ${fmtScore(null)}`;
+      }
+  } catch (e) {
+    elSubtitle.textContent = "latest unavailable";
+  }
   })();
 </script>
 
