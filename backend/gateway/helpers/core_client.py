@@ -19,7 +19,7 @@ def _raise_if_bad(resp: requests.Response) -> None:
 
 def get_run(run_id: str) -> Dict[str, Any]:
     resp = requests.get(
-        _url(f"/api/internal/enrichment/runs/{run_id}"),
+        _url(f"/internal/enrichment/runs/{run_id}"),
         headers=_headers(),
         timeout=HTTP_TIMEOUT_SECONDS,
     )
@@ -30,7 +30,7 @@ def get_run(run_id: str) -> Dict[str, Any]:
 
 def get_latest_id(subject_key: str, enricher_type: str) -> str:
     resp = requests.get(
-        _url(f"/api/internal/enrichment/subjects/{subject_key}/{enricher_type}/latest-id"),
+        _url(f"/internal/enrichment/subjects/{subject_key}/{enricher_type}/latest-id"),
         headers=_headers(),
         timeout=HTTP_TIMEOUT_SECONDS,
     )
@@ -45,7 +45,7 @@ def lease_run(run_id: str, lease_token: str, lease_until_iso: str) -> Optional[s
     Raises CoreHttpError for non-409 errors.
     """
     resp = requests.post(
-        _url(f"/api/internal/enrichment/runs/{run_id}/lease"),
+        _url(f"/internal/enrichment/runs/{run_id}/lease"),
         headers=_headers(),
         json={"leaseToken": lease_token, "leaseUntil": lease_until_iso},
         timeout=HTTP_TIMEOUT_SECONDS,
@@ -63,7 +63,7 @@ def lease_run(run_id: str, lease_token: str, lease_until_iso: str) -> Optional[s
 
 def get_input(run_id: str) -> Dict[str, Any]:
     resp = requests.get(
-        _url(f"/api/internal/enrichment/runs/{run_id}/input"),
+        _url(f"/internal/enrichment/runs/{run_id}/input"),
         headers=_headers(),
         timeout=HTTP_TIMEOUT_SECONDS,
     )
@@ -77,7 +77,7 @@ def get_input(run_id: str) -> Dict[str, Any]:
 
 def complete_run_succeeded(run_id: str, score: float, summary: str) -> None:
     resp = requests.post(
-        _url(f"/api/enrichment/runs/{run_id}/complete"),
+        _url(f"/enrichment/runs/{run_id}/complete"),
         headers=_headers(),
         json={"status": "Succeeded", "result": {"score": score, "summary": summary}},
         timeout=HTTP_TIMEOUT_SECONDS,
@@ -86,7 +86,7 @@ def complete_run_succeeded(run_id: str, score: float, summary: str) -> None:
 
 def complete_run_failed(run_id: str, error_code: str, error_message: str) -> None:
     resp = requests.post(
-        _url(f"/api/enrichment/runs/{run_id}/complete"),
+        _url(f"/enrichment/runs/{run_id}/complete"),
         headers=_headers(),
         json={"status": "Failed", "errorCode": error_code, "errorMessage": error_message},
         timeout=HTTP_TIMEOUT_SECONDS,
