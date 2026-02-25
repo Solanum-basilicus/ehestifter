@@ -90,7 +90,7 @@ def shared_state():
     Session-wide shared context across tests.
     We'll also store a per-suite correlation id for SB filtering.
     """
-    return {"suite_id": str(uuid.uuid4())}
+    return {"suite_id": str(uuid.uuid4()), "run_ids": []}
 
 
 @pytest.fixture(scope="session")
@@ -136,6 +136,31 @@ def _decode_sb_message_body(msg) -> dict | None:
     except Exception:
         return None
 
+def _sb_envelope(msg) -> dict:
+    body = _decode_sb_message_body(msg)
+    try:
+        app_props = dict(msg.application_properties or {})
+    except Exception:
+        app_props = {}
+
+    # azure-servicebus can return bytes keys/values in app props
+    def _norm(v):
+        if isinstance(v, bytes):
+            try:
+                return v.decode("utf-8")
+            except Exception:
+                return repr(v)
+        return v
+
+    app_props = { _norm(k): _norm(v) for k, v in app_props.items() }
+
+    return {
+        "message_id": getattr(msg, "message_id", None),
+        "correlation_id": getattr(msg, "correlation_id", None),
+        "subject": getattr(msg, "subject", None),
+        "application_properties": app_props,
+        "body": body,  # decoded JSON or None
+    }
 
 @pytest.fixture(scope="session")
 def sb_helpers(sb_conn_str_tests, sb_queue_name):
@@ -144,13 +169,10 @@ def sb_helpers(sb_conn_str_tests, sb_queue_name):
     """
     from azure.servicebus import ServiceBusClient
 
-    def drain_messages(max_total: int = 50, wait_seconds: int = 10) -> int:
-        """
-        Best-effort drain (receive+complete) up to max_total messages.
-        Useful for final cleanup only.
-        """
+    def drain_matching(predicate, max_total: int = 50, wait_seconds: int = 10) -> int:
         drained = 0
         deadline = time.time() + wait_seconds
+
         with ServiceBusClient.from_connection_string(sb_conn_str_tests) as client:
             with client.get_queue_receiver(queue_name=sb_queue_name, max_wait_time=5) as receiver:
                 while drained < max_total and time.time() < deadline:
@@ -158,18 +180,18 @@ def sb_helpers(sb_conn_str_tests, sb_queue_name):
                     if not msgs:
                         continue
                     for m in msgs:
-                        receiver.complete_message(m)
-                        drained += 1
-                        if drained >= max_total:
-                            break
+                        env = _sb_envelope(m)
+                        if predicate(env):
+                            receiver.complete_message(m)
+                            drained += 1
+                            if drained >= max_total:
+                                break
+                        else:
+                            receiver.abandon_message(m)
+
         return drained
 
     def receive_matching(predicate, wait_seconds: int = 20) -> dict | None:
-        """
-        Receive messages until predicate(payload) is True.
-        Non-matching messages are abandoned (put back) so we don't steal from real workers.
-        Matching message is completed and returned as payload dict.
-        """
         deadline = time.time() + wait_seconds
         with ServiceBusClient.from_connection_string(sb_conn_str_tests) as client:
             with client.get_queue_receiver(queue_name=sb_queue_name, max_wait_time=5) as receiver:
@@ -178,11 +200,74 @@ def sb_helpers(sb_conn_str_tests, sb_queue_name):
                     if not msgs:
                         continue
                     for m in msgs:
-                        payload = _decode_sb_message_body(m)
-                        if payload and predicate(payload):
+                        env = _sb_envelope(m)
+                        if predicate(env):
                             receiver.complete_message(m)
-                            return payload
+                            return env
                         receiver.abandon_message(m)
         return None
 
-    return {"drain_messages": drain_messages, "receive_matching": receive_matching}
+    def receive_by_run_id(run_id: str, wait_seconds: int = 20) -> dict | None:
+        rid = run_id.lower()
+
+        def _match(env: dict) -> bool:
+            if str(env.get("message_id") or "").lower() == rid:
+                return True
+            if str(env.get("correlation_id") or "").lower() == rid:
+                return True
+
+            body = env.get("body") or {}
+            if isinstance(body, dict) and str(body.get("runId") or "").lower() == rid:
+                return True
+
+            props = env.get("application_properties") or {}
+            # common keys people use
+            for k in ("runId", "run_id", "RunId", "messageId"):
+                if str(props.get(k) or "").lower() == rid:
+                    return True
+
+            return False
+
+        return receive_matching(_match, wait_seconds=wait_seconds)
+
+    def drain_by_run_ids(run_ids: list[str], wait_seconds: int = 10, max_total: int = 50) -> int:
+        wanted = {r.lower() for r in run_ids if r}
+        if not wanted:
+            return 0
+
+        def _match(env: dict) -> bool:
+            mid = str(env.get("message_id") or "").lower()
+            if mid in wanted:
+                return True
+            body = env.get("body") or {}
+            if isinstance(body, dict) and str(body.get("runId") or "").lower() in wanted:
+                return True
+            props = env.get("application_properties") or {}
+            for k in ("runId", "run_id", "RunId", "messageId"):
+                if str(props.get(k) or "").lower() in wanted:
+                    return True
+            return False
+
+        return drain_matching(_match, wait_seconds=wait_seconds, max_total=max_total)
+
+    def peek_matching(predicate, wait_seconds: int = 15) -> dict | None:
+        deadline = time.time() + wait_seconds
+        with ServiceBusClient.from_connection_string(sb_conn_str_tests) as client:
+            with client.get_queue_receiver(queue_name=sb_queue_name, max_wait_time=5) as receiver:
+                while time.time() < deadline:
+                    batch = receiver.peek_messages(max_message_count=50)
+                    for m in batch or []:
+                        env = _sb_envelope(m)
+                        if predicate(env):
+                            return env
+                    time.sleep(0.5)
+        return None
+
+    return {
+        "drain_matching": drain_matching,
+        "receive_matching": receive_matching,
+        "receive_by_run_id": receive_by_run_id,
+        "drain_by_run_ids": drain_by_run_ids,
+        "peek_matching": peek_matching,
+    }
+    

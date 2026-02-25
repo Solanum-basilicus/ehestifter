@@ -21,5 +21,6 @@ def test_10_create_run_in_core(
     # store for later tests
     shared_state["run"] = data
     shared_state["run_id"] = data["runId"]
+    shared_state["run_ids"].append(data["runId"])
     shared_state["subject_key"] = data["subjectKey"]
     shared_state["enricher_type"] = data["enricherType"]

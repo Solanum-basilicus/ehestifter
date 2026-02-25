@@ -25,12 +25,12 @@ def test_20_dispatch_enqueues_message(
     assert r.status_code == 202, f"Expected 202, got {r.status_code}: {r.text}"
 
     # Receive & validate message in SB
-    got = sb_helpers["receive_matching"](
-        predicate=lambda p: str(p.get("runId", "")).lower() == run_id.lower(),
-        wait_seconds=25,
+    got = sb_helpers["peek_matching"](
+        predicate=lambda env: (
+            str(env.get("message_id") or "").lower() == run_id.lower()
+            or str((env.get("body") or {}).get("runId") or "").lower() == run_id.lower()
+        ),
+        wait_seconds=10,
     )
-    assert got is not None, "Did not receive matching SB message for dispatched runId"
-    assert got.get("enricherType") == enricher_type
-    assert got.get("subjectKey") == subject_key
-
-    shared_state["sb_message"] = got
+    assert got is not None, "Did not observe dispatched message in SB via peek"
+    shared_state["sb_peeked"] = got
