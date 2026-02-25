@@ -51,13 +51,15 @@ def register(app: func.FunctionApp):
             mark_failed(run["runId"], "SnapshotWriteFailed", str(e))
             return func.HttpResponse(f"Error: {str(e)}", status_code=500)
 
-        # 3) Dispatch to gateway (if this fails -> leave Pending; return 500; gateway sweep will pick it up)
+        # 3) Dispatch to gateway (if this fails -> leave Pending; return 201; gateway sweep will pick it up)
         try:
             dispatch_via_gateway(run, run["inputSnapshotBlobPath"], corr=corr)
         except Exception as e:
             logging.exception("POST /enrichment/runs dispatch failed corr=%s", corr)
-            # IMPORTANT: leave run Pending for scheduled catch-up
-            return func.HttpResponse(f"Error: {str(e)}", status_code=500)
+            # Leave run Pending for scheduled catch-up.
+            # IMPORTANT: do NOT fail create; return Pending run so UI/tests can proceed.
+            run = svc.get_run(run["runId"])
+            return func.HttpResponse(json.dumps(run), mimetype="application/json", status_code=201)
 
         # 4) Mark queued only after successful dispatch
         try:
