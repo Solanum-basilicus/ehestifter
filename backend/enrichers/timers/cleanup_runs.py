@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 import azure.functions as func
 from helpers.db import get_connection
 
-logging.info("cleanup_runs module imported")
+logging.warning("cleanup_runs module imported")
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -87,7 +87,7 @@ def _fail_stuck_pending(cur, now: datetime, pending_fail_minutes: int) -> int:
 
 
 def main(mytimer: func.TimerRequest) -> None:
-    logging.info("cleanup_runs INVOKED past_due=%s", getattr(mytimer, "past_due", None))
+    logging.warning("cleanup_runs INVOKED past_due=%s", getattr(mytimer, "past_due", None))
     now = _utcnow()
     if mytimer.past_due:
         logging.warning("cleanup_runs timer is past due!")
