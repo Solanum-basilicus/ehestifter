@@ -89,6 +89,8 @@ def _fail_stuck_pending(cur, now: datetime, pending_fail_minutes: int) -> int:
 
 def main(mytimer: func.TimerRequest) -> None:
     now = _utcnow()
+    if mytimer.past_due:
+        logging.warning("cleanup_runs timer is past due!")
 
     queued_ttl_days = _env_int("ENRICHERS_CLEANUP_QUEUED_TTL_DAYS", 14)
     lease_grace_min = _env_int("ENRICHERS_CLEANUP_LEASE_GRACE_MINUTES", 10)

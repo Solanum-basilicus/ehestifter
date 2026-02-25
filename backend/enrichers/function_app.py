@@ -13,7 +13,7 @@ def ping(req: func.HttpRequest) -> func.HttpResponse:
 register_all(app)
 
 @app.function_name(name="cleanup_runs")
-@app.schedule(schedule="0 0 18 * * *", arg_name="mytimer", run_on_startup=False, use_monitor=True)
+@app.schedule(schedule="0 0 18 * * *", arg_name="mytimer", run_on_startup=True, use_monitor=True)
 def cleanup_runs(mytimer: func.TimerRequest) -> None:
     cleanup_runs_main(mytimer)
     # it was not tested on creation. If you see a lot of old queued runs in DB - will have to get back to it.
