@@ -19,6 +19,33 @@ MAX_DEBUG_CHARS = int(os.getenv("MAX_DEBUG_CHARS", "10000"))
 def _truncate(s: str) -> str:
     return s if len(s) <= MAX_DEBUG_CHARS else s[:MAX_DEBUG_CHARS] + "...<truncated>"
 
+def _sb_body_to_str(msg) -> str:
+    """
+    ServiceBusReceivedMessage.body can be:
+      - bytes
+      - iterable of bytes chunks
+      - already a string (rare)
+    We want a debug-friendly string without crashing.
+    """
+    try:
+        body = msg.body
+        if body is None:
+            return ""
+        if isinstance(body, (bytes, bytearray)):
+            return body.decode("utf-8", errors="replace")
+        if isinstance(body, str):
+            return body
+        # Assume iterable of chunks
+        chunks = []
+        for part in body:
+            if isinstance(part, (bytes, bytearray)):
+                chunks.append(part.decode("utf-8", errors="replace"))
+            else:
+                chunks.append(str(part))
+        return "".join(chunks)
+    except Exception as e:
+        return f"<failed to read body: {e}>"
+
 def main() -> None:
     setup_logging()
     s = load_settings("/app/config.yaml")
@@ -58,6 +85,18 @@ def main() -> None:
                         continue
 
                     msg = msgs[0]
+                    if log.isEnabledFor(logging.DEBUG):
+                        sb_body = _sb_body_to_str(msg)
+                        log.debug(
+                            "SB msg received id=%s seq=%s subject=%s content_type=%s enqueued=%s delivery_count=%s body=%s",
+                            getattr(msg, "message_id", None),
+                            getattr(msg, "sequence_number", None),
+                            getattr(msg, "subject", None),
+                            getattr(msg, "content_type", None),
+                            getattr(msg, "enqueued_time_utc", None),
+                            getattr(msg, "delivery_count", None),
+                            _truncate(sb_body),
+                        )                    
                     stats.bump("sb_messages", "sb_messages_last_at")
                     stats.flush()
                     last_flush = time.time()
@@ -92,7 +131,31 @@ def main() -> None:
 
                     # Lease from gateway
                     log.info("Leasing runId=%s subjectKey=%s", parsed.run_id, parsed.subject_key)
+
+                    if log.isEnabledFor(logging.DEBUG):
+                        lease_req = {"runId": parsed.run_id, "ttlSeconds": s.lease_ttl_seconds}
+                        log.debug("Gateway /lease request %s",
+                                _truncate(json.dumps(lease_req, ensure_ascii=False, separators=(",", ":"))))
+
                     lease = gw.lease(parsed.run_id, s.lease_ttl_seconds)
+
+                    if log.isEnabledFor(logging.DEBUG):
+                        try:
+                            lease_json = json.dumps(lease, ensure_ascii=False, separators=(",", ":"))
+                        except TypeError:
+                            lease_json = json.dumps({"lease": str(lease)}, ensure_ascii=False, separators=(",", ":"))
+                        log.debug("Gateway /lease response %s", _truncate(lease_json))
+
+                        # Quick targeted visibility (helps spot wrong keys)
+                        input_obj_dbg = (lease or {}).get("input") or {}
+                        job_dbg = input_obj_dbg.get("job") or {}
+                        cv_dbg = input_obj_dbg.get("cvText")
+                        log.debug(
+                            "Lease input keys=%s jobKeys=%s cvTextLen=%s",
+                            list(input_obj_dbg.keys()) if isinstance(input_obj_dbg, dict) else type(input_obj_dbg).__name__,
+                            list(job_dbg.keys()) if isinstance(job_dbg, dict) else type(job_dbg).__name__,
+                            (len(cv_dbg) if isinstance(cv_dbg, str) else (0 if cv_dbg is None else len(str(cv_dbg))))
+                        )
 
                     lease_token = str(lease.get("leaseToken") or "")
                     if not lease_token:
@@ -113,6 +176,10 @@ def main() -> None:
                     input_obj = lease.get("input") or {}
                     job = input_obj.get("job") or {}
                     cv_text = str(input_obj.get("cvText") or "")
+                    if log.isEnabledFor(logging.DEBUG):
+                        log.debug("Prompt inputs jobKeys=%s cvTextLen=%s",
+                                list(job.keys()) if isinstance(job, dict) else type(job).__name__,
+                                len(cv_text))                    
 
                     prompt = build_prompt(job=job, cv_text=cv_text, rubric=s.rubric)
 
