@@ -163,7 +163,7 @@ def dispatch_via_gateway(run: Dict[str, Any], input_snapshot_blob_path: str, cor
     }
 
     headers = {
-        "x-functions-key": fn_key,
+        "x-functions-key": api_key,
         "content-type": "application/json",
     }
     if corr:
