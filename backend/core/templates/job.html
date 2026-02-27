@@ -873,6 +873,39 @@
     return "⬢".repeat(filled) + "⬡".repeat(10 - filled);
   }
 
+  function lerp(a, b, t) { return a + (b - a) * t; }
+
+  function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
+
+  function hexToRgb(hex) {
+    const h = hex.replace("#", "").trim();
+    const v = h.length === 3 ? h.split("").map(c => c + c).join("") : h;
+    const n = parseInt(v, 16);
+    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+  }
+
+  function rgbToHex({ r, g, b }) {
+    const to2 = (x) => x.toString(16).padStart(2, "0");
+    return `#${to2(r)}${to2(g)}${to2(b)}`;
+  }
+
+  function scoreToHexColor(score) {
+    // 0 -> red, 10 -> green
+    const RED = hexToRgb("#6e0503");
+    const GREEN = hexToRgb("#00691c");
+
+    if (score === null || score === undefined) return null;
+    const n = Number(score);
+    if (Number.isNaN(n)) return null;
+
+    const t = clamp(n / 10, 0, 1);
+    return rgbToHex({
+      r: Math.round(lerp(RED.r, GREEN.r, t)),
+      g: Math.round(lerp(RED.g, GREEN.g, t)),
+      b: Math.round(lerp(RED.b, GREEN.b, t)),
+    });
+  }  
+
   function escapeHtml(s) {
     // prevent summary from injecting HTML
     return String(s ?? "")
@@ -901,11 +934,11 @@
 
     const status = run?.status ?? run?.Status ?? "";
     const createdAt =
+      run?.completedAt ?? run?.CompletedAt ??
+      run?.updatedAt ?? run?.UpdatedAt ??
       run?.requestedAt ?? run?.RequestedAt ??
       run?.queuedAt ?? run?.QueuedAt ??
       run?.leasedAt ?? run?.LeasedAt ??
-      run?.completedAt ?? run?.CompletedAt ??
-      run?.updatedAt ?? run?.UpdatedAt ??
       run?.createdAt ?? run?.CreatedAt ??
       "";
 
@@ -923,10 +956,20 @@
   }
 
   function renderLatest(latest) {
-    const { score, summary, status, createdAt } = extractRunFields(latest);
+    const { score, summary, status } = extractRunFields(latest);
 
     // Keep skeleton if no result/score
-    elScoreLine.textContent = `${renderHexScore(score)} ${fmtScoreText(score)}`;
+    const hexes = renderHexScore(score);          // "⬢⬢⬢⬡⬡..."
+    const color = scoreToHexColor(score);         // null if no score
+    const scoreText = fmtScoreText(score);        // "7.0" or "?.??"
+
+    if (!color) {
+      // No prior run / no score / invalid -> keep skeleton exactly as before
+      elScoreLine.textContent = `${hexes} ${scoreText}`;
+    } else {
+      // Whole hex line is one color; numeric stays default color
+      elScoreLine.innerHTML = `<span style="color:${color}">${hexes}</span> ${escapeHtml(scoreText)}`;
+    }
 
     elSummary.textContent = summary ? summary : "";
 
@@ -1025,14 +1068,19 @@
       elHistory.innerHTML = items.map(r => {
         const { score, summary, status, createdAt } = extractRunFields(r);
 
+        const rel = (window.__relativeFromLocal && createdAt) ? window.__relativeFromLocal(createdAt) : "";
+        const title = createdAt ? new Date(createdAt).toLocaleString() : "";
+
         const scoreLine = `score: ${fmtScoreText(score)}`;
         const safeSummary = summary ? escapeHtml(summary) : "";
 
         return `
           <div style="border:1px solid #eee; border-radius:10px; padding:10px; margin-bottom:8px;">
             <div class="flex-between">
-              <div style="font-family:monospace;">${scoreLine}</div>
-              <div class="muted" style="font-size:12px;">${escapeHtml(status)} ${createdAt ? "• " + escapeHtml(createdAt) : ""}</div>
+              <div style="font-family:monospace;">${escapeHtml(scoreLine)}</div>
+              <div class="muted" style="font-size:12px;" title="${escapeHtml(title)}">
+                ${escapeHtml(status)}${rel ? " • " + escapeHtml(rel) : ""}
+              </div>
             </div>
             ${safeSummary ? `<div style="margin-top:6px; white-space:pre-wrap;">${safeSummary}</div>` : ""}
           </div>
