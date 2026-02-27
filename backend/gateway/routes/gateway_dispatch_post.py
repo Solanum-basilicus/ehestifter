@@ -1,45 +1,54 @@
-# routes/gateway_dispatch_post.py
 import json
 import logging
-import azure.functions as func
+import uuid
 
+import azure.functions as func
 from helpers.http_json import parse_json, json_response
 from helpers.sb_client import send_dispatch_message
 
 
 def _corr_id(req: func.HttpRequest) -> str:
+    # Use client-provided ids if present, otherwise generate.
     return (
         req.headers.get("x-correlation-id")
         or req.headers.get("x-ms-client-request-id")
         or req.headers.get("x-request-id")
-        or ""
+        or str(uuid.uuid4())
     )
 
 
 def register(app: func.FunctionApp):
-    # Make auth behavior explicit. If you rely on function keys, keep FUNCTION.
-    @app.route(route="gateway/dispatch", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
+    @app.route(route="gateway/dispatch", methods=["POST"])  # keep your auth_level as-is for now
     def gateway_dispatch(req: func.HttpRequest) -> func.HttpResponse:
         corr = _corr_id(req)
 
-        # NOTE: if platform auth blocks the request, this function won't execute at all.
-        logging.info("POST /gateway/dispatch start corr=%s", corr)
+        # Log header presence (NOT values) to diagnose missing corr from callers
+        hk = {k.lower() for k in req.headers.keys()}
+        logging.info(
+            "POST /gateway/dispatch start corr=%s has_x_corr=%s has_x_ms_req=%s",
+            corr,
+            ("x-correlation-id" in hk),
+            ("x-ms-client-request-id" in hk),
+        )
 
         ok, body, err = parse_json(req)
         if not ok:
             logging.warning("POST /gateway/dispatch bad_json corr=%s", corr)
+            # If parse_json returned an HttpResponse, pass it through (can't attach headers reliably)
             return err
 
-        if not isinstance(body, dict):
-            logging.warning("POST /gateway/dispatch invalid_body_type corr=%s type=%s", corr, type(body).__name__)
-            return func.HttpResponse("Invalid JSON body", status_code=400)
+        if not isinstance(body, dict) or not body.get("runId"):
+            logging.warning(
+                "POST /gateway/dispatch missing_runId corr=%s body_type=%s keys=%s",
+                corr,
+                type(body).__name__,
+                sorted(body.keys()) if isinstance(body, dict) else None,
+            )
+            resp = func.HttpResponse("Missing runId", status_code=400)
+            resp.headers["x-correlation-id"] = corr
+            return resp
 
-        run_id = body.get("runId")
-        if not run_id:
-            logging.warning("POST /gateway/dispatch missing_runId corr=%s keys=%s", corr, sorted(body.keys()))
-            return func.HttpResponse("Missing runId", status_code=400)
-
-        # Log a safe summary (no secrets)
+        run_id = str(body.get("runId") or "")
         logging.info(
             "POST /gateway/dispatch parsed corr=%s runId=%s enricherType=%s subjectKey=%s",
             corr,
@@ -52,11 +61,16 @@ def register(app: func.FunctionApp):
             message_id = send_dispatch_message(body, corr=corr)
         except Exception as e:
             logging.exception("POST /gateway/dispatch SB dispatch failed corr=%s runId=%s", corr, run_id)
-            return func.HttpResponse(
+            resp = func.HttpResponse(
                 json.dumps({"code": "SB_DISPATCH_FAILED", "message": str(e), "runId": run_id, "corr": corr}),
                 mimetype="application/json",
                 status_code=502,
             )
+            resp.headers["x-correlation-id"] = corr
+            return resp
 
         logging.info("POST /gateway/dispatch ok corr=%s runId=%s messageId=%s", corr, run_id, message_id)
-        return json_response({"messageId": message_id, "runId": run_id, "corr": corr}, status_code=202)
+
+        resp = json_response({"messageId": message_id, "runId": run_id, "corr": corr}, status_code=202)
+        resp.headers["x-correlation-id"] = corr
+        return resp

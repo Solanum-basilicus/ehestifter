@@ -2,6 +2,11 @@ import azure.functions as func
 import logging
 from routes import register_all
 
+# Reduce noise from Azure SDKs
+logging.getLogger("azure").setLevel(logging.WARNING)
+logging.getLogger("uamqp").setLevel(logging.WARNING)
+logging.getLogger("azure.servicebus").setLevel(logging.WARNING)
+
 app = func.FunctionApp()
 
 @app.route(route="ping", methods=["GET"])
