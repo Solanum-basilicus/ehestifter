@@ -7,20 +7,20 @@ class GatewayClient:
         self.timeout_s = timeout_s
         self.session = requests.Session()
         self.session.headers.update({
-            "x-api-key": api_key,
+            "x-functions-key": api_key,
             "content-type": "application/json",
         })
 
     def lease(self, run_id: str, lease_ttl_seconds: int) -> Dict[str, Any]:
         # You can shape this to match your gateway implementation.
         # Expect: { leaseToken, leaseUntil, input: {job..., cvText...} } or SAS URL
-        url = f"{self.base_url}/api/work/lease"
+        url = f"{self.base_url}/work/lease"
         resp = self.session.post(url, json={"runId": run_id, "leaseTtlSeconds": lease_ttl_seconds}, timeout=self.timeout_s)
         resp.raise_for_status()
         return resp.json()
 
     def complete(self, run_id: str, lease_token: str, result: Dict[str, Any]) -> Dict[str, Any]:
-        url = f"{self.base_url}/api/work/complete"
+        url = f"{self.base_url}/work/complete"
         payload = {
             "runId": run_id,
             "leaseToken": lease_token,
