@@ -2,6 +2,7 @@
 import logging
 import os
 import time
+import json
 
 from azure.servicebus.exceptions import ServiceBusError
 
@@ -13,6 +14,10 @@ from .ollama_client import OllamaClient
 from .compatibility import build_prompt, normalize_result
 from .stats import Stats
 
+MAX_DEBUG_CHARS = int(os.getenv("MAX_DEBUG_CHARS", "10000"))
+
+def _truncate(s: str) -> str:
+    return s if len(s) <= MAX_DEBUG_CHARS else s[:MAX_DEBUG_CHARS] + "...<truncated>"
 
 def main() -> None:
     setup_logging()
@@ -113,6 +118,19 @@ def main() -> None:
 
                     # Inference
                     log.info("Running inference runId=%s model=%s", parsed.run_id, s.model)
+
+                    if log.isEnabledFor(logging.DEBUG):
+                        req_payload = {
+                            "runId": parsed.run_id,
+                            "model": s.model,
+                            "system": s.system_prompt,
+                            "prompt": prompt,
+                            "temperature": s.temperature,
+                            "top_p": s.top_p,
+                        }
+                        log.debug("Ollama request %s",
+                                _truncate(json.dumps(req_payload, ensure_ascii=False, separators=(",", ":"))))
+
                     raw = oll.generate_json(
                         model=s.model,
                         prompt=prompt,
@@ -120,6 +138,14 @@ def main() -> None:
                         temperature=s.temperature,
                         top_p=s.top_p,
                     )
+
+                    if log.isEnabledFor(logging.DEBUG):
+                        try:
+                            raw_json = json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
+                        except TypeError:
+                            raw_json = json.dumps({"raw": str(raw)}, ensure_ascii=False, separators=(",", ":"))
+                        log.debug("Ollama response %s", raw_json)
+
                     result = normalize_result(raw)
 
                     # Submit back
