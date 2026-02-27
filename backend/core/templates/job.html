@@ -851,6 +851,67 @@
     return n.toFixed(2);
   }
 
+  function fmtScoreText(score) {
+    // what the user sees next to the hexagons
+    if (score === null || score === undefined) return "?.??";
+    const n = Number(score);
+    if (Number.isNaN(n)) return String(score);
+    return n.toFixed(1); // "7.0"
+  }
+
+  function clamp(n, lo, hi) {
+    return Math.max(lo, Math.min(hi, n));
+  }
+
+  function renderHexScore(score) {
+    // returns: "⬢⬢⬢⬡⬡⬡⬡⬡⬡⬡"
+    if (score === null || score === undefined) return "⬡⬡⬡⬡⬡⬡⬡⬡⬡⬡";
+    const n = Number(score);
+    if (Number.isNaN(n)) return "⬡⬡⬡⬡⬡⬡⬡⬡⬡⬡";
+
+    const filled = clamp(Math.round(n), 0, 10);
+    return "⬢".repeat(filled) + "⬡".repeat(10 - filled);
+  }
+
+  function escapeHtml(s) {
+    // prevent summary from injecting HTML
+    return String(s ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function extractRunFields(run) {
+    // Adapt to your API's run shape:
+    // - score/summary are under run.result
+    // - status is top-level
+    const result = run?.result ?? run?.Result ?? null;
+
+    const score =
+      result?.score ?? result?.Score ??
+      run?.score ?? run?.Score ?? // (fallback if you ever flatten it)
+      null;
+
+    const summary =
+      result?.summary ?? result?.Summary ??
+      run?.summary ?? run?.Summary ??
+      "";
+
+    const status = run?.status ?? run?.Status ?? "";
+    const createdAt =
+      run?.requestedAt ?? run?.RequestedAt ??
+      run?.queuedAt ?? run?.QueuedAt ??
+      run?.leasedAt ?? run?.LeasedAt ??
+      run?.completedAt ?? run?.CompletedAt ??
+      run?.updatedAt ?? run?.UpdatedAt ??
+      run?.createdAt ?? run?.CreatedAt ??
+      "";
+
+    return { score, summary, status, createdAt };
+  }
+
   function setEnabled(btn, enabled) {
     btn.disabled = !enabled;
     btn.setAttribute("aria-disabled", enabled ? "false" : "true");
@@ -862,19 +923,12 @@
   }
 
   function renderLatest(latest) {
-    // Adapt these field names to your actual API shape.
-    const score = latest?.score ?? latest?.Score ?? null;
-    const summary = latest?.summary ?? latest?.Summary ?? "";
-    const status = latest?.status ?? latest?.Status ?? "";
-    const createdAt = latest?.createdAt ?? latest?.CreatedAt ?? "";
+    const { score, summary, status, createdAt } = extractRunFields(latest);
 
-    elScoreLine.textContent = `⬡⬡⬡⬡⬡⬡⬡⬡⬡⬡ ${fmtScore(score)}`;
+    // Keep skeleton if no result/score
+    elScoreLine.textContent = `${renderHexScore(score)} ${fmtScoreText(score)}`;
 
-    if (summary) {
-      elSummary.textContent = summary;
-    } else {
-      elSummary.textContent = "";
-    }
+    elSummary.textContent = summary ? summary : "";
 
     if (status) {
       elSubtitle.textContent = createdAt ? `${status} • ${createdAt}` : status;
@@ -969,17 +1023,18 @@
       }
 
       elHistory.innerHTML = items.map(r => {
-        const score = r.score ?? r.Score ?? null;
-        const status = r.status ?? r.Status ?? "";
-        const createdAt = r.createdAt ?? r.CreatedAt ?? "";
-        const summary = r.summary ?? r.Summary ?? "";
+        const { score, summary, status, createdAt } = extractRunFields(r);
+
+        const scoreLine = `score: ${fmtScoreText(score)}`;
+        const safeSummary = summary ? escapeHtml(summary) : "";
+
         return `
           <div style="border:1px solid #eee; border-radius:10px; padding:10px; margin-bottom:8px;">
             <div class="flex-between">
-              <div style="font-family:monospace;">score: ${fmtScore(score)}</div>
-              <div class="muted" style="font-size:12px;">${status} ${createdAt ? "• " + createdAt : ""}</div>
+              <div style="font-family:monospace;">${scoreLine}</div>
+              <div class="muted" style="font-size:12px;">${escapeHtml(status)} ${createdAt ? "• " + escapeHtml(createdAt) : ""}</div>
             </div>
-            ${summary ? `<div style="margin-top:6px;">${summary}</div>` : ""}
+            ${safeSummary ? `<div style="margin-top:6px; white-space:pre-wrap;">${safeSummary}</div>` : ""}
           </div>
         `;
       }).join("");
