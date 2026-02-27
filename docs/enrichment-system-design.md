@@ -1,5 +1,5 @@
 
-# Enrichment System Design (v1)
+# Enrichment System Design (v2)
 
 This document describes the architecture, responsibilities, data model, and flows
 for the **Enrichment Core + Worker Gateway + Local GPT Worker** system.
@@ -15,12 +15,15 @@ It is intended as a long‑term reference during implementation and iteration.
 - Track run lifecycle, status, and history
 - Show latest result by default, history on demand
 - Allow manual re‑run from UI
+-   Allow safe rescheduling of runs if Service Bus is temporarily
+    unavailable
 
 ### Non‑functional
 - Low cost (Azure Service Bus Basic + StorageV2)
 - Clear bounded contexts
 - External worker fully decoupled from internal domains
 - Safe against duplication and stale work
+- Eventually consistent and recoverable
 
 ---
 
@@ -29,19 +32,25 @@ It is intended as a long‑term reference during implementation and iteration.
 ### 2.1 Enrichment Core (Azure Function App)
 
 **Owns**
-- EnrichmentRun lifecycle
+- EnrichmentRun lifecycle (inc. statuses)
 - Run history and latest-result queries
 - Idempotency and anti‑duplication rules
-- Building input snapshots (job + CV)
+- Building input snapshots (job + CV, as `input.json`)
 
 **Does NOT**
 - Talk to Service Bus
 - Issue SAS tokens
 - Expose APIs to the worker
+- Read Jobs/Users tables directly
 
 **Storage**
 - Azure SQL
-- Azure Blob (input snapshots)
+- Azure Blob (input snapshots, `enrichment` container)
+
+**Integration Pattern** 
+- Calls Jobs internal API for job snapshot 
+- Calls Users internal API for CV pointer 
+- Downloads CV text via CVTextBlobPath - Produces self-contained `input.json`
 
 ---
 
@@ -52,6 +61,7 @@ It is intended as a long‑term reference during implementation and iteration.
 - Worker‑facing HTTPS APIs
 - Leasing model and corruption protection
 - Bridging worker results back to Enrichment Core
+- Pending run rescheduling
 
 **Does NOT**
 - Decide when a run should exist
@@ -64,12 +74,13 @@ It is intended as a long‑term reference during implementation and iteration.
 **Owns**
 - Polling SB queue
 - Leasing work from Gateway
-- Computing score + summary
-- Submitting results
+- Compute enrichment
+- Submit completion
 
 **Does NOT**
-- Call Jobs domain
-- Access SQL or internal APIs
+- Access SQL
+- Call Jobs or Users APIs
+- Read CV or Job blobs directly
 
 ---
 
@@ -96,25 +107,26 @@ It is intended as a long‑term reference during implementation and iteration.
 
 ### 5.1 EnrichmentRun
 
-| Column | Type |
-|------|------|
-| RunId | UNIQUEIDENTIFIER (PK) |
-| EnricherType | NVARCHAR(128) |
-| SubjectKey | NVARCHAR(256) |
-| JobId | UNIQUEIDENTIFIER |
-| UserId | UNIQUEIDENTIFIER |
-| Status | NVARCHAR(32) |
-| RequestedAt | DATETIMEOFFSET |
-| QueuedAt | DATETIMEOFFSET |
-| LeasedAt | DATETIMEOFFSET |
-| LeaseUntil | DATETIMEOFFSET |
-| LeaseToken | UNIQUEIDENTIFIER |
-| CVVersionId | UNIQUEIDENTIFIER |
-| InputSnapshotBlobPath | NVARCHAR(500) |
-| Score | FLOAT |
-| Summary | NVARCHAR(2000) |
-| ErrorCode | NVARCHAR(64) |
-| ErrorMessage | NVARCHAR(1024) |
+  Column                  Type
+  ----------------------- ------------------
+  RunId                   UNIQUEIDENTIFIER
+  EnricherType            NVARCHAR(128)
+  SubjectKey              NVARCHAR(256)
+  JobId                   UNIQUEIDENTIFIER
+  UserId                  UNIQUEIDENTIFIER
+  Status                  NVARCHAR(32)
+  RequestedAt             DATETIMEOFFSET
+  QueuedAt                DATETIMEOFFSET
+  LeasedAt                DATETIMEOFFSET
+  LeaseUntil              DATETIMEOFFSET
+  LeaseToken              UNIQUEIDENTIFIER
+  CVVersionId             UNIQUEIDENTIFIER
+  InputSnapshotBlobPath   NVARCHAR(500)
+  Score                   FLOAT
+  Summary                 NVARCHAR(2000)
+  ErrorCode               NVARCHAR(64)
+  ErrorMessage            NVARCHAR(1024)
+  UpdatedAt               DATETIMEOFFSET
 
 Statuses:
 - Pending
@@ -145,6 +157,29 @@ enrichment/
 - job snapshot (title + description)
 - normalized CV text
 - metadata
+
+``` json
+{
+  "runId": "GUID",
+  "enricherType": "compatibility.v1",
+  "subjectKey": "jobId:userId",
+  "jobOfferingId": "GUID",
+  "userId": "GUID",
+  "job": {
+    "title": "...",
+    "description": "..."
+  },
+  "cv": {
+    "text": "..."
+  },
+  "meta": {
+    "source": "core",
+    "version": 1
+  }
+}
+```
+
+Worker must not call other domains for input data.
 
 Retention: 30–90 days recommended.
 
@@ -178,12 +213,22 @@ Creates a new run.
 
 Triggers:
 - Job creation
-- User “rerun” button
+- web UI for a job, “run” button on enricher widget
 
 Behavior:
 - Supersede existing active run
 - Create input snapshot
 - Ask Gateway to dispatch
+
+Flow: 
+1. Create run (Pending) 
+2. Build snapshot (Jobs + Users APIs) 
+3. Upload input.json 
+4. Attempt dispatch via Gateway 
+5. Marks as Queued if enqueue succeeds, otherwise leave on Pending
+
+Snapshot failures: - Transient → remain Pending - Permanent → mark
+Failed
 
 #### GET /enrichment/subjects/{jobId}/{userId}/latest
 Returns latest run (any status).
@@ -192,7 +237,25 @@ Returns latest run (any status).
 Returns paginated history.
 
 #### POST /enrichment/runs/{runId}/complete
-Called by Gateway only.
+Called by Gateway after worker completion.
+
+#### GET /enrichment/runs
+Used by Gateway rescheduler.
+Query params: - status (default Pending) - limit - offset
+
+#### POST /enrichment/runs/{runId}/queued
+Called by Gateway after successful enqueue.
+
+#### GET /internal/enrichment/runs/{runId}
+For gateway to requeue Pending runs
+
+#### GET /internal/enrichment/subjects/{subjectKey}/latest-id
+
+#### POST /internal/enrichment/runs/{runId}/lease
+Used by gateway to lease run, for worker
+
+#### GET /internal/enrichment/runs/{runId}/input
+Used by gatewys to get input snapshot for a run, for worker
 
 ---
 
@@ -218,7 +281,17 @@ Forwards result to Enrichment Core.
 
 ---
 
-## 9. Leasing Model
+## 9. Gateway Rescheduling Flow
+
+1.  Gateway timer job calls: `GET /enrichment/runs?status=Pending`
+2.  For each run:
+    -   Enqueue to SB
+    -   Call `/enrichment/runs/{runId}/queued`
+3.  Ensures eventual consistency
+
+---
+
+## 10. Leasing Model
 
 - Worker must lease before computing
 - Lease has TTL (e.g. 60 min)
@@ -227,7 +300,7 @@ Forwards result to Enrichment Core.
 
 ---
 
-## 10. Anti‑duplication Strategy
+## 11. Anti‑duplication Strategy
 
 - Only one active run per `(subjectKey, enricherType)`
 - New run marks older ones as `Superseded`
@@ -235,7 +308,7 @@ Forwards result to Enrichment Core.
 
 ---
 
-## 11. UI Mapping
+## 12. UI Mapping
 
 - Default widget shows **latest run**
 - Status displayed even if failed or running
@@ -244,7 +317,7 @@ Forwards result to Enrichment Core.
 
 ---
 
-## 12. Security
+## 13. Security
 
 - Worker:
   - Service Bus **Listen** only
@@ -254,11 +327,11 @@ Forwards result to Enrichment Core.
   - Validates leaseToken
   - Ensures run is still latest
 - Worker auth:
-  - API key or AAD (upgrade later)
+  - API key (function key)
 
 ---
 
-## 13. Offline Worker Support
+## 14. Offline Worker Support
 
 - SB messages can wait for hours
 - Leasing prevents expired SAS issues
@@ -266,7 +339,7 @@ Forwards result to Enrichment Core.
 
 ---
 
-## 14. Future Extensions
+## 15. Future Extensions
 
 - More enrichers (`salary.v1`, `seniority.v1`, etc.)
 - Move to SB Standard if sessions/topics needed
@@ -275,7 +348,7 @@ Forwards result to Enrichment Core.
 
 ---
 
-## 15. Implementation Order
+## 16. Implementation Order
 
 1. CV normalization at ingestion
 2. SQL schema migration
