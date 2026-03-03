@@ -3,6 +3,7 @@ import logging
 import os
 import time
 import json
+from requests import HTTPError
 
 from azure.servicebus.exceptions import ServiceBusError
 
@@ -137,7 +138,34 @@ def main() -> None:
                         log.debug("Gateway /lease request %s",
                                 _truncate(json.dumps(lease_req, ensure_ascii=False, separators=(",", ":"))))
 
-                    lease = gw.lease(parsed.run_id, s.lease_ttl_seconds)
+                    try:
+                        lease = gw.lease(parsed.run_id, s.lease_ttl_seconds)
+                    except HTTPError as e:
+                        # Treat 409 as "lease refused / conflict" -> consume SB message and move on
+                        resp = getattr(e, "response", None)
+                        status = getattr(resp, "status_code", None)
+
+                        if status == 409:
+                            # try to capture any body text for diagnosis
+                            body = ""
+                            try:
+                                body = (resp.text or "")[:1000] if resp is not None else ""
+                            except Exception:
+                                body = ""
+
+                            log.info(
+                                "Lease conflict (409) runId=%s msgId=%s; completing SB message. body=%s",
+                                parsed.run_id, msg.message_id, _truncate(body)
+                            )
+                            receiver.complete_message(msg)
+                            stats.bump("lease_conflict_409", "lease_conflict_last_at")
+                            stats.flush()
+                            # small backoff to avoid hammering gateway if many conflicts
+                            time.sleep(min(1, s.backoff_seconds))
+                            continue
+
+                        # other HTTP errors are real failures
+                        raise
 
                     if log.isEnabledFor(logging.DEBUG):
                         try:
@@ -194,6 +222,11 @@ def main() -> None:
                             "prompt": prompt,
                             "temperature": s.temperature,
                             "top_p": s.top_p,
+                            "top_k": getattr(s, "top_k", None),
+                            "min_p": getattr(s, "min_p", None),
+                            "presence_penalty": getattr(s, "presence_penalty", None),
+                            "repetition_penalty": getattr(s, "repetition_penalty", None),
+                            "num_predict": getattr(s, "max_tokens", None),
                         }
                         log.debug("Ollama request %s",
                                 _truncate(json.dumps(req_payload, ensure_ascii=False, separators=(",", ":"))))
@@ -214,11 +247,13 @@ def main() -> None:
                         system=s.system_prompt,
                         temperature=s.temperature,
                         top_p=s.top_p,
-                        top_k=s.top_k,
-                        min_p=s.min_p,
-                        presence_penalty=s.presence_penalty,
-                        repetition_penalty=s.repetition_penalty,
+                        top_k=getattr(s, "top_k", None),
+                        min_p=getattr(s, "min_p", None),
+                        presence_penalty=getattr(s, "presence_penalty", None),
+                        repetition_penalty=getattr(s, "repetition_penalty", None),
                         format=FORMAT_SCHEMA,
+                        # keep old config compatibility
+                        num_predict=getattr(s, "max_tokens", None),                        
                     )
 
                     if log.isEnabledFor(logging.DEBUG):
