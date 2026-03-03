@@ -17,6 +17,16 @@ from .stats import Stats
 
 MAX_DEBUG_CHARS = int(os.getenv("MAX_DEBUG_CHARS", "10000"))
 
+FORMAT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "score": {"type": "number"},
+        "summary": {"type": "string"},
+    },
+    "required": ["score", "summary"],
+    "additionalProperties": False,
+}
+
 def _truncate(s: str) -> str:
     return s if len(s) <= MAX_DEBUG_CHARS else s[:MAX_DEBUG_CHARS] + "...<truncated>"
 
@@ -228,18 +238,11 @@ def main() -> None:
                             "repetition_penalty": getattr(s, "repetition_penalty", None),
                             "num_predict": getattr(s, "max_tokens", None),
                         }
+                        req_payload["format"] = "schema"
                         log.debug("Ollama request %s",
                                 _truncate(json.dumps(req_payload, ensure_ascii=False, separators=(",", ":"))))
 
-                    FORMAT_SCHEMA = {
-                    "type": "object",
-                    "properties": {
-                        "score": {"type": "number"},
-                        "summary": {"type": "string"},
-                    },
-                    "required": ["score", "summary"],
-                    "additionalProperties": False,
-                    }
+
 
                     raw = oll.generate_json(
                         model=s.model,
@@ -255,6 +258,33 @@ def main() -> None:
                         # keep old config compatibility
                         num_predict=getattr(s, "max_tokens", None),                        
                     )
+
+                    if log.isEnabledFor(logging.DEBUG):
+                        try:
+                            raw_json = json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
+                        except TypeError:
+                            raw_json = json.dumps({"raw": str(raw)}, ensure_ascii=False, separators=(",", ":"))
+                        log.debug("Ollama response %s", raw_json)
+
+                    # Fallback: some Ollama/model combos return done=true but empty response with format enabled
+                    if raw.get("__parse_error") == "empty_response":
+                        log.warning(
+                            "Ollama returned empty response with schema; retrying without format runId=%s ollama=%s model=%s",
+                            parsed.run_id, s.ollama_base_url, s.model
+                        )
+                        raw = oll.generate_json(
+                            model=s.model,
+                            prompt=prompt,
+                            system=s.system_prompt,
+                            temperature=s.temperature,
+                            top_p=s.top_p,
+                            top_k=getattr(s, "top_k", None),
+                            min_p=getattr(s, "min_p", None),
+                            presence_penalty=getattr(s, "presence_penalty", None),
+                            repetition_penalty=getattr(s, "repetition_penalty", None),
+                            num_predict=getattr(s, "max_tokens", None),
+                            format=None,   # <-- key change
+                        )
 
                     if log.isEnabledFor(logging.DEBUG):
                         try:

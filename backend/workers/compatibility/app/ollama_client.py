@@ -3,6 +3,7 @@ import json
 import requests
 from typing import Any, Dict, Optional
 
+
 class OllamaClient:
     def __init__(self, base_url: str, timeout_s: int = 180):
         self.base_url = base_url.rstrip("/")
@@ -22,26 +23,46 @@ class OllamaClient:
         presence_penalty: Optional[float] = None,
         repetition_penalty: Optional[float] = None,
         num_predict: Optional[int] = None,
-        format: Any = "json",  # allow schema object too
+        format: Any = "json",  # may be "json", a JSON schema dict, or None to omit
     ) -> Dict[str, Any]:
+        """
+        Calls Ollama /api/generate and attempts to parse the model output as JSON.
+
+        Returns either:
+          - a dict parsed from model output, augmented with "__ollama" envelope metadata, or
+          - a dict with "__parse_error" and "__raw" plus "__ollama" metadata.
+
+        Key behavior:
+          - If format is None, the 'format' field is omitted from the request payload.
+            (Some Ollama/model combos misbehave when 'format' is present but null.)
+        """
         url = f"{self.base_url}/api/generate"
 
-        options: Dict[str, Any] = {"temperature": temperature, "top_p": top_p}
-        if top_k is not None: options["top_k"] = top_k
-        if min_p is not None: options["min_p"] = min_p
-        if presence_penalty is not None: options["presence_penalty"] = presence_penalty
-        if repetition_penalty is not None: options["repetition_penalty"] = repetition_penalty
-        if num_predict is not None: options["num_predict"] = num_predict
+        options: Dict[str, Any] = {
+            "temperature": temperature,
+            "top_p": top_p,
+        }
+        if top_k is not None:
+            options["top_k"] = top_k
+        if min_p is not None:
+            options["min_p"] = min_p
+        if presence_penalty is not None:
+            options["presence_penalty"] = presence_penalty
+        if repetition_penalty is not None:
+            options["repetition_penalty"] = repetition_penalty
+        if num_predict is not None:
+            options["num_predict"] = num_predict
 
         payload: Dict[str, Any] = {
             "model": model,
             "prompt": prompt,
             "stream": False,
-            "format": format,
             "options": options,
         }
         if system:
             payload["system"] = system
+        if format is not None:
+            payload["format"] = format
 
         resp = self.session.post(url, json=payload, timeout=self.timeout_s)
         resp.raise_for_status()
@@ -66,11 +87,14 @@ class OllamaClient:
         if not txt_s.strip():
             return {"__parse_error": "empty_response", "__raw": txt_s, **envelope}
 
+        # Try strict JSON parse
         try:
             obj = json.loads(txt_s)
-            if isinstance(obj, dict):
-                obj.update(envelope)
-                return obj
-            return {"__parse_error": "non_object_json", "__raw": txt_s, **envelope}
         except Exception as e:
             return {"__parse_error": f"json_loads_failed: {e}", "__raw": txt_s, **envelope}
+
+        if isinstance(obj, dict):
+            obj.update(envelope)
+            return obj
+
+        return {"__parse_error": "non_object_json", "__raw": txt_s, **envelope}
