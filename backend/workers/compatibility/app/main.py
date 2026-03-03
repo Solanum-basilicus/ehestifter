@@ -198,17 +198,27 @@ def main() -> None:
                         log.debug("Ollama request %s",
                                 _truncate(json.dumps(req_payload, ensure_ascii=False, separators=(",", ":"))))
 
+                    FORMAT_SCHEMA = {
+                    "type": "object",
+                    "properties": {
+                        "score": {"type": "number"},
+                        "summary": {"type": "string"},
+                    },
+                    "required": ["score", "summary"],
+                    "additionalProperties": False,
+                    }
+
                     raw = oll.generate_json(
                         model=s.model,
                         prompt=prompt,
                         system=s.system_prompt,
                         temperature=s.temperature,
                         top_p=s.top_p,
-                        top_k=getattr(s, "top_k", None),
-                        min_p=getattr(s, "min_p", None),
-                        presence_penalty=getattr(s, "presence_penalty", None),
-                        repetition_penalty=getattr(s, "repetition_penalty", None),
-                        num_predict=getattr(s, "max_tokens", None),  # keep backward compat if you want
+                        top_k=s.top_k,
+                        min_p=s.min_p,
+                        presence_penalty=s.presence_penalty,
+                        repetition_penalty=s.repetition_penalty,
+                        format=FORMAT_SCHEMA,
                     )
 
                     if log.isEnabledFor(logging.DEBUG):
