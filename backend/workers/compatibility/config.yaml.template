@@ -1,15 +1,13 @@
 compatibility:
-  model: "llama3.1:8b"
+  model: "qwen3.5:9b"
   temperature: 0.2
-  top_p: 0.9
-  max_tokens: 700
+  top_p: 0.95
+  top_k: 20
+  min_p: 0.0
+  resence_penalty: 0.0
+  repetition_penalty: 1.0
 
-  system_prompt: |
+  system_prompt: |+2
     You are a strict evaluator of job-to-candidate compatibility.
     Return ONLY valid JSON matching the schema. No extra keys.
     Be concise.
-
-  rubric: |
-    Score from 0 to 100.
-    Consider: required skills match, seniority match, domain fit, language/location constraints,
-    and major red flags. Explain briefly.

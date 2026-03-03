@@ -181,7 +181,7 @@ def main() -> None:
                                 list(job.keys()) if isinstance(job, dict) else type(job).__name__,
                                 len(cv_text))                    
 
-                    prompt = build_prompt(job=job, cv_text=cv_text, rubric=s.rubric)
+                    prompt = build_prompt(job=job, cv_text=cv_text)
 
                     # Inference
                     log.info("Running inference runId=%s model=%s", parsed.run_id, s.model)
@@ -204,6 +204,11 @@ def main() -> None:
                         system=s.system_prompt,
                         temperature=s.temperature,
                         top_p=s.top_p,
+                        top_k=getattr(s, "top_k", None),
+                        min_p=getattr(s, "min_p", None),
+                        presence_penalty=getattr(s, "presence_penalty", None),
+                        repetition_penalty=getattr(s, "repetition_penalty", None),
+                        num_predict=getattr(s, "max_tokens", None),  # keep backward compat if you want
                     )
 
                     if log.isEnabledFor(logging.DEBUG):
