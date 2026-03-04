@@ -30,6 +30,9 @@ class WorkerStats:
     lease_refused: int = 0
     lease_refused_last_at: Optional[str] = None
 
+    lease_conflict_409: int = 0
+    lease_conflict_last_at: Optional[str] = None
+
     other_enricher_abandoned: int = 0
     other_enricher_last_at: Optional[str] = None
 
@@ -42,8 +45,16 @@ class Stats:
         self.flush()
 
     def bump(self, field: str, ts_field: str) -> None:
-        setattr(self.s, field, getattr(self.s, field) + 1)
-        setattr(self.s, ts_field, _now())
+        # Be resilient: don't crash the worker if a new stat name is used
+        # but wasn't added to WorkerStats yet.
+        cur = getattr(self.s, field, None)
+        if cur is None:
+            cur = 0
+            setattr(self.s, field, cur)
+        setattr(self.s, field, int(cur) + 1)
+
+        # Timestamp field may also be new/missing; set it unconditionally.
+        setattr(self.s, ts_field, _now())        
 
     def error(self) -> None:
         self.bump("errors", "errors_last_at")
