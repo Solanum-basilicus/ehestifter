@@ -4,8 +4,9 @@ import logging
 import azure.functions as func
 
 from helpers.enrichment_snapshot import write_input_snapshot
-from helpers.runs_create import create_run_db, mark_queued, mark_failed, dispatch_via_gateway
+from helpers.runs_create import create_run_db, mark_queued, dispatch_via_gateway
 from domain.runs_service import RunsService  # keep for get_run normalization
+from helpers.http_client import get_job_snapshot, get_user_cv_snapshot  # NEW
 
 def register(app: func.FunctionApp):
     svc = RunsService()
@@ -27,37 +28,64 @@ def register(app: func.FunctionApp):
         if not job_id or not user_id:
             return func.HttpResponse("Missing jobOfferingId/userId", status_code=400)
 
-        logging.info("POST /enrichment/runs job=%s user=%s enricherType=%s corr=%s", job_id, user_id, enricher_type, corr)
+        logging.info(
+            "POST /enrichment/runs job=%s user=%s enricherType=%s corr=%s",
+            job_id, user_id, enricher_type, corr
+        )
 
         # 1) DB create (Pending)
         run = create_run_db(job_id, user_id, enricher_type)
 
-        # 2) Snapshot write (if this fails -> Failed; worker cannot proceed)
+        # 2) Fetch inputs + write snapshot (any failure => leave Pending and return 201)
         try:
+            job_snap = get_job_snapshot(job_id)
+            cv_snap = get_user_cv_snapshot(user_id)
+
+            job_title = job_snap.get("jobName")
+            job_desc = job_snap.get("jobDescription")
+            cv_text = cv_snap.get("CVPlainText")
+
+            if not job_title or not isinstance(job_title, str):
+                raise ValueError("Jobs snapshot missing/invalid 'jobName'")
+            if not job_desc or not isinstance(job_desc, str):
+                raise ValueError("Jobs snapshot missing/invalid 'jobDescription'")
+            if not cv_text or not isinstance(cv_text, str):
+                raise ValueError("Users snapshot missing/invalid 'CVPlainText'")
+
             snapshot = {
                 "runId": run["runId"],
                 "enricherType": run["enricherType"],
                 "subjectKey": run["subjectKey"],
                 "jobOfferingId": run["jobOfferingId"],
                 "userId": run["userId"],
-                "job": {"title": None, "description": None},  # TODO real data
-                "cv": {"text": None},                         # TODO real data
-                "meta": {"source": "core", "version": 1},
+                "job": {"title": job_title, "description": job_desc},
+                "cv": {"text": cv_text},
+                "meta": {
+                    "source": "core",
+                    "version": 1,
+                    # helpful breadcrumbs for debugging (optional)
+                    "jobSnapshot": {"jobId": job_snap.get("jobId"), "companyName": job_snap.get("companyName")},
+                    "cvSnapshot": {
+                        "CVVersionId": cv_snap.get("CVVersionId"),
+                        "LastUpdated": cv_snap.get("LastUpdated"),
+                        "CVTextBlobPath": cv_snap.get("CVTextBlobPath"),
+                    },
+                },
             }
+
             blob_path = write_input_snapshot(run, snapshot)
             run["inputSnapshotBlobPath"] = blob_path
+
         except Exception as e:
-            logging.exception("POST /enrichment/runs snapshot failed corr=%s", corr)
-            mark_failed(run["runId"], "SnapshotWriteFailed", str(e))
-            return func.HttpResponse(f"Error: {str(e)}", status_code=500)
+            logging.exception("POST /enrichment/runs snapshot build failed (leaving Pending) corr=%s", corr)
+            run = svc.get_run(run["runId"])
+            return func.HttpResponse(json.dumps(run), mimetype="application/json", status_code=201)
 
         # 3) Dispatch to gateway (if this fails -> leave Pending; return 201; gateway sweep will pick it up)
         try:
             dispatch_via_gateway(run, run["inputSnapshotBlobPath"], corr=corr)
-        except Exception as e:
+        except Exception:
             logging.exception("POST /enrichment/runs dispatch failed corr=%s", corr)
-            # Leave run Pending for scheduled catch-up.
-            # IMPORTANT: do NOT fail create; return Pending run so UI/tests can proceed.
             run = svc.get_run(run["runId"])
             return func.HttpResponse(json.dumps(run), mimetype="application/json", status_code=201)
 
