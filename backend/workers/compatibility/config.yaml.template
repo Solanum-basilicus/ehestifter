@@ -1,5 +1,5 @@
 compatibility:
-  model: "qwen3.5:9b"
+  model: "Qwen_Qwen3.5-9B-Q8_0.gguf"
   temperature: 0.2
   top_p: 0.95
   top_k: 20

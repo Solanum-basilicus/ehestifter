@@ -41,7 +41,7 @@ class Settings:
     sb_queue: str
     gateway_base_url: str
     gateway_api_key: str
-    ollama_base_url: str
+    llama_cpp_base_url: str
     poll_wait_seconds: int
     backoff_seconds: int
     lease_ttl_seconds: int
@@ -81,7 +81,7 @@ def load_settings(config_path: str = "/app/config.yaml") -> Settings:
         sb_queue=_req_env("SERVICEBUS_QUEUE_NAME"),
         gateway_base_url=_req_env("GATEWAY_BASE_URL").rstrip("/"),
         gateway_api_key=_req_env("GATEWAY_API_KEY"),
-        ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434").rstrip("/"),
+        llama_cpp_base_url=(os.getenv("LLAMA_CPP_BASE_URL")).rstrip("/"),
         poll_wait_seconds=int(os.getenv("WORKER_POLL_WAIT_SECONDS", "10")),
         backoff_seconds=int(os.getenv("WORKER_BACKOFF_SECONDS", "5")),
         lease_ttl_seconds=int(os.getenv("LEASE_TTL_SECONDS", "3600")),

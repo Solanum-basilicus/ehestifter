@@ -11,7 +11,8 @@ from .config import load_settings
 from .logging_setup import setup_logging
 from .sb import make_client, parse_request_message
 from .gateway import GatewayClient
-from .ollama_client import OllamaClient
+#from .ollama_client import OllamaClient
+from .llama_cpp_client import LlamaCppClient
 from .compatibility import build_prompt, normalize_result
 from .stats import Stats
 
@@ -63,15 +64,15 @@ def main() -> None:
 
     log = logging.getLogger("compat-worker")
     log.info(
-        "Starting worker enricherType=%s queue=%s gateway=%s ollama=%s model=%s",
-        s.enricher_type, s.sb_queue, s.gateway_base_url, s.ollama_base_url, s.model
+        "Starting worker enricherType=%s queue=%s gateway=%s llama_cpp=%s model=%s",
+        s.enricher_type, s.sb_queue, s.gateway_base_url, s.llama_cpp_base_url, s.model
     )
 
     stats = Stats()
     log.info("Worker stats path=%s", os.getenv("WORKER_STATS_PATH", "/tmp/worker_stats.json"))
 
     gw = GatewayClient(s.gateway_base_url, s.gateway_api_key)
-    oll = OllamaClient(s.ollama_base_url)
+    llm = LlamaCppClient(s.llama_cpp_base_url)
     sb = make_client(s.sb_conn_str)
 
     # Flush stats occasionally even if idle
@@ -239,12 +240,12 @@ def main() -> None:
                             "num_predict": getattr(s, "max_tokens", None),
                         }
                         req_payload["format"] = "schema"
-                        log.debug("Ollama request %s",
+                        log.debug("llama.cpp request %s",
                                 _truncate(json.dumps(req_payload, ensure_ascii=False, separators=(",", ":"))))
 
 
 
-                    raw = oll.generate_json(
+                    raw = llm.generate_json(
                         model=s.model,
                         prompt=prompt,
                         system=s.system_prompt,
@@ -264,15 +265,15 @@ def main() -> None:
                             raw_json = json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
                         except TypeError:
                             raw_json = json.dumps({"raw": str(raw)}, ensure_ascii=False, separators=(",", ":"))
-                        log.debug("Ollama response %s", raw_json)
+                        log.debug("llama.cpp response %s", raw_json)
 
                     # Fallback: some Ollama/model combos return done=true but empty response with format enabled
                     if raw.get("__parse_error") == "empty_response":
                         log.warning(
-                            "Ollama returned empty response with schema; retrying without format runId=%s ollama=%s model=%s",
-                            parsed.run_id, s.ollama_base_url, s.model
+                            "llama.cpp returned empty response with schema; retrying without response_format runId=%s llama_cpp=%s model=%s",
+                            parsed.run_id, s.llama_cpp_base_url, s.model
                         )
-                        raw = oll.generate_json(
+                        raw = llm.generate_json(
                             model=s.model,
                             prompt=prompt,
                             system=s.system_prompt,
@@ -291,7 +292,7 @@ def main() -> None:
                             raw_json = json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
                         except TypeError:
                             raw_json = json.dumps({"raw": str(raw)}, ensure_ascii=False, separators=(",", ":"))
-                        log.debug("Ollama response %s", raw_json)
+                        log.debug("llama.cpp response %s", raw_json)
 
                     result = normalize_result(raw)
 
