@@ -188,9 +188,9 @@ def main() -> None:
                         # Quick targeted visibility (helps spot wrong keys)
                         input_obj_dbg = (lease or {}).get("input") or {}
                         job_dbg = input_obj_dbg.get("job") or {}
-                        cv_dbg = input_obj_dbg.get("cvText")
+                        cv_dbg = input_obj_dbg.get("cv")
                         log.debug(
-                            "Lease input keys=%s jobKeys=%s cvTextLen=%s",
+                            "Lease input keys=%s jobKeys=%s cvLen=%s",
                             list(input_obj_dbg.keys()) if isinstance(input_obj_dbg, dict) else type(input_obj_dbg).__name__,
                             list(job_dbg.keys()) if isinstance(job_dbg, dict) else type(job_dbg).__name__,
                             (len(cv_dbg) if isinstance(cv_dbg, str) else (0 if cv_dbg is None else len(str(cv_dbg))))
@@ -214,7 +214,7 @@ def main() -> None:
                     # Expect inline input snapshot (keep v1 simple)
                     input_obj = lease.get("input") or {}
                     job = input_obj.get("job") or {}
-                    cv_text = str(input_obj.get("cvText") or "")
+                    cv_text = str(input_obj.get("cv") or "")
                     if log.isEnabledFor(logging.DEBUG):
                         log.debug("Prompt inputs jobKeys=%s cvTextLen=%s",
                                 list(job.keys()) if isinstance(job, dict) else type(job).__name__,
