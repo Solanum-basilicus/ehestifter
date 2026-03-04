@@ -3,7 +3,7 @@ import logging
 import os
 import time
 import json
-from requests import HTTPError
+from requests import HTTPError, Timeout, ConnectionError
 
 from azure.servicebus.exceptions import ServiceBusError
 
@@ -18,6 +18,8 @@ from .stats import Stats
 
 MAX_DEBUG_CHARS = int(os.getenv("MAX_DEBUG_CHARS", "10000"))
 
+RETRYABLE_STATUSES = {500, 502, 503, 504}
+
 FORMAT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -27,6 +29,19 @@ FORMAT_SCHEMA = {
     "required": ["score", "summary"],
     "additionalProperties": False,
 }
+
+def _http_status(e: Exception) -> int | None:
+    resp = getattr(e, "response", None)
+    return getattr(resp, "status_code", None)
+
+def _resp_text(e: Exception, limit: int = 1000) -> str:
+    resp = getattr(e, "response", None)
+    if resp is None:
+        return ""
+    try:
+        return (resp.text or "")[:limit]
+    except Exception:
+        return ""
 
 def _truncate(s: str) -> str:
     return s if len(s) <= MAX_DEBUG_CHARS else s[:MAX_DEBUG_CHARS] + "...<truncated>"
@@ -225,55 +240,9 @@ def main() -> None:
                     # Inference
                     log.info("Running inference runId=%s model=%s", parsed.run_id, s.model)
 
-                    if log.isEnabledFor(logging.DEBUG):
-                        req_payload = {
-                            "runId": parsed.run_id,
-                            "model": s.model,
-                            "system": s.system_prompt,
-                            "prompt": prompt,
-                            "temperature": s.temperature,
-                            "top_p": s.top_p,
-                            "top_k": getattr(s, "top_k", None),
-                            "min_p": getattr(s, "min_p", None),
-                            "presence_penalty": getattr(s, "presence_penalty", None),
-                            "repetition_penalty": getattr(s, "repetition_penalty", None),
-                            "num_predict": getattr(s, "max_tokens", None),
-                        }
-                        req_payload["format"] = "schema"
-                        log.debug("llama.cpp request %s",
-                                _truncate(json.dumps(req_payload, ensure_ascii=False, separators=(",", ":"))))
-
-
-
-                    raw = llm.generate_json(
-                        model=s.model,
-                        prompt=prompt,
-                        system=s.system_prompt,
-                        temperature=s.temperature,
-                        top_p=s.top_p,
-                        top_k=getattr(s, "top_k", None),
-                        min_p=getattr(s, "min_p", None),
-                        presence_penalty=getattr(s, "presence_penalty", None),
-                        repetition_penalty=getattr(s, "repetition_penalty", None),
-                        format=FORMAT_SCHEMA,
-                        # keep old config compatibility
-                        num_predict=getattr(s, "max_tokens", None),                        
-                    )
-
-                    if log.isEnabledFor(logging.DEBUG):
-                        try:
-                            raw_json = json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
-                        except TypeError:
-                            raw_json = json.dumps({"raw": str(raw)}, ensure_ascii=False, separators=(",", ":"))
-                        log.debug("llama.cpp response %s", raw_json)
-
-                    # Fallback: some Ollama/model combos return done=true but empty response with format enabled
-                    if raw.get("__parse_error") == "empty_response":
-                        log.warning(
-                            "llama.cpp returned empty response with schema; retrying without response_format runId=%s llama_cpp=%s model=%s",
-                            parsed.run_id, s.llama_cpp_base_url, s.model
-                        )
-                        raw = llm.generate_json(
+                    # Helper to centralize llama.cpp calls
+                    def _llm_call(*, num_predict, use_schema: bool):
+                        return llm.generate_json(
                             model=s.model,
                             prompt=prompt,
                             system=s.system_prompt,
@@ -283,17 +252,131 @@ def main() -> None:
                             min_p=getattr(s, "min_p", None),
                             presence_penalty=getattr(s, "presence_penalty", None),
                             repetition_penalty=getattr(s, "repetition_penalty", None),
-                            num_predict=getattr(s, "max_tokens", None),
-                            format=None,   # <-- key change
+                            format=(FORMAT_SCHEMA if use_schema else None),
+                            # keep old config compatibility
+                            num_predict=num_predict,
                         )
 
-                    if log.isEnabledFor(logging.DEBUG):
-                        try:
-                            raw_json = json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
-                        except TypeError:
-                            raw_json = json.dumps({"raw": str(raw)}, ensure_ascii=False, separators=(",", ":"))
-                        log.debug("llama.cpp response %s", raw_json)
+                    def _status_from_exc(e: Exception):
+                        resp = getattr(e, "response", None)
+                        return getattr(resp, "status_code", None)
 
+                    def _body_from_exc(e: Exception, limit: int = 1000) -> str:
+                        resp = getattr(e, "response", None)
+                        if resp is None:
+                            return ""
+                        try:
+                            return (resp.text or "")[:limit]
+                        except Exception:
+                            return ""
+
+                    max_tokens_1 = getattr(s, "max_tokens", None)
+                    # Retry with a smaller budget (compatibility output is small)
+                    if isinstance(max_tokens_1, int) and max_tokens_1 > 256:
+                        max_tokens_2 = 256
+                    elif max_tokens_1 is None:
+                        max_tokens_2 = 256
+                    else:
+                        max_tokens_2 = max_tokens_1
+
+                    try:
+                        # Attempt 1: schema-enabled
+                        raw = _llm_call(num_predict=max_tokens_1, use_schema=True)
+
+                        if log.isEnabledFor(logging.DEBUG):
+                            try:
+                                raw_json = json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
+                            except TypeError:
+                                raw_json = json.dumps({"raw": str(raw)}, ensure_ascii=False, separators=(",", ":"))
+                            log.debug("llama.cpp response %s", raw_json)
+
+                        # Fallback: empty response while schema enabled -> retry without schema (your existing behavior)
+                        if raw.get("__parse_error") == "empty_response":
+                            log.warning(
+                                "llama.cpp returned empty response with schema; retrying without schema runId=%s llama_cpp=%s model=%s",
+                                parsed.run_id, s.llama_cpp_base_url, s.model
+                            )
+                            raw = _llm_call(num_predict=max_tokens_1, use_schema=False)
+
+                            if log.isEnabledFor(logging.DEBUG):
+                                try:
+                                    raw_json = json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
+                                except TypeError:
+                                    raw_json = json.dumps({"raw": str(raw)}, ensure_ascii=False, separators=(",", ":"))
+                                log.debug("llama.cpp response %s", raw_json)
+
+                    except (HTTPError, Timeout, ConnectionError) as e:
+                        status = _status_from_exc(e)
+                        body = _truncate(_body_from_exc(e))
+
+                        retryable = (status in (500, 502, 503, 504)) or isinstance(e, (Timeout, ConnectionError))
+
+                        log.error(
+                            "Inference failed runId=%s status=%s retryable=%s body=%s",
+                            parsed.run_id, status, retryable, body
+                        )
+                        stats.bump("llm_errors", "llm_errors_last_at")
+                        if status == 500:
+                            stats.bump("llm_http_500", "llm_http_500_last_at")
+                        stats.flush()
+
+                        if retryable:
+                            # Attempt 2: smaller tokens, no schema (less memory pressure / fewer moving parts)
+                            try:
+                                log.warning(
+                                    "Retrying inference once runId=%s max_tokens=%s (no schema)",
+                                    parsed.run_id, max_tokens_2
+                                )
+                                raw = _llm_call(num_predict=max_tokens_2, use_schema=False)
+
+                                if log.isEnabledFor(logging.DEBUG):
+                                    try:
+                                        raw_json = json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
+                                    except TypeError:
+                                        raw_json = json.dumps({"raw": str(raw)}, ensure_ascii=False, separators=(",", ":"))
+                                    log.debug("llama.cpp response %s", raw_json)
+
+                            except Exception as e2:
+                                status2 = _status_from_exc(e2)
+                                body2 = _truncate(_body_from_exc(e2))
+
+                                log.error(
+                                    "Inference retry failed runId=%s status=%s body=%s",
+                                    parsed.run_id, status2, body2
+                                )
+                                stats.bump("llm_retries_failed", "llm_retries_failed_last_at")
+                                stats.flush()
+
+                                # Close out the run so it doesn't stay leased for TTL
+                                fail_result = {
+                                    "score": 0.0,
+                                    "summary": f"Inference failed (status={status2}). {body2}".strip()
+                                }
+                                log.info("Completing run as failed runId=%s", parsed.run_id)
+                                gw.complete(parsed.run_id, lease_token, fail_result)
+                                stats.bump("completes_failed", "completes_failed_last_at")
+                                stats.flush()
+
+                                receiver.complete_message(msg)
+                                continue
+                        else:
+                            # Non-retryable: close out immediately
+                            fail_result = {
+                                "score": 0.0,
+                                "summary": f"Inference failed (status={status}). {body}".strip()
+                            }
+                            log.info("Completing run as failed runId=%s", parsed.run_id)
+                            gw.complete(parsed.run_id, lease_token, fail_result)
+                            stats.bump("completes_failed", "completes_failed_last_at")
+                            stats.flush()
+
+                            receiver.complete_message(msg)
+                            continue
+
+                    # At this point, we have `raw` from either:
+                    # - attempt 1
+                    # - empty_response fallback
+                    # - retry path
                     result = normalize_result(raw)
 
                     # Submit back

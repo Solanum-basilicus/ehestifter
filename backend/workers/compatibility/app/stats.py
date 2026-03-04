@@ -39,6 +39,18 @@ class WorkerStats:
     errors: int = 0
     errors_last_at: Optional[str] = None
 
+    llm_errors: int = 0
+    llm_errors_last_at: Optional[str] = None
+
+    llm_http_500: int = 0
+    llm_http_500_last_at: Optional[str] = None
+
+    llm_retries_failed: int = 0
+    llm_retries_failed_last_at: Optional[str] = None
+
+    completes_failed: int = 0
+    completes_failed_last_at: Optional[str] = None
+
 class Stats:
     def __init__(self) -> None:
         self.s = WorkerStats(started_at=_now())
