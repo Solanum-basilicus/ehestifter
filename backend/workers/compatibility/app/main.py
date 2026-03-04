@@ -99,7 +99,11 @@ def main() -> None:
             stats.bump("sb_polls", "sb_polls_last_at")
 
             with sb:
-                receiver = sb.get_queue_receiver(queue_name=s.sb_queue, max_wait_time=s.poll_wait_seconds)
+                receiver = sb.get_queue_receiver(
+                    queue_name=s.sb_queue,
+                    max_wait_time=s.poll_wait_seconds,
+                    max_auto_lock_renewal_duration=600,  # seconds (10 min)
+                )
                 with receiver:
                     msgs = receiver.receive_messages(max_message_count=1, max_wait_time=s.poll_wait_seconds)
 
