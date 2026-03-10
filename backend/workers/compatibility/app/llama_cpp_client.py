@@ -207,8 +207,14 @@ class LlamaCppClient:
         envelope = self._build_envelope(data, content_s)
 
         if not content_s.strip():
-            # Keep this for diagnostics; worker may retry without schema already
-            return {"__parse_error": "empty_response", "__raw": content_s, **envelope}
+            return {
+                "__parse_error": "empty_response",
+                "__raw": content_s,
+                "__llama_cpp": envelope["__llama_cpp"],
+                "__server_debug": {
+                    "choices0": (data.get("choices") or [{}])[0],
+                },
+            }
 
         try:
             obj = json.loads(content_s)
