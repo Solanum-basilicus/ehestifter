@@ -1,0 +1,35 @@
+services:
+  llama-server:
+    image: ghcr.io/ggml-org/llama.cpp:server-rocm
+    container_name: llama-server
+
+    devices:
+      - /dev/kfd
+      - /dev/dri
+
+    group_add:
+      - video
+      - render
+
+    volumes:
+      - /usr/local/share/LLmodels:/models:ro
+
+    ports:
+      - "8081:8081"
+
+    ipc: host
+
+    command: >
+      -m /models/Qwen3.5/Qwen_Qwen3.5-9B-Q8_0.gguf
+      --host 0.0.0.0
+      --port 8081
+      --device ROCm0
+      --ctx-size 16384
+      --n-gpu-layers 999
+      --threads 8
+      --parallel 1
+      --reasoning-format none
+      --reasoning-budget 6000
+      --reasoning-budget-message "... reasoning budget exceeded, now answer with the final JSON only."
+
+    restart: unless-stopped

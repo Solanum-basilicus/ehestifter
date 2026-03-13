@@ -19,11 +19,9 @@ JOB_DESCRIPTION:
 CANDIDATE_CV_TEXT:
 {cv_text}
 
-Return JSON with exactly:
-{{
-  "score": number,
-  "summary": string
-}}
+Return ONLY a single JSON object with exactly these keys:
+{"score": number 0.0-10.0, "summary": string}
+No markdown. No extra keys. No extra text.
 """.strip()
 
 def _truncate_with_note(s: str, limit: int) -> str:
