@@ -20,7 +20,7 @@ CANDIDATE_CV_TEXT:
 {cv_text}
 
 Return ONLY a single JSON object with exactly these keys:
-{"score": number 0.0-10.0, "summary": string}
+{{"score": number 0.0-10.0, "summary": string}}
 No markdown. No extra keys. No extra text.
 """.strip()
 
