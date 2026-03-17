@@ -1,31 +1,15 @@
 # routes/internal_job_compatibility_projections_bulk_upsert.py
 import json
 import logging
-from datetime import datetime, timezone
 
 import azure.functions as func
 
 from helpers.db import get_connection
 from helpers.ids import normalize_guid, is_guid
+from helpers.datetime_utils import parse_required_iso_datetime_to_utc_naive
 
 
 MAX_ITEMS = 500
-
-
-def _parse_iso_dt(value: str) -> datetime:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError("calculatedAt must be a non-empty ISO datetime string")
-
-    text = value.strip()
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
-
-    dt = datetime.fromisoformat(text)
-    if dt.tzinfo is None:
-        raise ValueError("calculatedAt must include timezone info")
-
-    return dt.astimezone(timezone.utc)
-
 
 def _validate_score(value):
     if not isinstance(value, (int, float)):
@@ -103,7 +87,10 @@ def register(app: func.FunctionApp):
                     continue
 
                 try:
-                    calculated_at = _parse_iso_dt(calculated_at_raw)
+                    calculated_at = parse_required_iso_datetime_to_utc_naive(
+                        calculated_at_raw,
+                        field_name="calculatedAt",
+                    )
                 except ValueError as e:
                     errors.append({"index": idx, "error": str(e)})
                     continue
