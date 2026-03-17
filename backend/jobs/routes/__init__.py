@@ -13,6 +13,7 @@ from .apply_by_url import register as _register_apply_by_url
 from .jobs_status_report import register as _register_jobs_status_report
 from .job_exists import register as _reg_job_exists
 from .internal_job_snapshot_get import register as _reg_internal_snapshot
+from .internal_job_compatibility_projections_bulk_upsert import register as _reg_internal_compatibility_bulk_upsert
 
 def register_all(app):
     _reg_create(app)
@@ -29,3 +30,5 @@ def register_all(app):
     _register_jobs_status_report(app)
     _reg_job_exists(app)
     _reg_internal_snapshot(app)
+    _reg_internal_compatibility_bulk_upsert(app)
+    
