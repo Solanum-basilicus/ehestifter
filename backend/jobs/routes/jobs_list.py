@@ -159,16 +159,17 @@ def register(app: func.FunctionApp):
             # Category constraints
             if category == "my":
                 # Show:
-                #   - anything created by me (even if status is NULL or final)
-                #   - OR anything where I have a non-final status
+                #   - jobs created by me, if status is NULL or non-final
+                #   - OR jobs where I have a non-final status
+                # Exclude final statuses even if the job was created by me.
                 final_placeholders = ",".join(["?"] * len(FINAL_STATUSES))
+                status_sql = "LOWER(LTRIM(RTRIM(us.Status)))"
+
                 where.append(f"""
                     (
-                        j.CreatedByUserId = ?
-                        OR (
-                            us.Status IS NOT NULL
-                            AND LOWER(us.Status) NOT IN ({final_placeholders})
-                        )
+                        (j.CreatedByUserId = ? OR us.Status IS NOT NULL)
+                        AND
+                        (us.Status IS NULL OR {status_sql} NOT IN ({final_placeholders}))
                     )
                 """)
                 params.append(user_id)
