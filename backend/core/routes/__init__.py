@@ -17,6 +17,7 @@ from .ui_users_preferences_post import create_blueprint as bp_users_prefs_post
 from .ui_enrichment_latest_get import create_blueprint as bp_enrichment_latest_get
 from .ui_enrichment_history_get import create_blueprint as bp_enrichment_history_get
 from .ui_enrichment_runs_post import create_blueprint as bp_enrichment_runs_post
+from .ui_jobs_compatibility_bulk import create_blueprint as bp_jobs_compatibility_bulk
 
 
 def register_all(app, auth):
@@ -38,3 +39,4 @@ def register_all(app, auth):
     app.register_blueprint(bp_enrichment_latest_get(auth))
     app.register_blueprint(bp_enrichment_history_get(auth))
     app.register_blueprint(bp_enrichment_runs_post(auth))
+    app.register_blueprint(bp_jobs_compatibility_bulk(auth))

@@ -100,6 +100,10 @@
   .ac-item { padding:6px 10px; cursor:pointer; }
   .ac-item[aria-selected="true"], .ac-item:hover { background:#f3f4f6; }
   
+  .compat-line { display:inline-flex; align-items:center; gap:6px; }
+  .compat-hexes { font-family: inherit; letter-spacing: 0.02em; }
+  .compat-score { font-variant-numeric: tabular-nums; }
+  .compat-slot.hidden { display:none; }
 </style>
 {% endblock %}
 
@@ -297,6 +301,57 @@
         }
       }
     }
+
+    function fmtCompatScoreText(score) {
+      if (score === null || score === undefined) return "?.??";
+      const n = Number(score);
+      if (Number.isNaN(n)) return String(score);
+      return n.toFixed(1);
+    }
+
+    function clamp(n, lo, hi) {
+      return Math.max(lo, Math.min(hi, n));
+    }
+
+    function renderHexScore(score) {
+      if (score === null || score === undefined) return "⬡⬡⬡⬡⬡⬡⬡⬡⬡⬡";
+      const n = Number(score);
+      if (Number.isNaN(n)) return "⬡⬡⬡⬡⬡⬡⬡⬡⬡⬡";
+
+      const filled = clamp(Math.round(n), 0, 10);
+      return "⬢".repeat(filled) + "⬡".repeat(10 - filled);
+    }
+
+    function lerp(a, b, t) { return a + (b - a) * t; }
+
+    function hexToRgb(hex) {
+      const h = hex.replace("#", "").trim();
+      const v = h.length === 3 ? h.split("").map(c => c + c).join("") : h;
+      const n = parseInt(v, 16);
+      return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+    }
+
+    function rgbToHex({ r, g, b }) {
+      const to2 = (x) => x.toString(16).padStart(2, "0");
+      return `#${to2(r)}${to2(g)}${to2(b)}`;
+    }
+
+    function scoreToHexColor(score) {
+      const RED = hexToRgb("#6e0503");
+      const GREEN = hexToRgb("#00691c");
+
+      if (score === null || score === undefined) return null;
+      const n = Number(score);
+      if (Number.isNaN(n)) return null;
+
+      const t = clamp(n / 10, 0, 1);
+      return rgbToHex({
+        r: Math.round(lerp(RED.r, GREEN.r, t)),
+        g: Math.round(lerp(RED.g, GREEN.g, t)),
+        b: Math.round(lerp(RED.b, GREEN.b, t)),
+      });
+    }
+
     // ---------- DOM refs ----------
     const listEl = document.getElementById('jobs-list');
     const statusEl = document.getElementById('jobs-status');
@@ -671,10 +726,13 @@
           </div>
 
           <div class="flex" style="margin-top:8px; flex-wrap:wrap; gap:10px; align-items:center;">
-            <div class="muted" style="font-size:14px;"> 🔒 Your status</div>
+            <div class="muted" style="font-size:14px;">🔒 Your status</div>
             <span class="status-slot">
               <span class="status-badge" data-k="unset" id="${sid}">loading…</span>
             </span>
+
+            <div class="muted" style="font-size:14px;">Your compatibility</div>
+            <span class="compat-slot hidden" id="uc_${row.Id}" aria-label="Your compatibility"></span>
           </div>
         </article>
       `;
@@ -765,6 +823,72 @@
       }
     }
 
+    function renderCompatibilityInto(el, compat) {
+      if (!el) return;
+
+      if (!compat || compat.score === null || compat.score === undefined) {
+        el.innerHTML = '';
+        el.classList.add('hidden');
+        return;
+      }
+
+      const score = Number(compat.score);
+      if (Number.isNaN(score)) {
+        el.innerHTML = '';
+        el.classList.add('hidden');
+        return;
+      }
+
+      const hexes = renderHexScore(score);
+      const color = scoreToHexColor(score);
+      const scoreText = fmtCompatScoreText(score);
+      const title = compat.calculatedAt ? `Calculated ${formatWhen(compat.calculatedAt)}` : '';
+
+      el.classList.remove('hidden');
+
+      if (!color) {
+        el.innerHTML = `
+          <span class="compat-line" title="${escapeHtml(title)}">
+            <span class="compat-hexes">${escapeHtml(hexes)}</span>
+            <span class="compat-score">${escapeHtml(scoreText)}</span>
+          </span>
+        `;
+        return;
+      }
+
+      el.innerHTML = `
+        <span class="compat-line" title="${escapeHtml(title)}">
+          <span class="compat-hexes" style="color:${color}">${escapeHtml(hexes)}</span>
+          <span class="compat-score">${escapeHtml(scoreText)}</span>
+        </span>
+      `;
+    }
+
+    async function loadCompatibilitiesFor(ids) {
+      if (!ids || !ids.length) return;
+
+      try {
+        const data = await postWithRetry('/ui/jobs/compatibility', { jobIds: ids }, 4);
+        const map = (data && data.compatibility) || {};
+
+        for (const id of ids) {
+          const el = document.getElementById(`uc_${id}`);
+          if (!el) continue;
+
+          const compat = map[id] ?? map[id?.toLowerCase?.()] ?? null;
+          renderCompatibilityInto(el, compat);
+        }
+      } catch (e) {
+        // graceful degrade: compatibility stays hidden
+        for (const id of ids) {
+          const el = document.getElementById(`uc_${id}`);
+          if (!el) continue;
+          el.innerHTML = '';
+          el.classList.add('hidden');
+        }
+      }
+    }    
+
     // ---------- Page load ----------
     async function loadPage() {
       const offset = (page - 1) * pageSize;
@@ -801,8 +925,11 @@
           setStatus('Ready', {ephemeral:true});
           renderPagination();
 
-          // Fetch statuses asynchronously
-          loadStatusesFor(items.map(x => x.Id).filter(Boolean));
+          const jobIds = items.map(x => x.Id).filter(Boolean);
+
+          // Fetch private per-user data asynchronously
+          loadStatusesFor(jobIds);
+          loadCompatibilitiesFor(jobIds);
         } else {
           throw new Error((data && data.message) || 'Jobs service is warming up');
         }
