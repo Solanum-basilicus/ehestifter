@@ -26,6 +26,9 @@ VALID_SORTS = {
     # "compat_desc"  # future
 }
 
+OPEN_MIN_COMPATIBILITY_SCORE = 5.0
+
+
 def _parse_multi(req: func.HttpRequest, name: str) -> list[str]:
     """Return multi-valued query parameter via repeated keys or comma-separated."""
     qs = parse_qs(urlparse(req.url).query)
@@ -38,6 +41,7 @@ def _parse_multi(req: func.HttpRequest, name: str) -> list[str]:
             out.append(v.strip())
     return [v for v in out if v]
 
+
 def _parse_date(val: str | None) -> datetime | None:
     if not val:
         return None
@@ -47,22 +51,22 @@ def _parse_date(val: str | None) -> datetime | None:
     except Exception:
         return None
 
-def _require_user_if_needed(req: func.HttpRequest, category: str, ignore_status: list[str], ignore_status_k: list[str]) -> str | None:
+
+def _require_user_if_needed(
+    req: func.HttpRequest,
+    category: str,
+    ignore_status: list[str],
+    ignore_status_k: list[str]
+) -> str | None:
     uid = (req.headers.get("x-user-id") or req.params.get("userId") or "").strip()
     # We need a user for per-user status logic in both 'my' and 'open', and for ignore_status.
     if (category in {"my", "open"}) or ignore_status or ignore_status_k:
         return normalize_guid(uid) if uid else None
     return normalize_guid(uid) if uid else None
 
+
 def _likeify(s: str) -> str:
     return f"%{s}%"
-
-
-
-
-
-
-
 
 
 def register(app: func.FunctionApp):
@@ -86,8 +90,10 @@ def register(app: func.FunctionApp):
             try:
                 limit = int(req.params.get("limit", 25))
                 offset = int(req.params.get("offset", 0))
-                if limit <= 0: limit = 25
-                if offset < 0: offset = 0
+                if limit <= 0:
+                    limit = 25
+                if offset < 0:
+                    offset = 0
             except ValueError:
                 return func.HttpResponse("Invalid 'limit' or 'offset'", status_code=400)
 
@@ -95,9 +101,8 @@ def register(app: func.FunctionApp):
             cities = _parse_multi(req, "city")
             countries = _parse_multi(req, "country")
             # Accept both label + key variants (multi via repeated keys or commas)
-            ignore_status = [s.strip() for s in _parse_multi(req, "ignore_status")]      # labels as typed/shown in UI
-            ignore_status_k = [k.strip().lower() for k in _parse_multi(req, "ignore_status_k")]  # normalized keys
-
+            ignore_status = [s.strip() for s in _parse_multi(req, "ignore_status")]
+            ignore_status_k = [k.strip().lower() for k in _parse_multi(req, "ignore_status_k")]
 
             date_kind = (req.params.get("date_kind") or "updated").strip().lower()
             if date_kind not in {"updated", "created"}:
@@ -116,7 +121,8 @@ def register(app: func.FunctionApp):
             if category in {"my", "open"} and not user_id:
                 return func.HttpResponse(
                     "Missing user id (X-User-Id header) for category='my' or 'open'",
-                    status_code=400)
+                    status_code=400
+                )
 
             # ----------------------------
             # Dynamic SQL assembly
@@ -124,32 +130,65 @@ def register(app: func.FunctionApp):
             conn = get_connection()
             cur = conn.cursor()
 
-            joins = []
+            joins: list[str] = []
             where = ["j.IsDeleted = 0"]
             params: list = []
-            params_count: list = []  # same as params but used for COUNT query too
+            params_count: list = []
 
-            # Join per-user status if user_id available (needed for ignore_status, updated date_kind, user status in payload)
+            # User status join when user context exists
             if user_id:
-                joins.append("LEFT JOIN dbo.UserJobStatus us ON us.JobOfferingId = j.Id AND us.UserId = ?")
+                joins.append("""
+                    LEFT JOIN dbo.UserJobStatus us
+                      ON us.JobOfferingId = j.Id
+                     AND us.UserId = ?
+                """)
                 params.append(user_id)
                 params_count.append(user_id)
+
+            # Compatibility join only when needed for category 'open'
+            if category == "open":
+                joins.append("""
+                    INNER JOIN dbo.CompatibilityScores cs
+                      ON cs.JobOfferingId = j.Id
+                     AND cs.UserId = ?
+                     AND cs.Score > ?
+                """)
+                params += [user_id, OPEN_MIN_COMPATIBILITY_SCORE]
+                params_count += [user_id, OPEN_MIN_COMPATIBILITY_SCORE]
 
             # Category constraints
             if category == "my":
-                # created by me OR I have a non-final status on it
-                where.append("(LOWER(us.Status) NOT IN (" + ",".join(["?"] * len(FINAL_STATUSES)) + 
-                                ") AND (j.CreatedByUserId = ? OR us.Status IS NOT NULL ))")
+                # Show:
+                #   - anything created by me (even if status is NULL or final)
+                #   - OR anything where I have a non-final status
+                final_placeholders = ",".join(["?"] * len(FINAL_STATUSES))
+                where.append(f"""
+                    (
+                        j.CreatedByUserId = ?
+                        OR (
+                            us.Status IS NOT NULL
+                            AND LOWER(us.Status) NOT IN ({final_placeholders})
+                        )
+                    )
+                """)
+                params.append(user_id)
+                params_count.append(user_id)
                 for s in FINAL_STATUSES:
                     params.append(s.lower())
                     params_count.append(s.lower())
-                params.append(user_id)
-                params_count.append(user_id)
+
             elif category == "open":
-                # For THIS user: no status at all (NULL) AND not created by me
-                # us join must be present (enforced above)
-                where.append("(us.Status IS NULL AND (j.CreatedByUserId IS NULL OR j.CreatedByUserId <> ?))")
-                params.append(user_id)            # for created-by check
+                # For THIS user:
+                #   - no status at all
+                #   - not created by me
+                #   - compatibility > threshold (enforced by INNER JOIN cs)
+                where.append("""
+                    (
+                        us.Status IS NULL
+                        AND (j.CreatedByUserId IS NULL OR j.CreatedByUserId <> ?)
+                    )
+                """)
+                params.append(user_id)
                 params_count.append(user_id)
 
             # category 'all' adds nothing beyond IsDeleted = 0
@@ -161,25 +200,32 @@ def register(app: func.FunctionApp):
                     like = _likeify(q)
                     params += [like, like, like]
                     params_count += [like, like, like]
+
                 elif search_field == "company":
                     where.append("(j.HiringCompanyName LIKE ? OR j.PostingCompanyName LIKE ?)")
                     like = _likeify(q)
                     params += [like, like]
                     params_count += [like, like]
+
                 elif search_field == "title":
                     where.append("j.Title LIKE ?")
                     like = _likeify(q)
                     params += [like]
                     params_count += [like]
+
                 elif search_field == "location":
-                    where.append("""EXISTS (
-                        SELECT 1 FROM dbo.JobOfferingLocations lq
-                        WHERE lq.JobOfferingId = j.Id
-                          AND (lq.CityName LIKE ? OR lq.CountryName LIKE ?)
-                    )""")
+                    where.append("""
+                        EXISTS (
+                            SELECT 1
+                            FROM dbo.JobOfferingLocations lq
+                            WHERE lq.JobOfferingId = j.Id
+                              AND (lq.CityName LIKE ? OR lq.CountryName LIKE ?)
+                        )
+                    """)
                     like = _likeify(q)
                     params += [like, like]
                     params_count += [like, like]
+
                 elif search_field == "description":
                     where.append("j.Description LIKE ?")
                     like = _likeify(q)
@@ -197,57 +243,62 @@ def register(app: func.FunctionApp):
             # Location filters via EXISTS to avoid row explosion
             if cities:
                 placeholders = ",".join(["?"] * len(cities))
-                where.append(f"""EXISTS (
-                    SELECT 1 FROM dbo.JobOfferingLocations lc
-                    WHERE lc.JobOfferingId = j.Id AND lc.CityName IN ({placeholders})
-                )""")
+                where.append(f"""
+                    EXISTS (
+                        SELECT 1
+                        FROM dbo.JobOfferingLocations lc
+                        WHERE lc.JobOfferingId = j.Id
+                          AND lc.CityName IN ({placeholders})
+                    )
+                """)
                 params += cities
                 params_count += cities
+
             if countries:
                 ccodes = [c for c in countries if len(c.strip()) == 2]
                 cnames = [c for c in countries if len(c.strip()) != 2]
                 parts = []
                 if ccodes:
-                    parts.append(f"lc.CountryCode IN ({','.join(['?']*len(ccodes))})")
+                    parts.append(f"lc.CountryCode IN ({','.join(['?'] * len(ccodes))})")
                 if cnames:
-                    parts.append(f"lc.CountryName IN ({','.join(['?']*len(cnames))})")
+                    parts.append(f"lc.CountryName IN ({','.join(['?'] * len(cnames))})")
+
                 if parts:
-                    where.append(f"""EXISTS (
-                        SELECT 1 FROM dbo.JobOfferingLocations lc
-                        WHERE lc.JobOfferingId = j.Id AND ({" OR ".join(parts)})
-                    )""")
+                    where.append(f"""
+                        EXISTS (
+                            SELECT 1
+                            FROM dbo.JobOfferingLocations lc
+                            WHERE lc.JobOfferingId = j.Id
+                              AND ({" OR ".join(parts)})
+                        )
+                    """)
                     params += ccodes + cnames
                     params_count += ccodes + cnames
 
             # Reverse status filter - ignore specific statuses for THIS user
-            # Priority: if keys present -> use keys; else map labels -> keys; else no filter.
             ignore_keys = [k for k in ignore_status_k if k]
             if not ignore_keys and ignore_status:
-                # Map labels to keys using server-side normalizer
                 mapped = [status_key(lbl) for lbl in ignore_status if lbl]
-                # Drop empties like 'default' only if you want strictness; we keep all to match UI intent.
                 ignore_keys = [k for k in mapped if k]
 
             if ignore_keys:
-                # Deduplicate to keep placeholders stable
                 ignore_keys = list(dict.fromkeys(ignore_keys))
                 key_sql = status_key_case_sql("us2.Status")
-                # Build ( {key_sql} = ? OR {key_sql} = ? OR ... )
                 cmp = " OR ".join([f"{key_sql} = ?" for _ in ignore_keys])
-                where.append(f"""NOT EXISTS (
-                    SELECT 1
-                    FROM dbo.UserJobStatus us2
-                    WHERE us2.JobOfferingId = j.Id
-                      AND us2.UserId = ?
-                      AND ({cmp})
-                )""")
-                # order: userId then all keys
+                where.append(f"""
+                    NOT EXISTS (
+                        SELECT 1
+                        FROM dbo.UserJobStatus us2
+                        WHERE us2.JobOfferingId = j.Id
+                          AND us2.UserId = ?
+                          AND ({cmp})
+                    )
+                """)
                 params += [user_id] + ignore_keys
                 params_count += [user_id] + ignore_keys
 
             # Date filters
             if date_kind == "updated":
-                # If user join present, include user status timestamp in updated metric; else fall back to job timestamps
                 updated_expr = "COALESCE(us.LastUpdated, j.UpdatedAt, j.CreatedAt)"
                 if date_from:
                     where.append(f"{updated_expr} >= ?")
@@ -280,7 +331,6 @@ def register(app: func.FunctionApp):
             elif sort == "updated_asc":
                 order_sql = "ORDER BY COALESCE(us.LastUpdated, j.UpdatedAt, j.CreatedAt) ASC"
             elif sort == "location_az":
-                # Sort by first alphabetical location string
                 order_sql = """
                     ORDER BY (
                         SELECT TOP 1 CONCAT(COALESCE(l.CountryName,''),'|',COALESCE(l.CityName,''))
@@ -290,7 +340,6 @@ def register(app: func.FunctionApp):
                     ) ASC, j.CreatedAt DESC
                 """
             elif sort == "status_progression":
-                # Weight by progression; rejected/closed lowest
                 order_sql = """
                     ORDER BY
                       CASE LOWER(COALESCE(us.Status, ''))
@@ -310,7 +359,7 @@ def register(app: func.FunctionApp):
             # Total count
             # ----------------------------
             count_sql = f"""
-                SELECT COUNT(*) 
+                SELECT COUNT(*)
                 FROM dbo.JobOfferings j
                 {join_sql}
                 WHERE {where_sql}
@@ -323,11 +372,16 @@ def register(app: func.FunctionApp):
             # ----------------------------
             select_sql = f"""
                 SELECT
-                  j.Id, j.Title, j.ExternalId, j.FoundOn,
-                  j.HiringCompanyName, j.PostingCompanyName,
+                  j.Id,
+                  j.Title,
+                  j.ExternalId,
+                  j.FoundOn,
+                  j.HiringCompanyName,
+                  j.PostingCompanyName,
                   j.RemoteType,
                   j.FirstSeenAt,
-                  j.CreatedAt, j.UpdatedAt,
+                  j.CreatedAt,
+                  j.UpdatedAt,
                   us.Status AS UserStatus,
                   us.LastUpdated AS UserStatusLastUpdated,
                   COALESCE(us.LastUpdated, j.UpdatedAt, j.CreatedAt) AS LastUpdateAt
@@ -350,7 +404,10 @@ def register(app: func.FunctionApp):
                     "sort": sort,
                     "items": []
                 }
-                return func.HttpResponse(json.dumps(payload, cls=DatetimeEncoder), mimetype="application/json")
+                return func.HttpResponse(
+                    json.dumps(payload, cls=DatetimeEncoder),
+                    mimetype="application/json"
+                )
 
             cols = [c[0] for c in cur.description]
             jobs = [dict(zip(cols, r)) for r in rows]
@@ -366,21 +423,21 @@ def register(app: func.FunctionApp):
             if norm_ids:
                 placeholders = ",".join(["?"] * len(norm_ids))
                 cur.execute(f"""
-                  SELECT JobOfferingId, CountryName, CountryCode, CityName, Region
-                  FROM dbo.JobOfferingLocations
-                  WHERE JobOfferingId IN ({placeholders})
-                  ORDER BY CountryName, CityName
+                    SELECT JobOfferingId, CountryName, CountryCode, CityName, Region
+                    FROM dbo.JobOfferingLocations
+                    WHERE JobOfferingId IN ({placeholders})
+                    ORDER BY CountryName, CityName
                 """, [normalize_guid(x) for x in norm_ids])
+
                 for (jid, cn, cc, city, region) in cur.fetchall():
                     jid_norm = normalize_guid(str(jid))
                     loc_map.setdefault(jid_norm, []).append({
                         "countryName": cn,
                         "countryCode": cc,
-                        "cityName":    city,
-                        "region":      region
+                        "cityName": city,
+                        "region": region
                     })
 
-            # Attach locations
             for j in jobs:
                 j["locations"] = loc_map.get(j["Id"], [])
 
@@ -392,7 +449,10 @@ def register(app: func.FunctionApp):
                 "sort": sort,
                 "items": jobs
             }
-            return func.HttpResponse(json.dumps(payload, cls=DatetimeEncoder), mimetype="application/json")
+            return func.HttpResponse(
+                json.dumps(payload, cls=DatetimeEncoder),
+                mimetype="application/json"
+            )
 
         except Exception as e:
             logging.exception("GET /jobs error")
