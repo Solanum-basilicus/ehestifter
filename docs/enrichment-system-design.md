@@ -358,7 +358,7 @@ Forwards result to Enrichment Core.
 
 ### 8.3 Jobs API
 
-POST /internal/jobs/compatibility-projections:bulk-upsert
+#### POST /internal/jobs/compatibility-projections:bulk-upsert
 Applies compatibility projection for a job/user pairs, in bulk.
 
 Request body:
