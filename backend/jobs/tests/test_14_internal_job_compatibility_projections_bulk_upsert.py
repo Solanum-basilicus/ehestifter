@@ -210,6 +210,8 @@ def test_internal_compatibility_bulk_upsert_duplicate_same_pair_keeps_newest(bas
     assert body["ignored"] == 0
     assert len(body["results"]) == 1
     assert body["results"][0]["status"] == "Updated"
+    shared_state["compatibility_job_id"] = job_id
+    shared_state["compatibility_score"] = 8.7
 
 
 def test_internal_compatibility_bulk_upsert_invalid_datetime(base_url, system_headers, shared_state, test_user_id):
