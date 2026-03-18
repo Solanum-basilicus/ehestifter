@@ -1,0 +1,164 @@
+<script type="module">
+import { loadGeoDict, countryMatches, countryLookup, citiesByCountry } from "{{ url_for('static', filename='js/geo-dict.js') }}";
+
+const countryInput = document.getElementById('f-country');
+const cityInput = document.getElementById('f-city');
+const acCountry = document.getElementById('ac-country');
+const acCity = document.getElementById('ac-city');
+
+await loadGeoDict();
+
+let selectedCountry = { name: '', code: '' };
+let cIdx = -1;
+let cityIdx = -1;
+
+function show(el) { if (el) el.style.display = 'block'; }
+function hide(el) { if (el) el.style.display = 'none'; }
+function clear(el) { if (el) el.innerHTML = ''; }
+function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+
+document.addEventListener('mousedown', (e) => {
+  if (!acCountry.contains(e.target) && e.target !== countryInput) hide(acCountry);
+  if (!acCity.contains(e.target) && e.target !== cityInput) hide(acCity);
+});
+
+function renderCountryMenu(items) {
+  if (!items.length) {
+    hide(acCountry);
+    clear(acCountry);
+    return;
+  }
+
+  acCountry.innerHTML = items.slice(0, 20).map((c, i) =>
+    `<div class="ac-item" role="option" data-cc="${c.code}" data-name="${c.name}" aria-selected="${i === cIdx ? 'true' : 'false'}">${c.name} (${c.code})</div>`
+  ).join('');
+
+  show(acCountry);
+}
+
+function pickCountry(name, code) {
+  selectedCountry = { name, code };
+  countryInput.value = name;
+  cityInput.value = '';
+  hide(acCountry);
+  clear(acCountry);
+  cityInput.focus();
+}
+
+countryInput.addEventListener('input', () => {
+  const q = (countryInput.value || '').trim();
+  cIdx = -1;
+  selectedCountry = { name: '', code: '' };
+
+  if (!q) {
+    hide(acCountry);
+    clear(acCountry);
+    return;
+  }
+
+  renderCountryMenu(countryMatches(q));
+});
+
+countryInput.addEventListener('keydown', (e) => {
+  const items = Array.from(acCountry.querySelectorAll('.ac-item'));
+  if (!items.length) return;
+
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    cIdx = clamp(cIdx + 1, 0, items.length - 1);
+    items.forEach((el, i) => el.setAttribute('aria-selected', String(i === cIdx)));
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    cIdx = clamp(cIdx - 1, 0, items.length - 1);
+    items.forEach((el, i) => el.setAttribute('aria-selected', String(i === cIdx)));
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    const el = items[clamp(cIdx, 0, items.length - 1)];
+    if (el) pickCountry(el.dataset.name, el.dataset.cc);
+  } else if (e.key === 'Escape') {
+    hide(acCountry);
+  }
+});
+
+acCountry.addEventListener('mousedown', (e) => {
+  const it = e.target.closest('.ac-item');
+  if (!it) return;
+  pickCountry(it.dataset.name, it.dataset.cc);
+});
+
+countryInput.addEventListener('blur', () => {
+  const c = countryLookup(countryInput.value);
+  if (c) pickCountry(c.name, c.code);
+  else hide(acCountry);
+});
+
+function renderCityMenu(allCities) {
+  const q = (cityInput.value || '').trim().toLowerCase();
+  if (!q) {
+    hide(acCity);
+    clear(acCity);
+    return;
+  }
+
+  const items = allCities.filter(n => n.toLowerCase().startsWith(q)).slice(0, 30);
+  if (!items.length) {
+    hide(acCity);
+    clear(acCity);
+    return;
+  }
+
+  acCity.innerHTML = items.map((name, i) =>
+    `<div class="ac-item" role="option" data-name="${name}" aria-selected="${i === cityIdx ? 'true' : 'false'}">${name}</div>`
+  ).join('');
+
+  show(acCity);
+}
+
+cityInput.addEventListener('input', () => {
+  cityIdx = -1;
+  const pool = selectedCountry.code ? citiesByCountry(selectedCountry.code) : [];
+  renderCityMenu(pool);
+});
+
+cityInput.addEventListener('keydown', (e) => {
+  const items = Array.from(acCity.querySelectorAll('.ac-item'));
+  if (!items.length) return;
+
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    cityIdx = clamp(cityIdx + 1, 0, items.length - 1);
+    items.forEach((el, i) => el.setAttribute('aria-selected', String(i === cityIdx)));
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    cityIdx = clamp(cityIdx - 1, 0, items.length - 1);
+    items.forEach((el, i) => el.setAttribute('aria-selected', String(i === cityIdx)));
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    const el = items[clamp(cityIdx, 0, items.length - 1)];
+    if (el) {
+      cityInput.value = el.dataset.name;
+      hide(acCity);
+      clear(acCity);
+    }
+  } else if (e.key === 'Escape') {
+    hide(acCity);
+  }
+});
+
+acCity.addEventListener('mousedown', (e) => {
+  const it = e.target.closest('.ac-item');
+  if (!it) return;
+  cityInput.value = it.dataset.name;
+  hide(acCity);
+  clear(acCity);
+});
+
+cityInput.addEventListener('blur', () => { hide(acCity); });
+
+(function bootstrapSelectedCountryFromInput() {
+  const name = (countryInput?.value || '').trim();
+  if (!name) return;
+  const c = countryLookup(name);
+  if (c) selectedCountry = { name: c.name, code: c.code };
+})();
+</script>

@@ -1,0 +1,200 @@
+<style>
+  .hidden { display:none; }
+  .title-link { font-weight:600; text-decoration:none; }
+  .title-link:hover { text-decoration:underline; }
+  .mono { font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+
+  .chip {
+    border:1px solid #ddd;
+    border-radius:999px;
+    padding:2px 8px;
+    font-size:12px;
+    line-height:20px;
+  }
+  .chip.muted { opacity:.75; }
+
+  .tabs { display:flex; gap:8px; margin:8px 0 12px; flex-wrap:wrap; }
+  .tab {
+    padding:6px 12px;
+    border:1px solid #e5e7eb;
+    border-radius:999px;
+    background:#fff;
+    cursor:pointer;
+  }
+  .tab.active {
+    background:#111827;
+    color:#fff;
+    border-color:#111827;
+  }
+
+  .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  .input, .select, .button {
+    border:1px solid #e5e7eb;
+    border-radius:8px;
+    padding:8px 10px;
+    background:#fff;
+  }
+  .button { cursor:pointer; }
+
+  .list-controls {
+    border:1px solid #e5e7eb;
+    border-radius:12px;
+    background:#fff;
+    padding:10px 12px;
+    margin:12px 0;
+  }
+
+  .filters {
+    display:block;
+    border-top:1px dashed #e5e7eb;
+    padding-top:10px;
+    margin-top:8px;
+  }
+  .filters-header {
+    display:flex;
+    align-items:flex-start;
+    gap:12px;
+    flex-wrap:wrap;
+  }
+  .filters-left { display:flex; align-items:center; gap:8px; }
+  .filters-right { margin-left:auto; display:flex; gap:8px; align-items:flex-start; }
+
+  .chips {
+    display:flex;
+    gap:8px;
+    flex-wrap:wrap;
+    flex:1 1 auto;
+    min-width:200px;
+  }
+
+  .sort-inline { display:flex; gap:8px; align-items:center; margin-left:auto; }
+
+  .pagination {
+    margin-top:10px;
+    display:flex;
+    justify-content:flex-end;
+    gap:8px;
+    align-items:center;
+    flex-wrap:wrap;
+    color:#111827;
+  }
+  .pagination .select { padding:6px 8px; }
+
+  .page-link {
+    padding:2px 6px;
+    border-radius:6px;
+    border:1px solid transparent;
+    cursor:pointer;
+  }
+  .page-link.current {
+    border-color:#e5e7eb;
+    font-weight:600;
+  }
+
+  .linklike {
+    background:none;
+    border:none;
+    padding:0;
+    margin:0 6px;
+    color:#111827;
+    cursor:pointer;
+    text-decoration:underline dotted;
+  }
+  .linklike:hover { text-decoration:underline; }
+
+  .catsbar {
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    gap:12px;
+    margin:8px 0;
+  }
+  .catsbar-left {
+    display:flex;
+    align-items:center;
+    gap:10px;
+    flex-wrap:wrap;
+  }
+
+  .status-ephemeral {
+    font-size:.9rem;
+    color:#6b7280;
+    transition:opacity .35s ease, visibility .35s ease;
+  }
+  .status-ephemeral.fade {
+    opacity:0;
+    visibility:hidden;
+  }
+
+  .optlist { display:flex; gap:10px; flex-wrap:wrap; max-width:100%; }
+  .opt {
+    cursor:pointer;
+    text-decoration:underline dotted rgba(17,24,39,.35);
+    text-underline-offset:2px;
+  }
+  .opt:hover { text-decoration-color:rgba(17,24,39,.45); }
+  .opt.is-active {
+    color:#6b7280;
+    text-decoration:none;
+    cursor:default;
+  }
+
+  .filters-grid {
+    display:grid;
+    grid-template-columns:160px minmax(0,1fr);
+    gap:8px 14px;
+    align-items:center;
+    margin-bottom:8px;
+  }
+  .fg-label { font-size:12px; }
+  .fg-values {
+    min-width:0;
+    display:flex;
+    align-items:center;
+    flex-wrap:wrap;
+    gap:6px;
+  }
+  .fg-sep {
+    grid-column:1 / -1;
+    border-top:1px dashed #e5e7eb;
+    margin:4px 0;
+  }
+
+  .ac-wrap { position:relative; }
+  .ac-menu {
+    position:absolute;
+    left:0;
+    right:0;
+    top:calc(100% + 2px);
+    background:#fff;
+    border:1px solid #e5e7eb;
+    border-radius:8px;
+    box-shadow:0 6px 16px rgba(0,0,0,.06);
+    z-index:20;
+    display:none;
+    max-height:240px;
+    overflow:auto;
+  }
+  .ac-item { padding:6px 10px; cursor:pointer; }
+  .ac-item[aria-selected="true"],
+  .ac-item:hover { background:#f3f4f6; }
+
+  .compat-block.hidden { display:none; }
+  .compat-line {
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+  }
+  .compat-hexes {
+    font-family:inherit;
+    letter-spacing:.02em;
+  }
+  .compat-score { font-variant-numeric:tabular-nums; }
+
+  @media (max-width: 720px) {
+    .sort-inline { width:100%; justify-content:flex-end; }
+    .pagination { justify-content:center; }
+    .catsbar { flex-direction:column; align-items:stretch; gap:8px; }
+    .catsbar > a { align-self:flex-end; }
+  }
+</style>
