@@ -20,6 +20,8 @@ def test_complete_run_creates_projection_dispatch(base_url, auth_headers, post_j
 
     dispatch_url = f"{base_url}/api/internal/enrichment/runs/{run_id}/projection-dispatches"
     r2 = get_json(dispatch_url, auth_headers)
+    print("dispatch response headers:", r2.headers)
+    print("dispatch response text:", repr(r2.text))
     assert r2.status_code == 200, r2.text
 
     body = r2.json()

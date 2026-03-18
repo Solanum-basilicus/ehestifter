@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import traceback
 import azure.functions as func
 from helpers.db import get_connection
 
@@ -23,6 +24,7 @@ def register(app: func.FunctionApp):
     )
     def get_projection_dispatches(req: func.HttpRequest) -> func.HttpResponse:
         run_id = req.route_params["runId"]
+        conn = None
 
         try:
             conn = get_connection()
@@ -91,7 +93,7 @@ def register(app: func.FunctionApp):
             error_body = {
                 "error": str(ex),
                 "type": type(ex).__name__,
-                "trace": traceback.format_exc()[:2000],  # truncate to keep response sane
+                "trace": traceback.format_exc()[:4000],
             }
 
             return func.HttpResponse(
@@ -101,7 +103,7 @@ def register(app: func.FunctionApp):
             )
 
         finally:
-            if conn:
+            if conn is not None:
                 try:
                     conn.close()
                 except Exception:
