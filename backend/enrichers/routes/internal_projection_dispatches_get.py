@@ -76,25 +76,33 @@ def register(app: func.FunctionApp):
                     }
                 )
 
-            body = {"items": items}
-
             return func.HttpResponse(
-                body=json.dumps(body),
+                body=json.dumps({"items": items}),
                 status_code=200,
                 mimetype="application/json",
             )
 
-        except Exception:
+        except Exception as ex:
             logging.exception(
                 "GET /internal/enrichment/runs/%s/projection-dispatches failed",
                 run_id,
             )
+
+            error_body = {
+                "error": str(ex),
+                "type": type(ex).__name__,
+                "trace": traceback.format_exc()[:2000],  # truncate to keep response sane
+            }
+
             return func.HttpResponse(
-                "Error retrieving projection dispatches",
+                body=json.dumps(error_body),
                 status_code=500,
+                mimetype="application/json",
             )
+
         finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
