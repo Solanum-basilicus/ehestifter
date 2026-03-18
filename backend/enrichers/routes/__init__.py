@@ -8,6 +8,7 @@ from .internal_lease_post import register as _reg_internal_lease_post
 from .internal_input_get import register as _reg_internal_input_get
 from .enrichment_runs_get import register as _reg_runs_get
 from .enrichment_runs_queued_post import register as _reg_run_queue
+from .internal_projection_dispatches_get import register as _reg_projection_dispatches_get
 
 def register_all(app):
     _reg_runs_post(app)
@@ -20,3 +21,4 @@ def register_all(app):
     _reg_internal_input_get(app)
     _reg_runs_get(app)
     _reg_run_queue(app)
+    _reg_projection_dispatches_get(app)

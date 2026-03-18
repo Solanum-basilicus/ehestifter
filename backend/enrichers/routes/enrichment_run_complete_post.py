@@ -1,7 +1,8 @@
-import json
+# /routes/enrichment_run_complete_post.py
 import logging
 import azure.functions as func
-from domain.runs_service import RunsService
+
+from helpers.enrichment_completion import complete_run_transactionally
 
 
 def register(app: func.FunctionApp):
@@ -25,34 +26,41 @@ def register(app: func.FunctionApp):
         error_code = body.get("errorCode")
         error_message = body.get("errorMessage")
 
-        # Validate success payload
         if status == "Succeeded":
             if not isinstance(result, dict):
                 return func.HttpResponse("Succeeded runs must include 'result' object", status_code=400)
 
-        # Validate failed payload (lightly; keep flexible)
         if status == "Failed":
-            # If provided, should be strings
             if error_code is not None and not isinstance(error_code, str):
                 return func.HttpResponse("errorCode must be a string or null", status_code=400)
             if error_message is not None and not isinstance(error_message, str):
                 return func.HttpResponse("errorMessage must be a string or null", status_code=400)
 
-        # Validate enrichmentAttributes if provided
         if enrichment_attributes is not None and not isinstance(enrichment_attributes, dict):
             return func.HttpResponse("enrichmentAttributes must be an object or null", status_code=400)
 
         try:
-            svc = RunsService()
-            svc.complete_run(
+            outcome = complete_run_transactionally(
                 run_id=run_id,
                 status=status,
-                result_json=result,  # internal DB storage (json string)
+                result_json=result,
                 attributes_json=enrichment_attributes,
                 error_code=error_code,
                 error_message=error_message,
             )
-            return func.HttpResponse(status_code=204)
+
+            # old/stale/already-terminal completion should still be non-fatal for Gateway
+            if outcome.outcome in ("completed", "stale_ignored", "already_terminal"):
+                return func.HttpResponse(status_code=204)
+
+            logging.error("Unexpected completion outcome for run %s: %s", run_id, outcome.outcome)
+            return func.HttpResponse("Unexpected completion outcome", status_code=500)
+
+        except ValueError as ex:
+            msg = str(ex)
+            if msg == "Run not found":
+                return func.HttpResponse(msg, status_code=404)
+            return func.HttpResponse(msg, status_code=409)
 
         except Exception:
             logging.exception("POST /enrichment/runs/%s/complete failed", run_id)

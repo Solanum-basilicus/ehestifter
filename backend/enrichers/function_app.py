@@ -17,3 +17,9 @@ register_all(app)
 def cleanup_runs(mytimer: func.TimerRequest) -> None:
     cleanup_runs_main(mytimer)
     # it was not tested on creation. If you see a lot of old queued runs in DB - will have to get back to it.
+
+@app.function_name(name="dispatch_projections")
+@app.schedule(schedule="0 */2 * * * *", arg_name="mytimer", run_on_startup=False, use_monitor=False)
+def dispatch_projections(mytimer: func.TimerRequest) -> None:
+    dispatch_projections_main(mytimer)    
+    
