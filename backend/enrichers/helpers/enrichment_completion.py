@@ -146,12 +146,8 @@ def build_projection_dispatches(
     run: CompletionRunRow,
     completion_status: str,
     result_json: Optional[dict],
-    completed_at: datetime,
+    now: datetime,
 ) -> list[dict]:
-    """
-    Return dispatch specs to insert.
-    Only compatibility.v1 success currently emits a projection dispatch.
-    """
     if completion_status != "Succeeded":
         return []
 
@@ -160,6 +156,7 @@ def build_projection_dispatches(
 
     score = result_json.get("score") if isinstance(result_json, dict) else None
     summary = result_json.get("summary") if isinstance(result_json, dict) else None
+    calculated_at = now.isoformat().replace("+00:00", "Z")
 
     payload = {
         "items": [
@@ -172,7 +169,7 @@ def build_projection_dispatches(
                 "status": "Succeeded",
                 "score": score,
                 "summary": summary,
-                "completedAt": completed_at.isoformat().replace("+00:00", "Z"),
+                "calculatedAt": calculated_at,
             }
         ]
     }
@@ -188,11 +185,11 @@ def build_projection_dispatches(
             "status": "Pending",
             "attemptCount": 0,
             "lastAttemptAt": None,
-            "nextAttemptAt": completed_at,
+            "nextAttemptAt": now,
             "payloadJson": json_dumps_compact(payload),
             "lastError": None,
-            "createdAt": completed_at,
-            "updatedAt": completed_at,
+            "createdAt": now,
+            "updatedAt": now,
         }
     ]
 
@@ -302,7 +299,7 @@ def complete_run_transactionally(
             run=run,
             completion_status=status,
             result_json=result_json,
-            completed_at=now,
+            now=now,
         )
         created = insert_projection_dispatches(cur, dispatches)
 

@@ -150,19 +150,26 @@ def _deliver_one(dispatch_row, max_attempts: int) -> tuple[str, str | None]:
         if projection_type != "job-list.compatibility-score.v1":
             return ("deadletter", f"Unsupported projection type: {projection_type}")
 
-        resp = _post_jobs_projection(payload_json)
-
         if 200 <= resp.status_code < 300:
+            logging.info(
+                "dispatch_projections: jobs API success status=%s body=%s",
+                resp.status_code,
+                resp.text[:1000],
+            )
             return ("delivered", None)
 
-        # retry on transient-ish failures
+        logging.warning(
+            "dispatch_projections: jobs API failure status=%s body=%s",
+            resp.status_code,
+            resp.text[:1000],
+        )
+
         if resp.status_code in (408, 409, 425, 429, 500, 502, 503, 504):
             msg = f"Jobs API transient failure {resp.status_code}: {resp.text[:1000]}"
             if attempt_count + 1 >= max_attempts:
                 return ("deadletter", msg)
             return ("retry", msg)
 
-        # non-retryable
         return ("deadletter", f"Jobs API non-retryable failure {resp.status_code}: {resp.text[:1000]}")
 
     except requests.RequestException as ex:
@@ -224,6 +231,17 @@ def main(mytimer: func.TimerRequest) -> None:
             dispatch_id = str(row.DispatchId)
             status, error = _deliver_one(row, max_attempts)
             step_now = _utcnow()
+
+            logging.info(
+                "dispatch_projections: dispatch_id=%s run_id=%s projection_type=%s target_domain=%s attempt_count=%s outcome=%s error=%s",
+                str(row.DispatchId),
+                str(row.RunId),
+                row.ProjectionType,
+                row.TargetDomain,
+                int(row.AttemptCount or 0),
+                status,
+                error,
+            )
 
             inner = get_connection()
             try:
