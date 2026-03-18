@@ -11,11 +11,7 @@ from helpers.db import get_connection
 def _iso(v):
     if v is None:
         return None
-    try:
-        return v.isoformat()
-    except Exception:
-        return str(v)
-
+    return str(v)
 
 def register(app: func.FunctionApp):
     @app.route(
@@ -41,11 +37,11 @@ def register(app: func.FunctionApp):
                     TargetKey,
                     Status,
                     AttemptCount,
-                    LastAttemptAt,
-                    NextAttemptAt,
+                    CONVERT(varchar(33), LastAttemptAt, 127) AS LastAttemptAt,
+                    CONVERT(varchar(33), NextAttemptAt, 127) AS NextAttemptAt,
                     LastError,
-                    CreatedAt,
-                    UpdatedAt
+                    CONVERT(varchar(33), CreatedAt, 127) AS CreatedAt,
+                    CONVERT(varchar(33), UpdatedAt, 127) AS UpdatedAt
                 FROM dbo.EnrichmentProjectionDispatch
                 WHERE RunId = ?
                 ORDER BY CreatedAt DESC
