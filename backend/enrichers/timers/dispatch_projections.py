@@ -137,7 +137,6 @@ def _deliver_one(dispatch_row, max_attempts: int) -> tuple[str, str | None]:
       ("retry", "...error...")
       ("deadletter", "...error...")
     """
-    dispatch_id = str(dispatch_row.DispatchId)
     target_domain = dispatch_row.TargetDomain
     projection_type = dispatch_row.ProjectionType
     attempt_count = int(dispatch_row.AttemptCount or 0)
@@ -149,6 +148,8 @@ def _deliver_one(dispatch_row, max_attempts: int) -> tuple[str, str | None]:
 
         if projection_type != "job-list.compatibility-score.v1":
             return ("deadletter", f"Unsupported projection type: {projection_type}")
+
+        resp = _post_jobs_projection(payload_json)
 
         if 200 <= resp.status_code < 300:
             logging.info(
