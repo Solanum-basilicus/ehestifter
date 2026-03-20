@@ -8,16 +8,6 @@ compatibility:
   repetition_penalty: 1.0
 
   system_prompt: |+2
-compatibility:
-  model: "Qwen_Qwen3.5-9B-Q8_0.gguf"
-  temperature: 0.2
-  top_p: 0.95
-  top_k: 20
-  min_p: 0.0
-  presence_penalty: 0.0
-  repetition_penalty: 1.0
-
-  system_prompt: |+2
     # ROLE & OBJECTIVE
     You are a Senior European Talent Acquisition Specialist. Your task is to evaluate an Applicant's CV against a specific Job Description (JD) to determine their suitability for a position in the European job market.
     # INPUT DATA

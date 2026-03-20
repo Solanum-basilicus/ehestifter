@@ -292,7 +292,7 @@ def main() -> None:
                     if isinstance(max_tokens_1, int) and max_tokens_1 > 256:
                         max_tokens_2 = 256
                     elif max_tokens_1 is None:
-                        max_tokens_2 = 256
+                        max_tokens_2 = 912
                     else:
                         max_tokens_2 = max_tokens_1
 
