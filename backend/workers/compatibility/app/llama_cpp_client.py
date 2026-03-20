@@ -4,14 +4,10 @@ import re
 import hashlib
 import logging
 import requests
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 
 class LlamaCppClient:
-    """
-    Minimal OpenAI-chat compatible client for llama.cpp native server.
-    """
-
     def __init__(self, base_url: str, timeout_s: int = 180):
         self.base_url = base_url.rstrip("/")
         self.timeout_s = timeout_s
@@ -61,7 +57,7 @@ class LlamaCppClient:
 
     @staticmethod
     def _redact_payload_for_log(payload: Dict[str, Any]) -> Dict[str, Any]:
-        out = json.loads(json.dumps(payload))  # deep copy
+        out = json.loads(json.dumps(payload))
         for i, msg in enumerate(out.get("messages", [])):
             content = msg.get("content")
             if isinstance(content, str):
@@ -72,6 +68,91 @@ class LlamaCppClient:
                     "preview": content[:120].replace("\n", "\\n"),
                 }
         return out
+
+    @staticmethod
+    def _strip_think_blocks(s: str) -> Tuple[str, bool]:
+        original = s
+        # remove complete <think>...</think> blocks
+        s2 = re.sub(r"<think>.*?</think>\s*", "", s, flags=re.DOTALL | re.IGNORECASE)
+        if s2 != original:
+            return s2.strip(), True
+
+        # if it starts with <think> but closing tag is absent, keep as-is
+        return s.strip(), False
+
+    @staticmethod
+    def _extract_first_balanced_json_object(s: str) -> Optional[str]:
+        """
+        Extract first top-level JSON object, respecting strings/escapes.
+        """
+        start = s.find("{")
+        if start == -1:
+            return None
+
+        depth = 0
+        in_string = False
+        escape = False
+
+        for i in range(start, len(s)):
+            ch = s[i]
+
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+                continue
+
+            if ch == '"':
+                in_string = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return s[start:i + 1]
+
+        return None
+
+    @classmethod
+    def _parse_json_from_content(cls, content_s: str) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+        """
+        Returns (obj, diagnostics). obj is dict on success, else None.
+        """
+        diag: Dict[str, Any] = {
+            "had_think_block": False,
+            "used_json_extraction": False,
+        }
+
+        clean_s = content_s.strip()
+        clean_s, had_think = cls._strip_think_blocks(clean_s)
+        diag["had_think_block"] = had_think
+
+        # attempt 1: parse cleaned whole string
+        try:
+            obj = json.loads(clean_s)
+            if isinstance(obj, dict):
+                return obj, diag
+        except Exception as e:
+            diag["direct_parse_error"] = str(e)
+
+        # attempt 2: extract first balanced JSON object
+        candidate = cls._extract_first_balanced_json_object(clean_s)
+        if candidate:
+            diag["used_json_extraction"] = True
+            try:
+                obj = json.loads(candidate)
+                if isinstance(obj, dict):
+                    return obj, diag
+                diag["candidate_parse_error"] = "parsed JSON was not an object"
+            except Exception as e:
+                diag["candidate_parse_error"] = str(e)
+                diag["candidate_snippet"] = candidate[:2000]
+
+        diag["cleaned_snippet"] = clean_s[:2000]
+        return None, diag
 
     def generate_json(
         self,
@@ -109,17 +190,8 @@ class LlamaCppClient:
         if num_predict is not None:
             payload["max_tokens"] = int(num_predict)
 
-        # keep these disabled unless intentionally testing them
-        # if top_k is not None:
-        #     payload["top_k"] = int(top_k)
-        # if min_p is not None:
-        #     payload["min_p"] = float(min_p)
-
         if presence_penalty is not None:
             payload["presence_penalty"] = float(presence_penalty)
-
-        # if repetition_penalty is not None:
-        #     payload["repeat_penalty"] = float(repetition_penalty)
 
         if format is not None:
             if format == "json":
@@ -219,13 +291,15 @@ class LlamaCppClient:
                 },
             }
 
-        try:
-            obj = json.loads(content_s)
-        except Exception as e:
-            return {"__parse_error": f"json_loads_failed: {e}", "__raw": content_s, **envelope}
-
-        if isinstance(obj, dict):
+        obj, parse_diag = self._parse_json_from_content(content_s)
+        if obj is not None:
             obj.update(envelope)
+            obj["__parse_diag"] = parse_diag
             return obj
 
-        return {"__parse_error": "non_object_json", "__raw": content_s, **envelope}
+        return {
+            "__parse_error": "json_loads_failed",
+            "__raw": content_s,
+            "__parse_diag": parse_diag,
+            **envelope,
+        }
