@@ -18,7 +18,8 @@ from .stats import Stats
 
 MAX_DEBUG_CHARS = int(os.getenv("MAX_DEBUG_CHARS", "10000"))
 
-RETRYABLE_STATUSES = {500, 502, 503, 504}
+# Remove 400 after fixing the issue with sample parcer
+RETRYABLE_STATUSES = {500, 502, 503, 504,400}
 
 FORMAT_SCHEMA = {
     "type": "object",
@@ -233,7 +234,11 @@ def main() -> None:
                     # Expect inline input snapshot (keep v1 simple)
                     input_obj = lease.get("input") or {}
                     job = input_obj.get("job") or {}
-                    cv_text = str(input_obj.get("cv") or "")
+                    cv_obj = input_obj.get("cv") or {}
+                    if isinstance(cv_obj, dict):
+                        cv_text = str(cv_obj.get("text") or "")
+                    else:
+                        cv_text = str(cv_obj or "")
                     if log.isEnabledFor(logging.DEBUG):
                         log.debug("Prompt inputs jobKeys=%s cvTextLen=%s",
                                 list(job.keys()) if isinstance(job, dict) else type(job).__name__,
@@ -266,6 +271,10 @@ def main() -> None:
                         return getattr(resp, "status_code", None)
 
                     def _body_from_exc(e: Exception, limit: int = 1000) -> str:
+                        body = getattr(e, "_llama_cpp_body", None)
+                        if isinstance(body, str) and body:
+                            return body[:limit]
+
                         resp = getattr(e, "response", None)
                         if resp is None:
                             return ""
@@ -273,6 +282,10 @@ def main() -> None:
                             return (resp.text or "")[:limit]
                         except Exception:
                             return ""
+
+                    def _debug_from_exc(e: Exception):
+                        dbg = getattr(e, "_llama_cpp_debug", None)
+                        return dbg if isinstance(dbg, dict) else None
 
                     max_tokens_1 = getattr(s, "max_tokens", None)
                     # Retry with a smaller budget (compatibility output is small)
@@ -315,9 +328,10 @@ def main() -> None:
 
                         retryable = (status in (500, 502, 503, 504)) or isinstance(e, (Timeout, ConnectionError))
 
+                        dbg = _debug_from_exc(e)
                         log.error(
-                            "Inference failed runId=%s status=%s retryable=%s body=%s",
-                            parsed.run_id, status, retryable, body
+                            "Inference failed runId=%s status=%s retryable=%s body=%s debug=%s",
+                            parsed.run_id, status, retryable, body, dbg
                         )
                         stats.bump("llm_errors", "llm_errors_last_at")
                         if status == 500:
@@ -344,9 +358,10 @@ def main() -> None:
                                 status2 = _status_from_exc(e2)
                                 body2 = _truncate(_body_from_exc(e2))
 
+                                dbg2 = _debug_from_exc(e2)
                                 log.error(
-                                    "Inference retry failed runId=%s status=%s body=%s",
-                                    parsed.run_id, status2, body2
+                                    "Inference retry failed runId=%s status=%s body=%s debug=%s",
+                                    parsed.run_id, status2, body2, dbg2
                                 )
                                 stats.bump("llm_retries_failed", "llm_retries_failed_last_at")
                                 stats.flush()

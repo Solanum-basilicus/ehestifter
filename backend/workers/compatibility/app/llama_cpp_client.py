@@ -2,24 +2,12 @@
 import json
 import re
 import requests
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 
 class LlamaCppClient:
     """
     Minimal OpenAI-chat compatible client for llama.cpp native server.
-
-    Calls:
-      POST {base_url}/v1/chat/completions
-
-    Returns:
-      - dict parsed from assistant message content (JSON), augmented with "__llama_cpp" metadata
-      - OR {"__parse_error": ..., "__raw": ..., "__llama_cpp": ...} on parse failures
-
-    Adds:
-      - sanitization of system/prompt to avoid problematic control chars
-      - debug for llama.cpp parse errors like: "Failed to parse input at pos 19059"
-        (includes snippet around the failing byte offset from the *request JSON bytes*)
     """
 
     def __init__(self, base_url: str, timeout_s: int = 180):
@@ -29,13 +17,8 @@ class LlamaCppClient:
 
     @staticmethod
     def _sanitize_text(s: Optional[str]) -> str:
-        """
-        Remove NUL and other C0 control chars except \\n \\r \\t.
-        This helps when upstream text contains invisible bytes that can trip parsers.
-        """
         if not s:
             return ""
-        # keep \n \r \t; drop everything else < 0x20
         return "".join(ch for ch in str(s) if ch in ("\n", "\r", "\t") or ord(ch) >= 32)
 
     @staticmethod
@@ -50,17 +33,12 @@ class LlamaCppClient:
 
     @staticmethod
     def _snippet_around_bytes(b: bytes, pos: int, radius: int = 120) -> str:
-        """
-        Return a printable snippet around a byte position.
-        We decode with 'utf-8' replacement so it always succeeds.
-        """
         if pos < 0:
             pos = 0
         start = max(0, pos - radius)
         end = min(len(b), pos + radius)
         chunk = b[start:end]
         s = chunk.decode("utf-8", errors="replace")
-        # Make it single-line-ish for logs by escaping newlines/tabs
         s = s.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
         return f"(bytes {start}:{end} of {len(b)}) {s}"
 
@@ -90,12 +68,11 @@ class LlamaCppClient:
         min_p: Optional[float] = None,
         presence_penalty: Optional[float] = None,
         repetition_penalty: Optional[float] = None,
-        num_predict: Optional[int] = None,   # maps to max_tokens
-        format: Any = "json",                # "json", schema dict, or None
+        num_predict: Optional[int] = None,
+        format: Any = "json",
     ) -> Dict[str, Any]:
         url = f"{self.base_url}/v1/chat/completions"
 
-        # --- sanitize inputs ---
         system_s = self._sanitize_text(system)
         prompt_s = self._sanitize_text(prompt)
 
@@ -115,15 +92,18 @@ class LlamaCppClient:
         if num_predict is not None:
             payload["max_tokens"] = int(num_predict)
 
-        # NOTE: nonstandard knobs are intentionally disabled until stable
-        # If you re-enable them, do it one by one and watch server behavior.
-        # if top_k is not None: payload["top_k"] = int(top_k)
-        # if min_p is not None: payload["min_p"] = float(min_p)
+        # keep these disabled unless intentionally testing them
+        # if top_k is not None:
+        #     payload["top_k"] = int(top_k)
+        # if min_p is not None:
+        #     payload["min_p"] = float(min_p)
+
         if presence_penalty is not None:
             payload["presence_penalty"] = float(presence_penalty)
-        # if repetition_penalty is not None: payload["repeat_penalty"] = float(repetition_penalty)
 
-        # response_format handling
+        # if repetition_penalty is not None:
+        #     payload["repeat_penalty"] = float(repetition_penalty)
+
         if format is not None:
             if format == "json":
                 payload["response_format"] = {"type": "json_object"}
@@ -139,9 +119,7 @@ class LlamaCppClient:
             else:
                 payload["response_format"] = {"type": "json_object"}
 
-        # --- preflight serialize payload to bytes (for debug + early failure) ---
         try:
-            # ensure_ascii=False keeps the request smaller + pos aligns with UTF-8 bytes
             payload_json_str = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
             payload_bytes = payload_json_str.encode("utf-8")
         except Exception as e:
@@ -153,8 +131,6 @@ class LlamaCppClient:
 
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
 
-        # IMPORTANT: still use json=payload for requests to set proper headers/encoding,
-        # but we keep payload_bytes for debugging offsets/snippets.
         try:
             resp = self.session.post(
                 url,
@@ -164,7 +140,9 @@ class LlamaCppClient:
             )
             resp.raise_for_status()
             data = resp.json()
+
         except requests.HTTPError as e:
+            # enrich exception for caller-side logging / retry decisions
             status = getattr(getattr(e, "response", None), "status_code", None)
             body = ""
             try:
@@ -172,7 +150,6 @@ class LlamaCppClient:
             except Exception:
                 body = ""
 
-            # If llama.cpp reports parse error with position, add snippet around that byte offset
             pos = self._extract_pos_from_message(body)
             client_debug: Dict[str, Any] = {
                 "http_status": status,
@@ -182,21 +159,21 @@ class LlamaCppClient:
                 client_debug["parse_pos"] = pos
                 client_debug["around"] = self._snippet_around_bytes(payload_bytes, pos)
 
-            return {
-                "__parse_error": "http_error",
-                "__raw": body,
-                "__client_debug": client_debug,
-            }
+            # attach debug info to exception so main.py can log it
+            setattr(e, "_llama_cpp_debug", client_debug)
+            setattr(e, "_llama_cpp_body", body)
+            raise
+
+        except (requests.Timeout, requests.ConnectionError):
+            raise
 
         except Exception as e:
-            # network error, json decode error, timeout, etc.
             return {
                 "__parse_error": f"request_failed: {e}",
                 "__raw": "",
                 "__client_debug": {"request_bytes_len": len(payload_bytes)},
             }
 
-        # --- parse assistant content ---
         content = ""
         try:
             content = ((data.get("choices") or [{}])[0].get("message", {}) or {}).get("content", "")
