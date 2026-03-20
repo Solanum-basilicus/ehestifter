@@ -1,6 +1,8 @@
 # /app/llama_cpp_client.py
 import json
 import re
+import hashlib
+import logging
 import requests
 from typing import Any, Dict, Optional
 
@@ -14,6 +16,7 @@ class LlamaCppClient:
         self.base_url = base_url.rstrip("/")
         self.timeout_s = timeout_s
         self.session = requests.Session()
+        self.log = logging.getLogger("compat-worker.llama_cpp")
 
     @staticmethod
     def _sanitize_text(s: Optional[str]) -> str:
@@ -55,6 +58,20 @@ class LlamaCppClient:
                 "response_len": len(content_s),
             }
         }
+
+    @staticmethod
+    def _redact_payload_for_log(payload: Dict[str, Any]) -> Dict[str, Any]:
+        out = json.loads(json.dumps(payload))  # deep copy
+        for i, msg in enumerate(out.get("messages", [])):
+            content = msg.get("content")
+            if isinstance(content, str):
+                out["messages"][i]["content"] = {
+                    "redacted": True,
+                    "len": len(content),
+                    "sha256_16": hashlib.sha256(content.encode("utf-8")).hexdigest()[:16],
+                    "preview": content[:120].replace("\n", "\\n"),
+                }
+        return out
 
     def generate_json(
         self,
@@ -129,6 +146,17 @@ class LlamaCppClient:
                 "__client_debug": {"stage": "preflight_serialize"},
             }
 
+        if self.log.isEnabledFor(logging.DEBUG):
+            try:
+                redacted = self._redact_payload_for_log(payload)
+                self.log.debug(
+                    "llama.cpp request url=%s payload=%s",
+                    url,
+                    json.dumps(redacted, ensure_ascii=False, separators=(",", ":")),
+                )
+            except Exception as log_exc:
+                self.log.debug("llama.cpp request logging failed: %s", log_exc)
+
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
 
         try:
@@ -142,7 +170,6 @@ class LlamaCppClient:
             data = resp.json()
 
         except requests.HTTPError as e:
-            # enrich exception for caller-side logging / retry decisions
             status = getattr(getattr(e, "response", None), "status_code", None)
             body = ""
             try:
@@ -159,7 +186,6 @@ class LlamaCppClient:
                 client_debug["parse_pos"] = pos
                 client_debug["around"] = self._snippet_around_bytes(payload_bytes, pos)
 
-            # attach debug info to exception so main.py can log it
             setattr(e, "_llama_cpp_debug", client_debug)
             setattr(e, "_llama_cpp_body", body)
             raise

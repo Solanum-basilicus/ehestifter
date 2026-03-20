@@ -326,7 +326,7 @@ def main() -> None:
                         status = _status_from_exc(e)
                         body = _truncate(_body_from_exc(e))
 
-                        retryable = (status in (500, 502, 503, 504)) or isinstance(e, (Timeout, ConnectionError))
+                        retryable = (status in RETRYABLE_STATUSES) or isinstance(e, (Timeout, ConnectionError))
 
                         dbg = _debug_from_exc(e)
                         log.error(
