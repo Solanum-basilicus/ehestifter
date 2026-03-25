@@ -270,7 +270,7 @@ def build_prompt(*, job: Dict[str, Any], cv_text: str) -> str:
     cv_text = _safe_str(cv_text)
 
     shape = {
-        "Description": "string, 1-2 short sentences",
+        "Description": "string, 1-2 short sentences explaining overall compatibility verdict",
         "Languages": {
             "Applicant": [
                 {"Language": "English", "Level": "C1"}
@@ -313,18 +313,38 @@ CANDIDATE_CV_TEXT:
 Return ONLY a single JSON object with exactly this structure:
 {json.dumps(shape, ensure_ascii=False)}
 
-Rules:
-1. Do not invent facts absent from CV or JD.
-2. Languages.Applicant: list all applicant languages explicitly present in CV.
-3. Languages.Job.Mandatory: required languages from JD.
-4. Languages.Job.Optional: languages marked as preferred / plus / advantage / nice-to-have.
-5. Convert language wording into CEFR using only A1, A2, B1, B2, C1, C2.
-6. If a language is named but no level is stated, assume B1.
-7. "professional level" => B1, "business level" => B2, "negotiation level" => C1, "fluent" => C1, "native/bilingual" => C2.
-8. HardSkills score must cover technical stack, tools, certifications, education, and explicit hard-skill fit.
-9. Experience score must cover years, tenure, seniority, role or industry experience.
-10. SoftSkills score must cover communication, teamwork, stakeholder fit, and behavioral/culture fit.
-11. Keep Description short and keep section descriptions concise.
+Critical interpretation rules:
+1. "Description" means OVERALL COMPATIBILITY VERDICT, not candidate profile summary.
+2. "Description" must explain why the candidate is a strong / moderate / weak fit for THIS job.
+3. "Description" must compare job requirements against evidence from the CV.
+4. "Description" must mention the main positive and/or negative drivers of fit.
+5. Do NOT paraphrase or restate the candidate's self-description, profile summary, about-me section, or career objective.
+6. Do NOT write what the candidate says about themselves unless it directly supports compatibility with the JD.
+7. If the fit is weak, say what is missing. If the fit is strong, say what clearly matches.
+8. Keep "Description" short: maximum 2 sentences.
+
+Other rules:
+9. Do not invent facts absent from CV or JD.
+10. Languages.Applicant: list all applicant languages explicitly present in CV.
+11. Languages.Job.Mandatory: required languages from JD.
+12. Languages.Job.Optional: languages marked as preferred / plus / advantage / nice-to-have.
+13. Convert language wording into CEFR using only A1, A2, B1, B2, C1, C2.
+14. If a language is named but no level is stated, assume B1.
+15. "professional level" => B1, "business level" => B2, "negotiation level" => C1, "fluent" => C1, "native/bilingual" => C2.
+16. HardSkills score must cover technical stack, tools, certifications, education, and explicit hard-skill fit.
+17. Experience score must cover years, tenure, seniority, role or industry experience.
+18. SoftSkills score must cover communication, teamwork, stakeholder fit, and behavioral/culture fit.
+19. Keep section descriptions concise and evidence-based.
+
+Good Description examples:
+- "Strong overall fit: the CV matches the core Python, Azure, and SQL requirements, but the candidate appears somewhat lighter on explicit stakeholder-facing experience."
+- "Moderate fit: the candidate covers much of the technical stack, but the CV does not clearly support the required years of relevant experience."
+- "Weak fit: several core hard-skill requirements are missing or only loosely evidenced in the CV."
+
+Bad Description examples:
+- "Experienced data professional with strong motivation and diverse background."
+- "Results-driven engineer with passion for technology."
+- "I am a hardworking person with excellent communication skills."
 
 No markdown. No extra keys. No extra text.
 """.strip()
