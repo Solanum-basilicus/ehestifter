@@ -252,6 +252,8 @@ def main() -> None:
                     attempt_meta = {
                         "fallback_no_thinking": False,
                         "attempts": 0,
+                        "degraded": False,
+                        "degraded_reason": "",
                     }
 
                     def _llm_call(*, num_predict, system_override: str | None = None):
@@ -334,9 +336,18 @@ def main() -> None:
                             try:
                                 attempt_meta["attempts"] = 2
                                 attempt_meta["fallback_no_thinking"] = True
+                                attempt_meta["degraded"] = True
+
+                                if isinstance(e, Timeout):
+                                    attempt_meta["degraded_reason"] = "initial inference timed out; retried without thinking"
+                                elif isinstance(e, ConnectionError):
+                                    attempt_meta["degraded_reason"] = "initial inference connection failed; retried without thinking"
+                                else:
+                                    attempt_meta["degraded_reason"] = f"initial inference failed with status={status}; retried without thinking"
+
                                 log.warning(
-                                    "Retrying inference once runId=%s max_tokens=%s (no thinking override)",
-                                    parsed.run_id, max_tokens_2
+                                    "Retrying inference once runId=%s max_tokens=%s (no thinking override) reason=%s",
+                                    parsed.run_id, max_tokens_2, attempt_meta["degraded_reason"]
                                 )
 
                                 raw = _llm_call(
@@ -429,30 +440,46 @@ def main() -> None:
                         )
 
                     summary = description
-                    markers = []
+                    diagnostics = []
 
-                    normalize_notes = structured.get("__normalize_notes") or []
-                    if isinstance(normalize_notes, list):
-                        markers.extend(str(x) for x in normalize_notes if x)
+                    if attempt_meta.get("degraded"):
+                        degraded_reason = str(attempt_meta.get("degraded_reason") or "").strip()
+                        if degraded_reason:
+                            diagnostics.append(f"degraded: {degraded_reason}")
+                        else:
+                            diagnostics.append("degraded: inference used fallback path")
 
                     if bool(lang_eval.get("disqualified")):
-                        markers.append("degraded: final score forced to 0.0 due to mandatory language mismatch")
+                        missing = lang_eval.get("missing") or []
+                        if isinstance(missing, list) and missing:
+                            missing_parts = []
+                            for item in missing:
+                                if not isinstance(item, dict):
+                                    continue
+                                lang = str(item.get("Language") or "").strip()
+                                required = str(item.get("Required") or "").strip()
+                                actual = item.get("Applicant")
+                                actual_s = str(actual).strip() if actual is not None else "absent"
 
-                    if attempt_meta.get("fallback_no_thinking"):
-                        markers.append("degraded: retry used no-thinking override")
+                                if lang and required:
+                                    missing_parts.append(f"{lang} required {required}, applicant {actual_s}")
+                                elif lang:
+                                    missing_parts.append(f"{lang} applicant {actual_s}")
 
-                    parse_diag = raw.get("__parse_diag") if isinstance(raw, dict) else None
-                    if isinstance(parse_diag, dict):
-                        if parse_diag.get("had_think_block"):
-                            markers.append("degraded: stripped think block from model output")
-                        if parse_diag.get("used_json_extraction"):
-                            markers.append("degraded: extracted JSON from mixed output")
+                            if missing_parts:
+                                diagnostics.append(
+                                    "score forced to 0.5 due to mandatory language mismatch: " + "; ".join(missing_parts)
+                                )
+                            else:
+                                diagnostics.append("score forced to 0.5 due to mandatory language mismatch")
 
-                    if markers:
+                    if diagnostics:
                         if summary:
-                            summary = f"{summary} [diagnostics] " + " | ".join(markers)
+                            summary = f"{summary} [diagnostics] " + " | ".join(diagnostics)
                         else:
-                            summary = "[diagnostics] " + " | ".join(markers)
+                            summary = "[diagnostics] " + " | ".join(diagnostics)
+
+
 
                     result = {
                         "score": final_score,
