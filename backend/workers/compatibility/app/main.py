@@ -12,7 +12,12 @@ from .logging_setup import setup_logging
 from .sb import make_client, parse_request_message
 from .gateway import GatewayClient
 from .llama_cpp_client import LlamaCppClient
-from .compatibility import build_prompt, normalize_result
+from .compatibility import (
+    build_prompt,
+    normalize_result,
+    evaluate_language_disqualification,
+    calculate_final_score,
+)
 from .stats import Stats
 
 MAX_DEBUG_CHARS = int(os.getenv("MAX_DEBUG_CHARS", "10000"))
@@ -287,9 +292,9 @@ def main() -> None:
 
                     max_tokens_1 = getattr(s, "max_tokens", None)
                     if not isinstance(max_tokens_1, int) or max_tokens_1 <= 0:
-                        max_tokens_1 = 1024
+                        max_tokens_1 = 1200
 
-                    max_tokens_2 = max(max_tokens_1, 2048)
+                    max_tokens_2 = max(max_tokens_1, 2200)
 
                     retry_system = (
                         s.system_prompt.rstrip()
@@ -308,7 +313,7 @@ def main() -> None:
                                 raw_json = json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
                             except TypeError:
                                 raw_json = json.dumps({"raw": str(raw)}, ensure_ascii=False, separators=(",", ":"))
-                            log.debug("llama.cpp response %s", raw_json)
+                            log.debug("llama.cpp response %s", _truncate(raw_json))
 
                     except (HTTPError, Timeout, ConnectionError) as e:
                         status = _status_from_exc(e)
@@ -344,7 +349,7 @@ def main() -> None:
                                         raw_json = json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
                                     except TypeError:
                                         raw_json = json.dumps({"raw": str(raw)}, ensure_ascii=False, separators=(",", ":"))
-                                    log.debug("llama.cpp response %s", raw_json)
+                                    log.debug("llama.cpp response %s", _truncate(raw_json))
 
                             except Exception as e2:
                                 status2 = _status_from_exc(e2)
@@ -382,10 +387,56 @@ def main() -> None:
                             receiver.complete_message(msg)
                             continue
 
-                    result = normalize_result(raw)
+                    structured = normalize_result(raw)
 
-                    summary = str(result.get("summary") or "")
+                    description = str(structured.get("description") or "")
+                    languages = structured.get("languages") or {}
+                    hard_skills = structured.get("hard_skills") or {}
+                    experience = structured.get("experience") or {}
+                    soft_skills = structured.get("soft_skills") or {}
+
+                    hard_score = float(hard_skills.get("score") or 0.0)
+                    exp_score = float(experience.get("score") or 0.0)
+                    soft_score = float(soft_skills.get("score") or 0.0)
+
+                    lang_eval = evaluate_language_disqualification(languages)
+                    final_score = calculate_final_score(
+                        hard_skills_score=hard_score,
+                        experience_score=exp_score,
+                        soft_skills_score=soft_score,
+                        language_disqualified=bool(lang_eval.get("disqualified")),
+                    )
+
+                    if log.isEnabledFor(logging.DEBUG):
+                        log.debug(
+                            "Structured LLM result runId=%s description=%s languages=%s hard_skills=%s experience=%s soft_skills=%s",
+                            parsed.run_id,
+                            _truncate(json.dumps(description, ensure_ascii=False)),
+                            _truncate(json.dumps(languages, ensure_ascii=False, separators=(",", ":"))),
+                            _truncate(json.dumps(hard_skills, ensure_ascii=False, separators=(",", ":"))),
+                            _truncate(json.dumps(experience, ensure_ascii=False, separators=(",", ":"))),
+                            _truncate(json.dumps(soft_skills, ensure_ascii=False, separators=(",", ":"))),
+                        )
+                        log.debug(
+                            "Calculated compatibility runId=%s hard_score=%.1f experience_score=%.1f soft_score=%.1f language_disqualified=%s language_eval=%s final_score=%.1f",
+                            parsed.run_id,
+                            hard_score,
+                            exp_score,
+                            soft_score,
+                            bool(lang_eval.get("disqualified")),
+                            _truncate(json.dumps(lang_eval, ensure_ascii=False, separators=(",", ":"))),
+                            final_score,
+                        )
+
+                    summary = description
                     markers = []
+
+                    normalize_notes = structured.get("__normalize_notes") or []
+                    if isinstance(normalize_notes, list):
+                        markers.extend(str(x) for x in normalize_notes if x)
+
+                    if bool(lang_eval.get("disqualified")):
+                        markers.append("degraded: final score forced to 0.0 due to mandatory language mismatch")
 
                     if attempt_meta.get("fallback_no_thinking"):
                         markers.append("degraded: retry used no-thinking override")
@@ -402,7 +453,11 @@ def main() -> None:
                             summary = f"{summary} [diagnostics] " + " | ".join(markers)
                         else:
                             summary = "[diagnostics] " + " | ".join(markers)
-                        result["summary"] = summary
+
+                    result = {
+                        "score": final_score,
+                        "summary": summary,
+                    }
 
                     log.info("Completing runId=%s score=%s", parsed.run_id, result.get("score"))
                     gw.complete(parsed.run_id, lease_token, result)
