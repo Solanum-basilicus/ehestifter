@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 from .adzuna_client import AdzunaClient
-from .canonical_identity import canonical_identity_from_url
-from .normalize import normalize_adzuna_job
+from .canonical_identity import identity_to_dict, parse_canonical_identity
+from .config import load_settings
+from .models import QuerySpec
+from .normalize import normalize_job
 from .resolve import resolve_from_adzuna_redirect
 
 
@@ -42,18 +44,18 @@ def run_poc(
     resolve_wait_ms: int = 15_000,
     headless: bool = True,
 ) -> str:
-    """
-    Returns the final printable PoC output string.
-
-    Default resolve_index=2 means:
-    - after filtering to included jobs,
-    - pick the third job in that list,
-    - resolve its origin URL and fuller description.
-    """
-    client = AdzunaClient(app_id=app_id, app_key=app_key)
+    # load_settings already reads env vars; app_id/app_key are validated by CLI
+    settings = load_settings()
+    client = AdzunaClient(settings)
 
     fetched_at = _utc_now()
-    cutoff = fetched_at - timedelta(hours=hours)
+    spec = QuerySpec(
+        country=country,
+        what=query,
+        hours=hours,
+        max_pages=max_pages,
+        results_per_page=results_per_page,
+    )
 
     raw_total = 0
     within_window_total = 0
@@ -63,24 +65,25 @@ def run_poc(
     jobs: list[dict[str, Any]] = []
 
     for page in range(1, max_pages + 1):
-        response = client.search_jobs(
-            country=country,
-            page=page,
-            what=query,
-            results_per_page=results_per_page,
-        )
-
+        response = client.search_page(spec, page)
         results = response.get("results", [])
         raw_total += len(results)
 
         for raw_job in results:
-            normalized = normalize_adzuna_job(raw_job=raw_job, cutoff_utc=cutoff)
+            normalized_obj = normalize_job(
+                raw_job,
+                fetched_at_utc=fetched_at,
+                hours=hours,
+                country=country,
+            )
+            normalized = asdict(normalized_obj)
 
-            if normalized["filters"]["within_window"]:
+            filters = normalized.get("filters", {})
+            if filters.get("within_window"):
                 within_window_total += 1
-            if normalized["filters"]["title_matched"]:
+            if filters.get("title_matched"):
                 title_matched_total += 1
-            if normalized["filters"]["included"]:
+            if filters.get("included"):
                 included_total += 1
                 jobs.append(normalized)
 
@@ -106,11 +109,11 @@ def run_poc(
 
     if resolve_index is not None and 0 <= resolve_index < len(jobs):
         picked = jobs[resolve_index]
-        redirect_url = picked.get("adzunaRedirectUrl")
+        redirect_url = picked.get("adzuna_redirect_url")
 
         resolved_payload = {
             "pickedIncludedJobIndex": resolve_index,
-            "pickedAdzunaId": picked.get("adzunaId"),
+            "pickedAdzunaId": picked.get("adzuna_id"),
             "pickedTitle": picked.get("title"),
             "resolutionAttempted": bool(redirect_url),
         }
@@ -122,20 +125,21 @@ def run_poc(
                 wait_ms=resolve_wait_ms,
             )
 
-            canonical_identity = (
-                canonical_identity_from_url(resolution.final_url)
-                if resolution.final_url
-                else None
-            )
+            canonical_identity = None
+            canonical_identity_diagnostics: list[str] = []
+            if resolution.final_url:
+                canonical_identity, canonical_identity_diagnostics = parse_canonical_identity(
+                    resolution.final_url
+                )
 
             resolved_payload.update(
                 {
                     "adzunaRedirectUrl": redirect_url,
                     "originUrl": resolution.final_url,
-                    "canonicalIdentity": canonical_identity,
+                    "canonicalIdentity": identity_to_dict(canonical_identity),
                     "fullDescription": resolution.description_text,
                     "resolvedPageTitle": resolution.final_title,
-                    "diagnostics": resolution.diagnostics,
+                    "diagnostics": resolution.diagnostics + canonical_identity_diagnostics,
                     "raw": resolution.raw,
                 }
             )
