@@ -641,3 +641,40 @@ The milestone is done when:
 ## 19. Recommended next implementation step
 
 Start with **Phase 1 PoC only** and inspect 30–50 normalized rows before touching Azure Functions or enrichment-trigger plumbing. That is the cheapest way to test the most fragile assumptions in the whole plan: whether Adzuna’s free-tier payload is rich enough to be worth importing at all, and whether origin-link-based canonical identity can be recovered reliably from real samples.
+
+## 20. PoC Results
+The Adzuna PoC was completed successfully as a validation step. It confirmed that Adzuna free-tier search can be useful for candidate discovery, but not as a standalone import source.
+
+### What worked
+- Search results provide usable metadata:
+  - title
+  - company name
+  - location
+  - created timestamp
+  - short description snippet
+  - Adzuna listing URL
+- This is sufficient for:
+  - keyword/title filtering
+  - Germany relevance checks
+  - remote/hybrid heuristics
+  - lightweight ranking or LLM triage
+- Candidate volume was acceptable for target queries.
+
+Example run:
+```json
+{
+  "raw": 150,
+  "within_window": 89,
+  "title_matched": 57,
+  "included": 35
+}
+```
+### What failed
+- Search payload did not expose recoverable origin/employer URLs.
+- Canonical identity could not be derived from search results alone.
+- Browser automation against Adzuna detail pages returned access denied / login wall.
+- Full descriptions and origin redirects could not be reliably extracted.
+
+### Conclusions
+While Adzuna free API is suitable as a discovery source, it can not be a direct importer source. As any importer could provide discovery, we consider pursuing Adzuna-based implementation not worth persuing. 
+Milestone need to be replanned around another importer.
