@@ -50,9 +50,9 @@ So far it doesn't scrape or enrich anyting with AI, but we'll getting there. One
 5. **UI** lets users log in, see compatible jobs, and set alerts.  
 6. **Storage + Synapse** enable historical data analysis.
 
-Only 3-5 exists for now, you are expected to input job applications manually. Still better than sorting auto-replies into subfolders in your email box, eh.
+Only 2-5 exists for now, you are expected to input job applications manually. Still better than sorting auto-replies into subfolders in your email box, eh.
 
-![Architecture Diagram](docs/architecture.png)  
+See docs/system-design.md for more details.
 
 ## Repository Layout
 - infrastructure/ # SQL schemas, IaC templates
