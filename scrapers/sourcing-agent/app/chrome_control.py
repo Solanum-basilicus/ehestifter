@@ -3,7 +3,35 @@ import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
+import itertools
+from websocket import create_connection
 
+_cdp_counter = itertools.count(1)
+
+
+def cdp_evaluate(websocket_url: str, expression: str, timeout_seconds: int = 10):
+    ws = create_connection(websocket_url, timeout=timeout_seconds)
+    try:
+        msg_id = next(_cdp_counter)
+        ws.send(json.dumps({
+            "id": msg_id,
+            "method": "Runtime.evaluate",
+            "params": {
+                "expression": expression,
+                "returnByValue": True,
+                "awaitPromise": True,
+            },
+        }))
+
+        while True:
+            raw = ws.recv()
+            msg = json.loads(raw)
+            if msg.get("id") == msg_id:
+                if "exceptionDetails" in msg:
+                    raise RuntimeError(msg["exceptionDetails"])
+                return msg["result"]["result"].get("value")
+    finally:
+        ws.close()
 
 def _http_json(url: str, method: str = "GET") -> dict:
     req = urllib.request.Request(url, method=method)

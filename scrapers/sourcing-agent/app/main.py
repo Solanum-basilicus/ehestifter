@@ -12,8 +12,9 @@ from pydantic_ai.usage import UsageLimits
 from boards import BOARDS
 from models import JobCardList, RawCapture
 
-from chrome_control import find_bookmark_url, open_new_tab, wait_for_target_loaded
+from chrome_control import find_bookmark_url, open_new_tab, wait_for_target_loaded, cdp_evaluate
 
+from boards.stepstone_extract import STEPSTONE_VISIBLE_CARDS_JS
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -121,17 +122,27 @@ async def main() -> None:
         )
         print(f"Loaded Chrome target: {loaded_target.get('title')} | {loaded_target.get('url')}")
 
-        collect_prompt = board.collect_cards_prompt.format(
-            bookmark_name=board.bookmark_name,
-            limit=args.limit,
-            now_utc=now_utc,
-        )
-        cards_data = await run_json_step(
-            agent,
-            collect_prompt,
-            "[2/4] Reading visible job cards",
-            request_limit=25,
-        )
+        search_target = loaded_target
+
+        if board.name == "stepstone":
+            print(f"\n[{datetime.now(timezone.utc).isoformat()}] [2/4] Reading visible job cards deterministically")
+
+            cards_data = cdp_evaluate(
+                websocket_url=search_target["webSocketDebuggerUrl"],
+                expression=STEPSTONE_VISIBLE_CARDS_JS,
+                timeout_seconds=15,
+            )
+
+            print(json.dumps(cards_data, ensure_ascii=False, indent=2))
+        else:
+            collect_prompt = board.collect_cards_prompt.replace("{limit}", str(args.limit))
+            cards_data = await run_json_step(
+                agent,
+                collect_prompt,
+                "[2/4] Reading visible job cards",
+                request_limit=25,
+            )
+
         cards = JobCardList.model_validate(cards_data)
 
         if not cards.cards:
