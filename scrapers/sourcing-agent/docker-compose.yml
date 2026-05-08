@@ -1,0 +1,13 @@
+services:
+  sourcing-agent:
+    build: .
+    container_name: ehestifter-sourcing-agent
+    network_mode: host
+    env_file:
+      - .env
+    volumes:
+      - ./out:/out
+      - ./app:/app
+      - ./chrome-profile:/chrome-profile:ro
+    stdin_open: true
+    tty: true

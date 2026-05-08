@@ -1,0 +1,4 @@
+pydantic-ai-slim[openai,mcp]
+pydantic
+python-dotenv
+
