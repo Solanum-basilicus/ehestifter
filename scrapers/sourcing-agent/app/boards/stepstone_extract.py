@@ -67,3 +67,19 @@ STEPSTONE_DETAIL_TEXT_JS = r"""
   };
 })()
 """
+STEPSTONE_IS_SEARCH_RESULTS_PAGE_JS = r"""
+(() => {
+  const url = location.href;
+  const hasSearchUrl = url.startsWith("https://www.stepstone.de/jobs/");
+  const hasUnifiedResultList = !!document.querySelector('[data-at="unified-resultlist"]');
+  const hasJobItems = document.querySelectorAll('article[data-testid="job-item"]').length > 0;
+
+  return {
+    ok: hasSearchUrl && hasUnifiedResultList && hasJobItems,
+    url,
+    hasSearchUrl,
+    hasUnifiedResultList,
+    jobItemCount: document.querySelectorAll('article[data-testid="job-item"]').length
+  };
+})()
+"""

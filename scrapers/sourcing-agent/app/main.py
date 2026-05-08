@@ -20,7 +20,11 @@ from chrome_control import (
     close_target,
 )
 
-from boards.stepstone_extract import STEPSTONE_VISIBLE_CARDS_JS, STEPSTONE_DETAIL_TEXT_JS
+from boards.stepstone_extract import (
+    STEPSTONE_VISIBLE_CARDS_JS,
+    STEPSTONE_DETAIL_TEXT_JS,
+    STEPSTONE_IS_SEARCH_RESULTS_PAGE_JS,
+)
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -135,6 +139,21 @@ async def main() -> None:
 
             cards_data = None
             for attempt in range(1, 7):
+                page_state = cdp_evaluate(
+                    websocket_url=search_target["webSocketDebuggerUrl"],
+                    expression=STEPSTONE_IS_SEARCH_RESULTS_PAGE_JS,
+                    timeout_seconds=15,
+                )
+
+                if not page_state.get("ok"):
+                    print(
+                        "StepStone search results page not ready/valid. "
+                        f"Attempt {attempt}/6. State: {json.dumps(page_state, ensure_ascii=False)}. "
+                        "You may manually open the correct StepStone search results tab now."
+                    )
+                    await asyncio.sleep(10)
+                    continue                
+                
                 cards_data = cdp_evaluate(
                     websocket_url=search_target["webSocketDebuggerUrl"],
                     expression=STEPSTONE_VISIBLE_CARDS_JS,
