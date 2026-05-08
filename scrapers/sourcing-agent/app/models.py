@@ -1,11 +1,11 @@
 from pydantic import BaseModel, Field
 
-
 class JobCard(BaseModel):
     ordinal: int
     title: str | None = None
     company: str | None = None
     location_text: str | None = None
+    detail_url: str | None = None
     evidence: str
     open_instruction: str = Field(
         description="Concrete browser instruction for opening this specific job detail."

@@ -130,7 +130,7 @@ async def main() -> None:
             agent,
             collect_prompt,
             "[2/4] Reading visible job cards",
-            request_limit=12,
+            request_limit=25,
         )
         cards = JobCardList.model_validate(cards_data)
 
@@ -146,13 +146,30 @@ async def main() -> None:
             selected_card = cards.cards[0]
             print(f"Selected card: {selected_card.title} / {selected_card.company}")
 
-            open_detail_prompt = board.open_detail_prompt.format(
-                bookmark_name=board.bookmark_name,
-                limit=args.limit,
-                now_utc=now_utc,
-                card_json=selected_card.model_dump_json(indent=2),
-            )
-            await run_json_step(agent, open_detail_prompt, "[3/4] Opening selected job detail")
+            if selected_card.detail_url:
+                print(f"\n[{datetime.now(timezone.utc).isoformat()}] [3/4] Opening selected job detail")
+                print(f"Opening detail URL: {selected_card.detail_url}")
+
+                detail_target = open_new_tab(selected_card.detail_url, chrome_debug_url)
+                print(f"Opened Chrome target: {detail_target.get('url')}")
+
+                loaded_detail_target = wait_for_target_loaded(
+                    target_id=detail_target["id"],
+                    chrome_debug_url=chrome_debug_url,
+                    timeout_seconds=45,
+                )
+                print(
+                    f"Loaded Chrome target: "
+                    f"{loaded_detail_target.get('title')} | {loaded_detail_target.get('url')}"
+                )
+            else:
+                open_detail_prompt = board.open_detail_prompt.format(
+                    bookmark_name=board.bookmark_name,
+                    limit=args.limit,
+                    now_utc=now_utc,
+                    card_json=selected_card.model_dump_json(indent=2),
+                )
+                await run_json_step(agent, open_detail_prompt, "[3/4] Opening selected job detail")
 
             extract_prompt = f"""
 Current UTC time: {datetime.now(timezone.utc).isoformat()}

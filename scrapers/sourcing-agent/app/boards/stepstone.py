@@ -25,6 +25,12 @@ Rules:
 - If no real job card is visible after one page snapshot, return an empty cards array with a warning.
 - Return only JSON. No commentary.
 
+For the selected card, inspect the link under the job title if available.
+Set detail_url to the href of that title/job-card link.
+Prefer StepStone URLs containing "/stellenangebote--".
+Do not click the link in this step.
+If href is unavailable, set detail_url null and provide open_instruction.
+
 Return JSON exactly like:
 {{
   "source": "stepstone",
@@ -33,6 +39,7 @@ Return JSON exactly like:
       "ordinal": 1,
       "title": "exact visible title",
       "company": "exact visible company",
+      "detail_url": "see instructions above",
       "location_text": "exact visible location text or null",
       "evidence": "short exact visible text copied from the card",
       "open_instruction": "click the visible StepStone result card titled 'exact title'"
