@@ -2,7 +2,7 @@ from .common import BoardProcedure
 
 PROCEDURE = BoardProcedure(
     name="indeed",
-    bookmark_name="indeed:search",
+    bookmark_name="indeed:s",
     collect_cards_prompt="""
 Read only the visible Indeed job result cards in the left/results list.
 Ignore login prompts, alerts, profile nudges, subscription prompts, ads, and non-job UI.

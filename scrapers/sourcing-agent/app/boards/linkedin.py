@@ -2,7 +2,7 @@ from .common import BoardProcedure
 
 PROCEDURE = BoardProcedure(
     name="linkedin",
-    bookmark_name="linkedin:search",
+    bookmark_name="linkedin:s",
     collect_cards_prompt="""
 Read only the visible LinkedIn job result cards in the jobs list.
 Ignore profile nudges, premium prompts, alerts, recommendations, and non-job UI.

@@ -2,7 +2,7 @@ from .common import BoardProcedure
 
 PROCEDURE = BoardProcedure(
     name="stepstone",
-    bookmark_name="stepstone:search",
+    bookmark_name="stepstone:s",
     collect_cards_prompt="""
 You are already on a loaded StepStone search results page.
 
