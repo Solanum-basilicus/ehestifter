@@ -126,7 +126,12 @@ async def main() -> None:
             limit=args.limit,
             now_utc=now_utc,
         )
-        cards_data = await run_json_step(agent, collect_prompt, "[2/4] Reading visible job cards")
+        cards_data = await run_json_step(
+            agent,
+            collect_prompt,
+            "[2/4] Reading visible job cards",
+            request_limit=12,
+        )
         cards = JobCardList.model_validate(cards_data)
 
         if not cards.cards:
