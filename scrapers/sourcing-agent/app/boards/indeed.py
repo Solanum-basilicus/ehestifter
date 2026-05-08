@@ -3,11 +3,6 @@ from .common import BoardProcedure
 PROCEDURE = BoardProcedure(
     name="indeed",
     bookmark_name="indeed:search",
-    open_search_prompt="""
-Open the Chrome bookmark named "{bookmark_name}" in new browser tab.
-Wait until Indeed search results are visible.
-Return JSON: {{"ok": true, "warnings": []}}
-""",
     collect_cards_prompt="""
 Read only the visible Indeed job result cards in the left/results list.
 Ignore login prompts, alerts, profile nudges, subscription prompts, ads, and non-job UI.

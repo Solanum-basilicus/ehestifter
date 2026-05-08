@@ -3,11 +3,6 @@ from .common import BoardProcedure
 PROCEDURE = BoardProcedure(
     name="linkedin",
     bookmark_name="linkedin:search",
-    open_search_prompt="""
-Open the Chrome bookmark named "{bookmark_name}" in new browser tab.
-Wait until LinkedIn jobs search results are visible.
-Return JSON: {{"ok": true, "warnings": []}}
-""",
     collect_cards_prompt="""
 Read only the visible LinkedIn job result cards in the jobs list.
 Ignore profile nudges, premium prompts, alerts, recommendations, and non-job UI.
