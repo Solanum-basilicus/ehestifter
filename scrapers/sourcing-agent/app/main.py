@@ -12,9 +12,15 @@ from pydantic_ai.usage import UsageLimits
 from boards import BOARDS
 from models import JobCardList, RawCapture
 
-from chrome_control import find_bookmark_url, open_new_tab, wait_for_target_loaded, cdp_evaluate
+from chrome_control import (
+    find_bookmark_url,
+    open_new_tab,
+    wait_for_target_loaded,
+    cdp_evaluate,
+    close_target,
+)
 
-from boards.stepstone_extract import STEPSTONE_VISIBLE_CARDS_JS
+from boards.stepstone_extract import STEPSTONE_VISIBLE_CARDS_JS, STEPSTONE_DETAIL_TEXT_JS
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -127,11 +133,24 @@ async def main() -> None:
         if board.name == "stepstone":
             print(f"\n[{datetime.now(timezone.utc).isoformat()}] [2/4] Reading visible job cards deterministically")
 
-            cards_data = cdp_evaluate(
-                websocket_url=search_target["webSocketDebuggerUrl"],
-                expression=STEPSTONE_VISIBLE_CARDS_JS,
-                timeout_seconds=15,
-            )
+            cards_data = None
+            for attempt in range(1, 7):
+                cards_data = cdp_evaluate(
+                    websocket_url=search_target["webSocketDebuggerUrl"],
+                    expression=STEPSTONE_VISIBLE_CARDS_JS,
+                    timeout_seconds=15,
+                )
+
+                cards_data["cards"] = cards_data.get("cards", [])[: args.limit]
+
+                if cards_data.get("cards"):
+                    break
+
+                print(
+                    f"No StepStone job cards found. "
+                    f"Attempt {attempt}/6. You may manually fix the browser tab now."
+                )
+                await asyncio.sleep(10)
 
             print(json.dumps(cards_data, ensure_ascii=False, indent=2))
         else:
@@ -156,6 +175,9 @@ async def main() -> None:
         else:
             selected_card = cards.cards[0]
             print(f"Selected card: {selected_card.title} / {selected_card.company}")
+
+            detail_target_id = None
+            detail_websocket_url = None
 
             if selected_card.detail_url:
                 print(f"\n[{datetime.now(timezone.utc).isoformat()}] [3/4] Opening selected job detail")
@@ -182,7 +204,56 @@ async def main() -> None:
                 )
                 await run_json_step(agent, open_detail_prompt, "[3/4] Opening selected job detail")
 
-            extract_prompt = f"""
+            detail_target_id = loaded_detail_target["id"]
+            detail_websocket_url = loaded_detail_target["webSocketDebuggerUrl"]
+
+            if board.name == "stepstone":
+                print(f"\n[{datetime.now(timezone.utc).isoformat()}] [4/4] Extracting selected job detail text deterministically")
+
+                detail_payload = cdp_evaluate(
+                    websocket_url=detail_websocket_url,
+                    expression=STEPSTONE_DETAIL_TEXT_JS,
+                    timeout_seconds=15,
+                )
+
+                extract_prompt = f"""
+            Current UTC time: {datetime.now(timezone.utc).isoformat()}
+            Board: stepstone
+
+            You are given text extracted from one currently open StepStone job detail page.
+            Do not browse. Do not use tools. Use only this payload.
+
+            Payload:
+            {json.dumps(detail_payload, ensure_ascii=False)}
+
+            Return exactly one JSON object shaped as:
+            {{
+            "source": "stepstone",
+            "captured_at_utc": "current UTC time from this prompt",
+            "query": "StepStone detail page extraction",
+            "candidates": [
+                {{
+                "title": "exact job title",
+                "company": "exact company name or null",
+                "location_text": "exact location/workplace text or null",
+                "listing_url": "{detail_payload.get("url")}",
+                "origin_url": "{detail_payload.get("url")}",
+                "visible_description": "literal job description text, preserving headings and paragraph breaks",
+                "evidence": "{detail_payload.get("url")}"
+                }}
+            ],
+            "warnings": []
+            }}
+
+            Rules:
+            - visible_description must include the actual job content, not site navigation, recommendations, cookie text, or footer.
+            - Prefer text between the first application button area and the lower application/contact area.
+            - Keep section headers and line breaks.
+            - Do not summarize.
+            - Return JSON only.
+            """.strip()
+            else:
+                extract_prompt = f"""
 Current UTC time: {datetime.now(timezone.utc).isoformat()}
 Board: {board.name}
 
@@ -227,6 +298,9 @@ Return JSON exactly shaped as:
     print(f"\nWrote {output_path}")
     print(json.dumps(capture.model_dump(), ensure_ascii=False, indent=2))
 
+    if board.name == "stepstone" and detail_target_id:
+        print(f"\n[{datetime.now(timezone.utc).isoformat()}] [5/5] Closing selected job detail tab")
+        close_target(detail_target_id, chrome_debug_url)
 
 if __name__ == "__main__":
     asyncio.run(main())

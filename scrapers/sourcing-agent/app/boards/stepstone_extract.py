@@ -48,3 +48,22 @@ STEPSTONE_VISIBLE_CARDS_JS = r"""
   };
 })()
 """
+STEPSTONE_DETAIL_TEXT_JS = r"""
+(() => {
+  const clean = (s) => (s || "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+
+  const title =
+    document.querySelector('h1')?.innerText ||
+    document.title ||
+    null;
+
+  const bodyText = clean(document.body.innerText);
+
+  return {
+    url: location.href,
+    title: clean(title),
+    page_title: document.title,
+    text: bodyText
+  };
+})()
+"""

@@ -38,6 +38,9 @@ def _http_json(url: str, method: str = "GET") -> dict:
     with urllib.request.urlopen(req, timeout=10) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
+def close_target(target_id: str, chrome_debug_url: str) -> dict:
+    endpoint = f"{chrome_debug_url.rstrip('/')}/json/close/{target_id}"
+    return _http_json(endpoint)
 
 def _walk_bookmarks(node: dict):
     if node.get("type") == "url":
