@@ -12,7 +12,7 @@ from helpers.core_client import (
     complete_run_failed,
 )
 from helpers.errors import CoreHttpError
-from .common import ResponseTuple, json_error, json_result, text_result
+from .common import ResponseTuple, json_error, json_result, text_result, require_gateway_key
 
 
 def _parse_iso(s: str) -> datetime:
@@ -37,6 +37,10 @@ def handle_work_complete(
     headers: Mapping[str, Any] | None = None,
 ) -> ResponseTuple:
     try:
+        auth_error = require_gateway_key(headers)
+        if auth_error:
+            return auth_error
+
         if not isinstance(body, dict):
             return text_result("Body must be object", 400)
 

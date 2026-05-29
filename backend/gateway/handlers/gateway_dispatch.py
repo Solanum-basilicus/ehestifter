@@ -4,7 +4,13 @@ import logging
 from typing import Any, Mapping
 
 from helpers.sb_client import send_dispatch_message
-from .common import ResponseTuple, correlation_id, json_result, text_result
+from .common import (
+    ResponseTuple,
+    correlation_id,
+    json_result,
+    text_result,
+    require_gateway_key,
+)
 
 
 def handle_gateway_dispatch(
@@ -13,6 +19,11 @@ def handle_gateway_dispatch(
 ) -> ResponseTuple:
     corr = correlation_id(headers)
     response_headers = {"x-correlation-id": corr}
+
+    auth_error = require_gateway_key(headers)
+    if auth_error:
+        body, status_code, auth_headers = auth_error
+        return body, status_code, {**response_headers, **auth_headers}
 
     header_keys = {str(k).lower() for k in (headers or {}).keys()}
     logging.info(

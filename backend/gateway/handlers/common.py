@@ -1,11 +1,45 @@
 # handlers/common.py
 
 import uuid
+import os
 from typing import Any, Mapping
 
 
 ResponseTuple = tuple[Any, int, dict[str, str]]
 
+def get_header(headers: Mapping[str, Any] | None, name: str) -> str | None:
+    if not headers:
+        return None
+
+    wanted = name.lower()
+    for key, value in headers.items():
+        if str(key).lower() == wanted:
+            return str(value)
+
+    return None
+
+
+def require_gateway_key(headers: Mapping[str, Any] | None) -> ResponseTuple | None:
+    """
+    Shared service-level auth for both Azure wrapper and Cloud Run wrapper.
+
+    This intentionally preserves the current Ehestifter x-functions-key trust model.
+    """
+    expected = os.getenv("GATEWAY_FUNCTION_KEY")
+
+    if not expected:
+        return json_error(
+            "GATEWAY_MISCONFIGURED",
+            500,
+            "Missing env var: GATEWAY_FUNCTION_KEY",
+        )
+
+    actual = get_header(headers, "x-functions-key")
+
+    if actual != expected:
+        return json_error("UNAUTHORIZED", 401)
+
+    return None
 
 def correlation_id(headers: Mapping[str, Any] | None) -> str:
     """

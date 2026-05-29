@@ -5,13 +5,17 @@ from typing import Any, Mapping
 from helpers.core_client import get_run, get_latest_id, lease_run, get_input
 from helpers.errors import CoreHttpError
 from helpers.lease_logic import compute_lease, is_latest
-from .common import ResponseTuple, json_error, json_result, text_result
+from .common import ResponseTuple, json_error, json_result, text_result, require_gateway_key
 
 
 def handle_work_lease(
     body: Any,
     headers: Mapping[str, Any] | None = None,
 ) -> ResponseTuple:
+    auth_error = require_gateway_key(headers)
+    if auth_error:
+        return auth_error
+
     if not isinstance(body, dict) or not body.get("runId"):
         return text_result("Missing runId", 400)
 
