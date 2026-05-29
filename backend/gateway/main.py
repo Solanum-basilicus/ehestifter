@@ -5,6 +5,7 @@ import os
 from typing import Any
 
 from flask import Flask, Response, jsonify, request
+from handlers.common import require_gateway_key
 
 
 
@@ -17,6 +18,11 @@ logging.getLogger("azure").setLevel(logging.WARNING)
 logging.getLogger("uamqp").setLevel(logging.WARNING)
 logging.getLogger("azure.servicebus").setLevel(logging.WARNING)
 
+def _require_cloudrun_key():
+    auth_error = require_gateway_key(request.headers)
+    if auth_error:
+        return _flask_response(auth_error)
+    return None
 
 def _flask_response(result) -> Response:
     body, status_code, headers = result
@@ -47,6 +53,11 @@ def create_app() -> Flask:
 
     @app.post("/gateway/dispatch")
     def gateway_dispatch():
+        #AUTH
+        auth_error = _require_cloudrun_key()
+        if auth_error:
+            return auth_error        
+
         body: Any = request.get_json(silent=True)
         if body is None:
             return Response("Invalid JSON body", status=400, mimetype="text/plain")
@@ -60,6 +71,11 @@ def create_app() -> Flask:
 
     @app.post("/work/lease")
     def work_lease():
+        #AUTH
+        auth_error = _require_cloudrun_key()
+        if auth_error:
+            return auth_error        
+
         body: Any = request.get_json(silent=True)
         if body is None:
             return Response("Invalid JSON body", status=400, mimetype="text/plain")
@@ -73,6 +89,11 @@ def create_app() -> Flask:
 
     @app.post("/work/complete")
     def work_complete():
+        #AUTH
+        auth_error = _require_cloudrun_key()
+        if auth_error:
+            return auth_error        
+
         body: Any = request.get_json(silent=True)
         if body is None:
             return Response("Invalid JSON body", status=400, mimetype="text/plain")
