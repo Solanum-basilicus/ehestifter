@@ -7,7 +7,10 @@ from typing import Any
 from flask import Flask, Response, jsonify, request
 from handlers.common import require_gateway_key
 
-
+##### For local testing uncomment those
+#from dotenv import load_dotenv
+#load_dotenv()
+#####
 
 from handlers.gateway_dispatch import handle_gateway_dispatch
 from handlers.work_lease import handle_work_lease

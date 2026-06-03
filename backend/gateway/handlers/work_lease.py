@@ -1,7 +1,7 @@
 # handlers/work_lease.py
 
 from typing import Any, Mapping
-
+import logging
 from helpers.core_client import get_run, get_latest_id, lease_run, get_input
 from helpers.errors import CoreHttpError
 from helpers.lease_logic import compute_lease, is_latest
@@ -21,6 +21,12 @@ def handle_work_lease(
     try:
         run = get_run(run_id)
     except CoreHttpError as e:
+        logging.warning(
+            "work_lease get_run failed runId=%s status=%s body=%s",
+            run_id,
+            e.status_code,
+            e.body,
+        )
         if e.status_code == 404:
             return text_result("Not found", 404)
         return json_error("CORE_ERROR", 502, e.body)
