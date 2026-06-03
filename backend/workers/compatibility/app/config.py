@@ -11,6 +11,37 @@ def _req_env(name: str) -> str:
         raise RuntimeError(f"Missing env var: {name}")
     return v
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    v = os.getenv(name)
+    if v is None:
+        return default
+
+    return v.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _load_gateway_config() -> tuple[str, str]:
+    """
+    Select the Gateway endpoint/key pair used by the worker.
+
+    Normal mode uses the primary Gateway, currently Azure Function App.
+    Alternative mode is intended for experiments such as GCP Cloud Run Gateway.
+
+    This is an explicit switch, not fallback logic. If alternative mode is
+    enabled, missing alternative config is a startup error.
+    """
+    use_alternative = _env_flag("USE_GATEWAY_ALTERNATIVE", default=False)
+
+    if use_alternative:
+        return (
+            _req_env("GATEWAY_ALTERNATIVE_BASE_URL").rstrip("/"),
+            _req_env("GATEWAY_ALTERNATIVE_API_KEY"),
+        )
+
+    return (
+        _req_env("GATEWAY_BASE_URL").rstrip("/"),
+        _req_env("GATEWAY_API_KEY"),
+    )
+
 
 def _opt_int(v: Any) -> Optional[int]:
     if v is None:
@@ -69,6 +100,7 @@ def load_settings(config_path: str = "/app/config.yaml") -> Settings:
         cfg: dict[str, Any] = yaml.safe_load(f) or {}
 
     c = (cfg.get("compatibility") or {})
+    gateway_base_url, gateway_api_key = _load_gateway_config()
 
     # Support both correct and typo key for presence penalty
     presence_penalty_val = c.get("presence_penalty")
@@ -79,9 +111,9 @@ def load_settings(config_path: str = "/app/config.yaml") -> Settings:
         enricher_type=os.getenv("ENRICHER_TYPE", "compatibility.v1"),
         sb_conn_str=_req_env("SERVICEBUS_CONNECTION_STRING"),
         sb_queue=_req_env("SERVICEBUS_QUEUE_NAME"),
-        gateway_base_url=_req_env("GATEWAY_BASE_URL").rstrip("/"),
-        gateway_api_key=_req_env("GATEWAY_API_KEY"),
-        llama_cpp_base_url=(os.getenv("LLAMA_CPP_BASE_URL")).rstrip("/"),
+        gateway_base_url=gateway_base_url,
+        gateway_api_key=gateway_api_key,
+        llama_cpp_base_url=_req_env("LLAMA_CPP_BASE_URL").rstrip("/"),
         poll_wait_seconds=int(os.getenv("WORKER_POLL_WAIT_SECONDS", "10")),
         backoff_seconds=int(os.getenv("WORKER_BACKOFF_SECONDS", "5")),
         lease_ttl_seconds=int(os.getenv("LEASE_TTL_SECONDS", "3600")),

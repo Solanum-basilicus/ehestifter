@@ -81,6 +81,7 @@ def main() -> None:
         "Starting worker enricherType=%s queue=%s gateway=%s llama_cpp=%s model=%s",
         s.enricher_type, s.sb_queue, s.gateway_base_url, s.llama_cpp_base_url, s.model
     )
+    log.info("Gateway selected: %s", settings.gateway_base_url)
     log.info(
         "LLM effective settings temperature=%s top_p=%s top_k=%s min_p=%s presence_penalty=%s repetition_penalty=%s max_tokens=%s",
         s.temperature,
