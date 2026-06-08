@@ -1,0 +1,79 @@
+name: Deploy Gateway to GCP
+
+on:
+  #push:
+  #  branches:
+  #    - main
+  #  paths:
+  #    - "backend/gateway/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PROJECT_ID: ehestifter-gcp
+  REGION: europe-west3
+  SERVICE_NAME: ehestifter-gateway
+  ARTIFACT_REGISTRY_HOST: europe-west3-docker.pkg.dev
+  ARTIFACT_REGISTRY_REPO: ehestifter
+  IMAGE_NAME: ehestifter-gateway
+
+jobs:
+  deploy:
+    name: Build and deploy Gateway
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/939193626130/locations/global/workloadIdentityPools/github-actions/providers/github
+          service_account: github-gateway-deployer@ehestifter-gcp.iam.gserviceaccount.com
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker "${ARTIFACT_REGISTRY_HOST}" --quiet
+
+      - name: Build image
+        run: |
+          IMAGE_URI="${ARTIFACT_REGISTRY_HOST}/${PROJECT_ID}/${ARTIFACT_REGISTRY_REPO}/${IMAGE_NAME}:${GITHUB_SHA}"
+          docker build \
+            -t "${IMAGE_URI}" \
+            -f backend/gateway/Dockerfile.cloudrun \
+            backend/gateway
+          echo "IMAGE_URI=${IMAGE_URI}" >> "$GITHUB_ENV"
+
+      - name: Push image
+        run: |
+          docker push "${IMAGE_URI}"
+
+      - name: Deploy to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v3
+        with:
+          service: ${{ env.SERVICE_NAME }}
+          region: ${{ env.REGION }}
+          image: ${{ env.IMAGE_URI }}
+
+      - name: Show deployed URL
+        run: |
+          gcloud run services describe "${SERVICE_NAME}" \
+            --project "${PROJECT_ID}" \
+            --region "${REGION}" \
+            --format='value(status.url)'
+
+      - name: Smoke test
+        run: |
+          SERVICE_URL="$(gcloud run services describe "${SERVICE_NAME}" \
+            --project "${PROJECT_ID}" \
+            --region "${REGION}" \
+            --format='value(status.url)')"
+
+          curl -fsS "${SERVICE_URL}/ping"

@@ -1,4 +1,4 @@
-name: Deploy Gateway Function via Oryx (Python v1-decorators)
+name: Deploy Gateway Function to Azure via Oryx (Python v1-decorators)
 
 on:
   push:
