@@ -1,11 +1,11 @@
 name: Deploy Gateway to GCP
 
 on:
-  #push:
-  #  branches:
-  #    - main
-  #  paths:
-  #    - "backend/gateway/**"
+  push:
+    branches:
+      - main
+    paths:
+      - "backend/gateway/**"
   workflow_dispatch:
 
 permissions:
