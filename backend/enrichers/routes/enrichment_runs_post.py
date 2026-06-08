@@ -6,7 +6,7 @@ import azure.functions as func
 from helpers.enrichment_snapshot import write_input_snapshot
 from helpers.runs_create import create_run_db, mark_queued, dispatch_via_gateway
 from domain.runs_service import RunsService  # keep for get_run normalization
-from helpers.http_client import get_job_snapshot, get_user_cv_snapshot  # NEW
+from helpers.snapshot_clients import get_job_snapshot, get_user_cv_snapshot
 
 def register(app: func.FunctionApp):
     svc = RunsService()

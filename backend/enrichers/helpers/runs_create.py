@@ -15,6 +15,56 @@ def _utcnow() -> datetime:
 def _subject_key(job_offering_id: str, user_id: str) -> str:
     return f"{job_offering_id}:{user_id}"
 
+# --- Gateway config selection ---
+
+def _env_truthy(name: str, default: str = "0") -> bool:
+    value = (os.getenv(name, default) or "").strip().lower()
+    return value in ("1", "true", "yes", "y", "on")
+
+
+def _require_gateway_url(name: str) -> str:
+    value = (os.getenv(name) or "").strip().rstrip("/")
+    if not value:
+        raise Exception(f"Missing env: {name}")
+    if not value.startswith(("http://", "https://")):
+        raise Exception(f"Invalid env: {name} must start with http:// or https://")
+    return value
+
+
+def _require_gateway_key(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise Exception(f"Missing env: {name}")
+    return value
+
+
+def _selected_gateway_config() -> tuple[str, str, str]:
+    """
+    Select exactly one Gateway configuration.
+
+    USE_GATEWAY_ALTERNATIVE=1 -> GCP Cloud Run Gateway
+    anything else             -> primary Azure Gateway
+
+    No automatic fallback. Dispatch may be non-idempotent from the caller's
+    perspective if the Gateway enqueued the Service Bus message but the HTTP
+    response was lost.
+    """
+    use_alt = _env_truthy("USE_GATEWAY_ALTERNATIVE")
+
+    if use_alt:
+        return (
+            "alternative",
+            _require_gateway_url("GATEWAY_ALTERNATIVE_API_BASE_URL"),
+            _require_gateway_key("GATEWAY_ALTERNATIVE_FUNCTION_KEY"),
+        )
+
+    return (
+        "primary",
+        _require_gateway_url("GATEWAY_API_BASE_URL"),
+        _require_gateway_key("GATEWAY_FUNCTION_KEY"),
+    )
+
+
 def create_run_db(job_offering_id: str, user_id: str, enricher_type: str) -> Dict[str, Any]:
     """
     DB-only creation:
@@ -139,18 +189,17 @@ def mark_failed(run_id: str, error_code: str, error_message: str) -> None:
 
 def dispatch_via_gateway(run: Dict[str, Any], input_snapshot_blob_path: str, corr: Optional[str] = None) -> None:
     """
-    Calls Worker Gateway to enqueue a SB message.
+    Calls selected Worker Gateway to enqueue a Service Bus message.
     Raises on any non-2xx response.
+
+    Selection is explicit:
+      USE_GATEWAY_ALTERNATIVE=0 -> primary Gateway
+      USE_GATEWAY_ALTERNATIVE=1 -> alternative Gateway
+
+    There is intentionally no automatic fallback.
     """
-    base_url = os.getenv("GATEWAY_API_BASE_URL")
-    api_key  = os.getenv("GATEWAY_FUNCTION_KEY")
-
-    if not base_url:
-        raise Exception("Missing env: GATEWAY_API_BASE_URL")
-    if not api_key:
-        raise Exception("Missing env: GATEWAY_FUNCTION_KEY")
-
-    url = f"{base_url.rstrip('/')}/gateway/dispatch"
+    gateway_kind, base_url, api_key = _selected_gateway_config()
+    url = f"{base_url}/gateway/dispatch"
 
     payload = {
         "runId": run["runId"],
@@ -169,10 +218,20 @@ def dispatch_via_gateway(run: Dict[str, Any], input_snapshot_blob_path: str, cor
     if corr:
         headers["x-correlation-id"] = corr
 
-    logging.info("dispatch_via_gateway url=%s runId=%s corr=%s", url, run["runId"], corr)
+    logging.info(
+        "dispatch_via_gateway selected_gateway=%s base_url=%s path=/gateway/dispatch runId=%s corr=%s",
+        gateway_kind,
+        base_url,
+        run["runId"],
+        corr,
+    )
+
     r = requests.post(url, json=payload, headers=headers, timeout=10)
     if r.status_code >= 300:
-        raise Exception(f"Gateway dispatch failed {r.status_code}: {r.text}")
+        raise Exception(
+            f"Gateway dispatch failed selected_gateway={gateway_kind} "
+            f"base_url={base_url} status={r.status_code}: {r.text}"
+        )
 
 
 def list_runs_by_status(status: str, limit: int = 100, offset: int = 0) -> tuple[int, list[Dict[str, Any]]]:
