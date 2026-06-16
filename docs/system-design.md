@@ -57,6 +57,7 @@ Current implemented system areas:
 - Jobs domain,
 - Telegram bot,
 - enrichment subsystem for compatibility scoring,
+- Gateway running on GCP Cloud Run as the preferred worker/enrichment Gateway path, with Azure Functions Gateway retained as explicit rollback,
 - local inference stack for compatibility worker.
 
 ### 2.1 High-level goals
@@ -85,12 +86,20 @@ flowchart TD
 
     Enrichers -->|x-functions-key| Jobs
     Enrichers -->|x-functions-key| Users
-    Enrichers -->|x-functions-key| Gateway[Gateway Function App\nehestifter-gateway]
 
-    Gateway --> SB[Azure Service Bus Namespace\nehestifter]
-    Worker[Compatibility Worker\nlocal Docker container] --> Gateway
+    Enrichers -->|selected Gateway config\nUSE_GATEWAY_ALTERNATIVE| GatewaySelector[Gateway endpoint selection]
+    Worker[Compatibility Worker\nlocal Docker container] -->|selected Gateway config\nUSE_GATEWAY_ALTERNATIVE| GatewaySelector
+
+    GatewaySelector --> GcpGateway[Gateway\nGCP Cloud Run: ehestifter-gateway\npreferred/default]
+    GatewaySelector -. explicit rollback .-> AzureGateway[Gateway\nAzure Function App: ehestifter-gateway]
+
+    GcpGateway --> SB[Azure Service Bus Namespace\nehestifter]
+    AzureGateway --> SB
     Worker --> Llama[llama.cpp server\nlocal Docker container]
     Worker --> SB
+
+    GcpGateway -->|x-functions-key| Enrichers
+    AzureGateway -->|x-functions-key| Enrichers
 
     Jobs --> SQL[(Azure SQL Database)]
     Users --> SQL
@@ -110,28 +119,30 @@ flowchart TD
 | `backend/jobs` | Jobs domain API and job-related storage ownership | Azure Function App `ehestifter-jobs` |
 | `backend/users` | Users domain API and user-related storage ownership | Azure Function App `ehestifter-users` |
 | `backend/enrichers` | Enrichment Core, run lifecycle, snapshot building, projection dispatch | Azure Function App `ehestifter-enrichers` |
-| `backend/gateway` | Worker-facing APIs and Service Bus bridge | Azure Function App `ehestifter-gateway` |
+| `backend/gateway` | Worker-facing APIs and Service Bus bridge | GCP Cloud Run service `ehestifter-gateway` is preferred/default; Azure Function App `ehestifter-gateway` remains deployed as explicit rollback |
 | `workers/compatibility` | Polls work, builds prompts, performs compatibility inference | Local Docker container `compatibility-worker` |
 | `infrastructure/docker/llama.cpp` | Local inference server | Local Docker container `llama-server` |
 | Azure Service Bus | Queue transport for enrichment requests | Azure namespace `ehestifter` |
 | Azure SQL | Main relational storage | Azure SQL server `eperidbserver` |
 | Azure Blob Storage | CV and enrichment snapshot blob storage | Storage account `ehestifterdata` |
 | Azure AD B2C / Entra ID | Browser auth | Azure-managed |
-| GitHub Actions | CI/CD for Azure-hosted services | GitHub-hosted |
+| GitHub Actions | CI/CD for Azure-hosted services and GCP Gateway Cloud Run deployment | GitHub-hosted; GCP deployment uses Workload Identity Federation |
 
 ### 2.4 Environment model
 
-The system is effectively single-environment.
+The system is effectively single-environment, even though the Gateway now has both Azure and GCP hosting options.
 
 Constraints:
 - one shared hobby environment,
-- one resource group in one subscription,
-- no realistic support for multiple Azure environments on current budget/free tiers.
+- one main Azure resource group in one subscription,
+- one GCP project used for the Gateway experiment and current preferred Gateway runtime,
+- no realistic support for multiple full environments on current budget/free tiers.
 
 Implication for agents:
 - changes should be incremental,
 - migrations and config changes should be conservative,
-- avoid large refactors that assume a staging environment exists.
+- avoid large refactors that assume a staging environment exists,
+- do not mistake Azure Gateway and GCP Gateway for staging/production environments; they are explicit runtime alternatives for the same single system.
 
 ---
 
@@ -145,17 +156,19 @@ Implication for agents:
 4. **Preserve operability without advanced AI providers.** The owner should be able to operate and improve the system even without frontier hosted inference.
 5. **Assume cold starts.** Retries, timeouts, and UI blocking/unblocking patterns are part of the architecture, not incidental implementation detail.
 6. **Prefer consistency of shape over novelty.** New functions and routes should resemble existing ones.
+7. **Select Gateway explicitly.** Gateway routing between Azure and GCP is controlled by environment variables; there is no automatic fallback or dual-dispatch.
 
 ### 3.2 Non-goals
 
 These are not current goals and agents should not optimize for them unless explicitly asked:
-- multi-environment Azure architecture,
+- multi-environment Azure or multi-cloud environment architecture,
 - enterprise-grade IAM inside every function endpoint,
 - event-sourced redesign of domains,
 - rich frontend SPA framework migration,
 - direct browser access to domain functions,
 - scrapers productionization,
-- analytics / Synapse / Parquet pipeline.
+- analytics / Synapse / Parquet pipeline,
+- replacing Azure Service Bus with GCP Pub/Sub as part of the current Gateway hosting setup.
 
 ---
 
@@ -175,6 +188,12 @@ This is the practical trust boundary in the current system:
 - domain function apps do not perform their own user-facing auth validation inside endpoints,
 - access is controlled by being behind function/web app surfaces that require platform-level credentials,
 - web users should not call Jobs/Users/Enrichers/Gateway directly.
+
+For GCP Cloud Run Gateway:
+- Cloud Run hosting does not provide Azure Functions platform-managed function-key validation,
+- the Flask/Cloud Run wrapper emulates the existing service-level auth shape by checking `x-functions-key`,
+- protected worker/Gateway routes must reject missing or invalid keys before invoking shared handlers,
+- public reachability at Cloud Run level is acceptable only because protected routes enforce the same application-level key check.
 
 ### 4.3 Canonical user identity
 
@@ -201,7 +220,8 @@ Compatibility worker and llama.cpp do not expose user-reachable public interface
 Current assumptions:
 - compatibility worker is trusted local infrastructure,
 - llama.cpp is deployed in a relatively safe environment and currently unauthenticated,
-- worker accesses Gateway and Service Bus, not domain DBs.
+- worker accesses the selected Gateway and Service Bus, not domain DBs,
+- worker uses explicit Gateway configuration to choose Azure Gateway or GCP Gateway; it must not perform automatic fallback.
 
 ---
 
@@ -292,12 +312,20 @@ Owns:
 - Service Bus integration,
 - worker-facing HTTPS APIs,
 - worker lease issuance and completion forwarding,
-- queue bridging for enrichment work.
+- queue bridging for enrichment work,
+- provider-neutral Gateway route behavior shared by hosting wrappers.
+
+Current hosting shape:
+- GCP Cloud Run service `ehestifter-gateway` is the preferred/default Gateway endpoint,
+- Azure Function App `ehestifter-gateway` remains deployed and usable as explicit rollback,
+- Azure Functions wrapper and Flask/Gunicorn Cloud Run wrapper should stay thin,
+- route behavior should live in shared provider-neutral handlers and existing helpers where practical.
 
 Does not own:
 - enrichment run semantics,
 - job or user data,
-- downstream projection logic.
+- downstream projection logic,
+- automatic routing or fallback decisions between Azure and GCP.
 
 ### 5.6 Compatibility worker (`workers/compatibility`)
 
@@ -313,7 +341,8 @@ Does not own:
 - direct SQL access,
 - direct Jobs or Users API usage,
 - projection storage,
-- enrichment run lifecycle decisions.
+- enrichment run lifecycle decisions,
+- Gateway fallback or duplicate-dispatch behavior.
 
 ### 5.7 Telegram bot (`backend/telegrambot`)
 
@@ -541,6 +570,7 @@ Agents should preserve these unless explicitly asked to change the model.
 - Worker must not fetch Jobs or Users data directly.
 - Enrichment Core does not care how Jobs stores projections.
 - Gateway and worker must not become owners of domain data.
+- Gateway selection must be explicit; no automatic fallback between Azure Gateway and GCP Gateway.
 
 ### 8.4 Cross-system invariants
 
@@ -924,7 +954,13 @@ Does not:
 Owns:
 - Service Bus bridge,
 - worker lease and completion APIs,
-- queue dispatch path.
+- queue dispatch path,
+- shared provider-neutral route behavior used by both Azure Functions and Cloud Run wrappers.
+
+Current deployment:
+- preferred/default runtime: GCP Cloud Run service `ehestifter-gateway`,
+- rollback runtime: Azure Function App `ehestifter-gateway`,
+- both runtimes use the same route behavior where practical.
 
 #### Compatibility worker (`workers/compatibility`)
 
@@ -1036,6 +1072,204 @@ Currently relevant scheduled/background processes:
 
 No other scheduled system jobs should be assumed.
 
+### 13.8 Gateway hosting and dispatch selection
+
+Gateway is currently hosted in two places:
+
+| Runtime | Role |
+|---|---|
+| GCP Cloud Run service `ehestifter-gateway` | Preferred/default Gateway endpoint |
+| Azure Function App `ehestifter-gateway` | Explicit rollback endpoint |
+
+The GCP Cloud Run Gateway was selected because Gateway has a narrow boundary:
+- worker-facing HTTP APIs,
+- Service Bus dispatch bridge,
+- worker lease and completion forwarding,
+- no ownership of Jobs, Users, or Enrichment domain data.
+
+Gateway route behavior should remain shared between hosting wrappers:
+
+```text
+Azure Functions wrapper
+  -> provider-neutral handlers
+  -> existing helpers
+
+Flask / Cloud Run wrapper
+  -> provider-neutral handlers
+  -> existing helpers
+```
+
+GCP Cloud Run Gateway emulates the Azure Functions `x-functions-key` auth shape in the Flask/Cloud Run wrapper before invoking shared handlers.
+
+Enrichers Core and compatibility worker both select the Gateway explicitly through environment variables. There is no automatic fallback.
+
+Reason:
+- dispatch operations can be ambiguous,
+- a timeout may mean the Service Bus message was enqueued but the HTTP response was lost,
+- retrying through a second Gateway could create duplicate dispatch messages and confusing diagnostics.
+
+Worker Gateway configuration shape:
+
+```env
+# Gateway - primary, normally Azure Function App
+GATEWAY_BASE_URL="https://YOUR-GATEWAY.azurewebsites.net"
+GATEWAY_API_KEY="YOUR_AZURE_GATEWAY_KEY"
+
+# Gateway - alternative, currently GCP Cloud Run Gateway.
+# This is currently the preferred/default production Gateway path.
+# Keep USE_GATEWAY_ALTERNATIVE=1 unless deliberately rolling back to Azure Gateway.
+USE_GATEWAY_ALTERNATIVE="1"
+GATEWAY_ALTERNATIVE_BASE_URL="https://YOUR-GCP-GATEWAY.run.app"
+GATEWAY_ALTERNATIVE_API_KEY="YOUR_GCP_GATEWAY_KEY"
+```
+
+Enrichers Core Gateway dispatch configuration shape:
+
+```env
+# Gateway - primary, normally Azure Function App
+GATEWAY_API_BASE_URL="https://YOUR-AZURE-GATEWAY.azurewebsites.net"
+GATEWAY_FUNCTION_KEY="YOUR_AZURE_GATEWAY_KEY"
+
+# Gateway - alternative, currently GCP Cloud Run Gateway.
+# This is currently the preferred/default production Gateway path.
+# Keep USE_GATEWAY_ALTERNATIVE=1 unless deliberately rolling back to Azure Gateway.
+USE_GATEWAY_ALTERNATIVE="1"
+GATEWAY_ALTERNATIVE_API_BASE_URL="https://YOUR-GCP-GATEWAY.run.app"
+GATEWAY_ALTERNATIVE_FUNCTION_KEY="YOUR_GCP_GATEWAY_KEY"
+```
+
+Behavior:
+
+```text
+USE_GATEWAY_ALTERNATIVE=0 -> use Azure Gateway
+USE_GATEWAY_ALTERNATIVE=1 -> use GCP Cloud Run Gateway
+```
+
+Rules:
+- select exactly one Gateway URL/key pair,
+- no automatic fallback,
+- no dual dispatch,
+- log selected Gateway base URL at dispatch time,
+- never log function keys,
+- keep Azure Gateway available as rollback.
+
+### 13.9 GCP Gateway runtime configuration
+
+Current GCP deployment identity:
+
+```text
+project: ehestifter-gcp
+region: europe-west3
+service: ehestifter-gateway
+artifact registry image path: europe-west3-docker.pkg.dev/ehestifter-gcp/ehestifter/ehestifter-gateway:<tag>
+```
+
+The exact current URL, image tag, and revision should be inspected from GCP rather than hardcoded into this document:
+
+```bash
+gcloud run services describe "$SERVICE_NAME" \
+  --project "$PROJECT_ID" \
+  --region "$REGION" \
+  --format='yaml(
+    status.url,
+    status.latestReadyRevisionName,
+    status.latestCreatedRevisionName,
+    status.traffic,
+    spec.template.spec.containers[0].image,
+    spec.template.spec.serviceAccountName
+  )'
+```
+
+Runtime configuration expected on Cloud Run:
+
+```text
+EHESTIFTER_ENRICHERS_BASE_URL=https://ehestifter-enrichers.azurewebsites.net/api
+GATEWAY_SB_QUEUE_NAME=enrichment-requests
+GATEWAY_FUNCTION_KEY=<Secret Manager: gateway-gcp-function-key>
+EHESTIFTER_ENRICHERS_FUNCTION_KEY=<Secret Manager: gateway-gcp-enrichers-function-key>
+GATEWAY_SB_CONNECTION_STRING=<Secret Manager: gateway-gcp-sb-connection-string>
+```
+
+Important runtime findings:
+- `EHESTIFTER_ENRICHERS_BASE_URL` must include `/api`,
+- Gateway code expects `GATEWAY_SB_CONNECTION_STRING`, not `SB_CONNECTION_STRING`,
+- Gateway code expects `GATEWAY_SB_QUEUE_NAME`, not `SB_QUEUE_NAME`,
+- `GATEWAY_FUNCTION_KEY` is used by the Flask/Cloud Run wrapper to emulate Azure-style function-key auth,
+- Cloud Run uses a dedicated runtime service account.
+
+Operational posture:
+- Cloud Run uses conservative hobby-budget settings,
+- current intended shape is `min instances: 0`, `max instances: 2`, `concurrency: 8`, `timeout: 120s`,
+- verify actual values in Cloud Run before relying on them during operations.
+
+### 13.10 Gateway deployment automation
+
+GCP Gateway deployment is automated from GitHub Actions.
+
+Current intended deployment flow:
+
+```text
+push/workflow_dispatch in GitHub
+  -> GitHub Actions
+  -> authenticate to GCP through Workload Identity Federation
+  -> build Gateway container
+  -> push image to Artifact Registry
+  -> deploy image to Cloud Run service ehestifter-gateway
+  -> smoke test /ping
+```
+
+Design rules:
+- do not store long-lived GCP service account JSON keys in GitHub,
+- use GitHub OIDC + GCP Workload Identity Federation,
+- deploy with a dedicated GCP deployer service account,
+- allow the deployer to act as the dedicated Cloud Run runtime service account when required,
+- tag images with the GitHub commit SHA,
+- keep runtime secrets and environment variables in GCP Cloud Run / Secret Manager rather than duplicating them into GitHub Actions.
+
+Recommended workflow triggers:
+- `workflow_dispatch` for manual deploy/redeploy,
+- `push` to main with path filter for `backend/gateway/**` once automation is trusted.
+
+GCP-side validation after deploy:
+- latest created revision equals latest ready revision,
+- 100% traffic points to the intended revision,
+- deployed image tag equals GitHub commit SHA,
+- Cloud Run service account is the dedicated runtime service account,
+- runtime environment variables and Secret Manager references remain present,
+- Artifact Registry contains the SHA-tagged image,
+- Cloud Run logs show `/ping` returning `pong`,
+- audit logs show the GitHub deployer service account as deploy principal.
+
+### 13.11 Gateway diagnostics
+
+Gateway upstream logging for Enrichers Core calls should include enough context to diagnose bad upstream configuration without exposing secrets.
+
+When Enrichers Core does not cooperate, Gateway should log:
+- method,
+- path,
+- configured Enrichers Core base URL,
+- upstream status code,
+- response body snippet,
+- transport-level exception type when applicable.
+
+This was added because an incorrect `EHESTIFTER_ENRICHERS_BASE_URL` can otherwise surface to the worker as an unhelpful `404 Not found`, without making a missing `/api` suffix obvious.
+
+Service Bus dispatch logging should continue to include useful start/success/failure diagnostics.
+
+### 13.12 Gateway known quirks
+
+`/healthz` is not currently treated as a blocking validation endpoint.
+
+Validated Gateway endpoints are:
+
+```text
+GET  /ping
+POST /work/lease
+POST /gateway/dispatch
+```
+
+`/ping` and protected Gateway routes are sufficient operational smoke tests for now. `/healthz` can be fixed or removed later.
+
 ---
 
 ## 14. Main end-to-end flows
@@ -1095,12 +1329,12 @@ No other scheduled system jobs should be assumed.
 1. A compatibility run is requested.
 2. Enrichment Core creates run and fetches job + CV snapshots.
 3. Enrichment Core writes self-contained snapshot blob.
-4. Enrichment Core asks Gateway to dispatch the run.
+4. Enrichment Core asks the selected Gateway to dispatch the run. Current default is GCP Cloud Run Gateway when `USE_GATEWAY_ALTERNATIVE=1`.
 5. Gateway enqueues work in Service Bus.
 6. Compatibility worker consumes message, leases work through Gateway, receives input payload.
 7. Worker builds prompt and calls local llama.cpp.
 8. Worker normalizes result into `score` and `summary`.
-9. Worker sends completion to Gateway.
+9. Worker sends completion to the selected Gateway. Current default is GCP Cloud Run Gateway when `USE_GATEWAY_ALTERNATIVE=1`.
 10. Gateway forwards completion to Enrichment Core.
 11. Enrichment Core stores terminal result.
 12. Enrichment Core dispatches compatibility projection to Jobs.
@@ -1189,7 +1423,9 @@ Current convention is imperfect and somewhat inconsistent across services. Agent
 - avoid introducing new env vars without a good reason,
 - avoid duplicating existing env vars under new names,
 - do not move static service settings into DB rows,
-- prefer matching existing config style within a service.
+- prefer matching existing config style within a service,
+- preserve explicit Gateway switch semantics,
+- do not introduce automatic fallback between Azure Gateway and GCP Gateway.
 
 ### 17.3 Operational location
 
@@ -1198,6 +1434,11 @@ For Azure-hosted apps/functions, environment values are typically managed in:
 
 For local worker and llama.cpp:
 - local config files / docker compose / env files as already used by that component.
+
+For GCP Cloud Run Gateway:
+- runtime environment variables are managed on the Cloud Run service,
+- secrets are stored in GCP Secret Manager and referenced by Cloud Run,
+- GitHub Actions deploys images only and should not recreate or duplicate runtime secrets.
 
 ---
 
@@ -1227,10 +1468,14 @@ DB currently does not hibernate the way Functions do, but existing DB retries/ti
 Current observability tools:
 - Azure Application Insights,
 - Azure platform logs to limited practical effect,
+- GCP Cloud Run logs for GCP Gateway runtime behavior,
+- GCP Artifact Registry image tags for Gateway deployment traceability,
+- GitHub Actions run logs for GCP Gateway deployment automation,
 - job history as partial end-to-end breadcrumbing.
 
-Known limitation:
-- Azure logs often include provider/platform noise and may miss the most useful error-stream detail.
+Known limitations:
+- Azure logs often include provider/platform noise and may miss the most useful error-stream detail,
+- Gateway diagnosis may require checking both Cloud Run logs and Enrichers Core logs because Gateway forwards work to Enrichers Core and Service Bus.
 
 ### 18.4 Runbooks
 
@@ -1240,7 +1485,9 @@ Leave as future work:
 - retrying failed enrichment dispatches,
 - inspecting stuck runs,
 - clearing broken message states,
-- diagnosing projection-delivery failures.
+- diagnosing projection-delivery failures,
+- formalizing GCP Gateway deploy/rollback checks,
+- setting GCP budget alerts.
 
 ---
 
@@ -1252,7 +1499,10 @@ These items should not be treated as working system capabilities:
 - Synapse analytics stack,
 - Parquet archival pipeline,
 - automated archival of old jobs,
-- additional enrichers beyond compatibility score.
+- additional enrichers beyond compatibility score,
+- automatic Gateway failover,
+- GCP Pub/Sub replacement for Azure Service Bus,
+- custom domain for GCP Gateway.
 
 Agent rule:
 - do not build on stubs as though they are operational without explicit instruction.
@@ -1268,6 +1518,7 @@ These rules are intentionally blunt.
 - Use the owner domain API for another domain's data.
 - Keep new function structure close to existing patterns.
 - Preserve current trust boundaries.
+- Preserve explicit Gateway selection and no-fallback behavior.
 - Preserve cold-start-safe UI interaction patterns.
 - Reuse existing constants and helpers before creating new ones.
 - Read migration SQL before touching DB-side behavior.
@@ -1283,6 +1534,8 @@ These rules are intentionally blunt.
 - Do not duplicate existing services because they were hard to find.
 - Do not move business logic into web core unless putting it into the owner domain would be significantly worse.
 - Do not assume unfinished experiments are production features.
+- Do not add automatic fallback between Azure Gateway and GCP Gateway.
+- Do not log function keys or duplicate GCP runtime secrets into GitHub Actions.
 
 ---
 
@@ -1401,6 +1654,18 @@ Flask templates plus JS are the intended frontend architecture for now.
 
 Compatibility worker and llama.cpp are intentionally local and simple. Do not redesign toward managed inference platforms without explicit instruction.
 
+### 23.6 Cross-cloud Gateway
+
+GCP Cloud Run Gateway is intentionally narrow. It does not mean the system has become broadly multi-cloud.
+
+Current compromise:
+- Gateway runs on GCP Cloud Run by default,
+- Azure Gateway remains available as explicit rollback,
+- Azure Service Bus, Azure SQL, Azure Blob Storage, Jobs, Users, Enrichers Core, Web Core, and browser auth remain Azure-based,
+- Cloud Run Gateway still bridges into Azure Service Bus and Azure Enrichers Core.
+
+Do not generalize this into a broader migration pattern without a separate milestone.
+
 ---
 
 ## 24. Change log guidance for this document
@@ -1412,6 +1677,7 @@ Update this document when any of the following happens:
 - canonical status list changes,
 - enrichment snapshot schema changes,
 - storage responsibilities move,
+- Gateway default runtime, routing, auth, or deployment model changes,
 - a milestone finishes and becomes part of steady-state architecture.
 
 Do not update this document for every small bugfix.
@@ -1429,7 +1695,7 @@ Do not update this document for every small bugfix.
 | Browser page behavior and proxying | Web core |
 | Telegram chat flow | Telegram bot |
 | Enrichment lifecycle / snapshot / dispatch | Enrichment Core |
-| Service Bus / lease / worker handoff | Gateway |
+| Service Bus / lease / worker handoff / Gateway hosting wrapper behavior | Gateway |
 | Prompting / score generation / inference fallback behavior | Compatibility worker |
 
 ### 25.2 What should never be guessed?
@@ -1439,6 +1705,7 @@ Do not update this document for every small bugfix.
 - snapshot schema,
 - canonical job identity fields,
 - whether browser may call a function directly,
+- which Gateway endpoint is selected by configuration,
 - whether a stub/experiment is production-ready.
 
 ### 25.3 What should usually trigger clarification?
@@ -1447,7 +1714,8 @@ Do not update this document for every small bugfix.
 - cross-domain data writes,
 - changing endpoint shapes used by another service,
 - introducing new dependencies or frameworks,
-- changing auth or trust model.
+- changing auth or trust model,
+- changing Gateway selection, Gateway auth, or deployment automation semantics.
 
 ---
 
@@ -1455,6 +1723,10 @@ Do not update this document for every small bugfix.
 
 As of this document version:
 - web UI, Users, Jobs, Telegram bot, Enrichment Core, Gateway, compatibility worker, and local llama.cpp are the active system,
+- GCP Cloud Run Gateway is the preferred/default Gateway runtime,
+- Azure Functions Gateway remains available as explicit rollback,
+- Enrichers Core and compatibility worker select Gateway through explicit environment variables,
+- GitHub Actions can deploy GCP Gateway to Cloud Run through Workload Identity Federation,
 - Synapse and Parquet are not active,
 - scrapers are not active,
 - compatibility score is the only implemented enrichment projection,
