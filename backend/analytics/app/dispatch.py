@@ -4,7 +4,7 @@ import json
 import random
 from dataclasses import dataclass
 from typing import Any
-
+import logging
 import requests
 
 from app.config import AppConfig
@@ -18,6 +18,7 @@ from app.db import (
 from app.mixpanel_client import MixpanelClient
 from app.mixpanel_mapper import MappingError, map_event_to_mixpanel
 
+logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class DispatchCounters:
@@ -41,6 +42,7 @@ class DispatchCounters:
 
 def run_dispatch_once(config: AppConfig) -> DispatchCounters:
     if not config.mixpanel_export_enabled:
+        logger.info("analytics_dispatch_skipped export_enabled=false")
         return DispatchCounters(
             attempted=0,
             sent=0,
@@ -51,6 +53,11 @@ def run_dispatch_once(config: AppConfig) -> DispatchCounters:
         )
 
     rows = fetch_due_dispatch_rows(config, limit=config.mixpanel_batch_size)
+    logger.info(
+        "analytics_dispatch_due_rows count=%s batch_size=%s",
+        len(rows),
+        config.mixpanel_batch_size,
+    )    
     if not rows:
         return DispatchCounters(
             attempted=0,
@@ -89,6 +96,12 @@ def run_dispatch_once(config: AppConfig) -> DispatchCounters:
             export_enabled=True,
         )
 
+    logger.info(
+        "analytics_dispatch_mapped mapped=%s dead=%s",
+        len(mapped_events),
+        dead,
+    )
+
     mark_dispatch_sending(config, mapped_dispatch_ids)
 
     client = MixpanelClient(config)
@@ -96,6 +109,11 @@ def run_dispatch_once(config: AppConfig) -> DispatchCounters:
     try:
         response = client.import_events(mapped_events)
     except (requests.Timeout, requests.ConnectionError) as exc:
+        logger.warning(
+            "analytics_mixpanel_import_transport_error type=%s message=%s",
+            type(exc).__name__,
+            str(exc)[:500],
+        )        
         delay = _retry_delay_seconds(_max_attempt_count(rows))
         mark_dispatch_retry(
             config,
@@ -115,8 +133,15 @@ def run_dispatch_once(config: AppConfig) -> DispatchCounters:
 
     response_text = response.text or json.dumps(response.json_body, default=str)
 
+    logger.info(
+        "analytics_mixpanel_import_response status_code=%s body_snippet=%s",
+        response.status_code,
+        (response.text or "")[:500],
+    )
+
     if 200 <= response.status_code < 300:
         mark_dispatch_sent(config, mapped_dispatch_ids)
+        logger.info("analytics_dispatch_mark_sent count=%s", len(mapped_dispatch_ids))
         return DispatchCounters(
             attempted=len(mapped_events),
             sent=len(mapped_events),
@@ -127,6 +152,11 @@ def run_dispatch_once(config: AppConfig) -> DispatchCounters:
         )
 
     if response.status_code == 400 or 400 <= response.status_code < 500 and response.status_code not in {401, 403, 429}:
+        logger.warning(
+            "analytics_dispatch_mark_dead count=%s status_code=%s",
+            len(mapped_dispatch_ids),
+            response.status_code,
+        )
         mark_dispatch_dead(
             config,
             mapped_dispatch_ids,
@@ -143,6 +173,11 @@ def run_dispatch_once(config: AppConfig) -> DispatchCounters:
         )
 
     if response.status_code in {401, 403, 429, 500, 502, 503, 504}:
+        logger.warning(
+            "analytics_dispatch_mark_retry count=%s status_code=%s",
+            len(mapped_dispatch_ids),
+            response.status_code,
+        )
         delay = _retry_delay_seconds(_max_attempt_count(rows), auth_error=response.status_code in {401, 403})
         mark_dispatch_retry(
             config,

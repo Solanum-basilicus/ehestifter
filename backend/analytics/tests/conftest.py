@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -9,6 +10,8 @@ from dotenv import load_dotenv
 
 
 ANALYTICS_ROOT = Path(__file__).resolve().parents[1]
+if str(ANALYTICS_ROOT) not in sys.path:
+    sys.path.insert(0, str(ANALYTICS_ROOT))
 
 # Load local test env first, then .env.local as fallback.
 # Existing shell environment wins over both files.

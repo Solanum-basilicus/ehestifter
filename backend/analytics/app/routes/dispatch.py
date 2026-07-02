@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 from flask import Blueprint, current_app, jsonify, request
-
+import logging
 from app.auth import AuthError, authenticate_request
 from app.dispatch import run_dispatch_once
 
-
+logger = logging.getLogger(__name__)
 bp = Blueprint("dispatch", __name__)
 
 
 @bp.post("/analytics/dispatch/run")
 def dispatch_run():
+    logger.info("POST /analytics/dispatch/run")
     config = current_app.config["APP_CONFIG"]
 
     try:
