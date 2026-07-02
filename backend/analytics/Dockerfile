@@ -28,4 +28,6 @@ COPY app ./app
 
 ENV PORT=8080
 
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-8080} --workers 1 --threads 8 --timeout 120 'app.main:create_app()'"]
+#CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-8080} --workers 1 --threads 8 --timeout 120 'app.main:create_app()'"]
+# stop the container by ctrl+c:
+CMD ["sh", "-c", "exec gunicorn --bind 0.0.0.0:${PORT:-8080} --workers 1 --threads 8 --timeout 120 'app.main:create_app()'"]
