@@ -123,6 +123,7 @@ env.bak/
 venv.bak/
 .env.cloudrun.local
 .env.local
+.env.test
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
