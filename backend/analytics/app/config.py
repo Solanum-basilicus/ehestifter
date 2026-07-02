@@ -6,18 +6,28 @@ from typing import Optional
 
 
 def _bool_env(name: str, default: bool) -> bool:
-    raw = os.getenv(name)
+    raw = _str_env(name)
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def _int_env(name: str, default: int) -> int:
-    raw = os.getenv(name)
+    raw = _str_env(name)
     if raw is None or raw.strip() == "":
         return default
     return int(raw)
 
+def _str_env(name: str, default: str = "") -> str:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+
+    value = raw.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        value = value[1:-1]
+
+    return value
 
 @dataclass(frozen=True)
 class KeyBinding:
@@ -52,7 +62,7 @@ class AppConfig:
         bindings = (
             KeyBinding(
                 name="core",
-                value=os.getenv("ANALYTICS_FUNCTION_KEY_CORE", ""),
+                value=_str_env("ANALYTICS_FUNCTION_KEY_CORE", ""),
                 source_domain="core",
                 can_ingest=True,
                 can_status=False,
@@ -60,7 +70,7 @@ class AppConfig:
             ),
             KeyBinding(
                 name="jobs",
-                value=os.getenv("ANALYTICS_FUNCTION_KEY_JOBS", ""),
+                value=_str_env("ANALYTICS_FUNCTION_KEY_JOBS", ""),
                 source_domain="jobs",
                 can_ingest=True,
                 can_status=False,
@@ -68,7 +78,7 @@ class AppConfig:
             ),
             KeyBinding(
                 name="users",
-                value=os.getenv("ANALYTICS_FUNCTION_KEY_USERS", ""),
+                value=_str_env("ANALYTICS_FUNCTION_KEY_USERS", ""),
                 source_domain="users",
                 can_ingest=True,
                 can_status=False,
@@ -76,7 +86,7 @@ class AppConfig:
             ),
             KeyBinding(
                 name="enrichers",
-                value=os.getenv("ANALYTICS_FUNCTION_KEY_ENRICHERS", ""),
+                value=_str_env("ANALYTICS_FUNCTION_KEY_ENRICHERS", ""),
                 source_domain="enrichers",
                 can_ingest=True,
                 can_status=False,
@@ -84,7 +94,7 @@ class AppConfig:
             ),
             KeyBinding(
                 name="scheduler",
-                value=os.getenv("ANALYTICS_FUNCTION_KEY_SCHEDULER", ""),
+                value=_str_env("ANALYTICS_FUNCTION_KEY_SCHEDULER", ""),
                 source_domain=None,
                 can_ingest=False,
                 can_status=True,
@@ -92,7 +102,7 @@ class AppConfig:
             ),
             KeyBinding(
                 name="operator",
-                value=os.getenv("ANALYTICS_FUNCTION_KEY_OPERATOR", ""),
+                value=_str_env("ANALYTICS_FUNCTION_KEY_OPERATOR", ""),
                 source_domain=None,
                 can_ingest=False,
                 can_status=True,
@@ -104,12 +114,12 @@ class AppConfig:
             collection_enabled=_bool_env("ANALYTICS_COLLECTION_ENABLED", True),
             mixpanel_export_enabled=_bool_env("ANALYTICS_MIXPANEL_EXPORT_ENABLED", False),
             allow_unknown_events=_bool_env("ANALYTICS_ALLOW_UNKNOWN_EVENTS", False),
-            distinct_id_salt=os.getenv("ANALYTICS_DISTINCT_ID_SALT", ""),
-            sql_connection_string=os.getenv("ANALYTICS_SQL_CONNECTION_STRING", ""),
-            mixpanel_project_id=os.getenv("MIXPANEL_PROJECT_ID", ""),
-            mixpanel_api_base_url=os.getenv("MIXPANEL_API_BASE_URL", "https://api-eu.mixpanel.com"),
-            mixpanel_service_account_username=os.getenv("MIXPANEL_SERVICE_ACCOUNT_USERNAME", ""),
-            mixpanel_service_account_password=os.getenv("MIXPANEL_SERVICE_ACCOUNT_PASSWORD", ""),
+            distinct_id_salt=_str_env("ANALYTICS_DISTINCT_ID_SALT", ""),
+            sql_connection_string=_str_env("ANALYTICS_SQL_CONNECTION_STRING", ""),
+            mixpanel_project_id=_str_env("MIXPANEL_PROJECT_ID", ""),
+            mixpanel_api_base_url=_str_env("MIXPANEL_API_BASE_URL", "https://api-eu.mixpanel.com"),
+            mixpanel_service_account_username=_str_env("MIXPANEL_SERVICE_ACCOUNT_USERNAME", ""),
+            mixpanel_service_account_password=_str_env("MIXPANEL_SERVICE_ACCOUNT_PASSWORD", ""),
             mixpanel_strict=_bool_env("MIXPANEL_STRICT", True),
             mixpanel_batch_size=_int_env("MIXPANEL_BATCH_SIZE", 500),
             mixpanel_max_attempts=_int_env("MIXPANEL_MAX_ATTEMPTS", 8),

@@ -25,7 +25,13 @@ def ingest_event():
         return jsonify({"error": str(exc)}), 401
 
     except ValidationError as exc:
-        status = 503 if exc.code == "collection_disabled" else 400
+        if exc.code == "collection_disabled":
+            status = 503
+        elif exc.code in {"forbidden_key", "source_domain_key_mismatch"}:
+            status = 403
+        else:
+            status = 400
+
         return jsonify({"error": exc.code, "message": exc.message}), status
 
     except Exception:
