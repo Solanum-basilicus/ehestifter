@@ -11,7 +11,7 @@ bp = Blueprint("dispatch", __name__)
 
 @bp.post("/analytics/dispatch/run")
 def dispatch_run():
-    logger.info("POST /analytics/dispatch/run")
+    #logger.info("POST /analytics/dispatch/run")
     config = current_app.config["APP_CONFIG"]
 
     try:
