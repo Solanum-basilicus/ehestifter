@@ -187,3 +187,164 @@ def _format_utc(value: Any) -> str | None:
         return value.isoformat(timespec="seconds") + "Z"
     return str(value)
 
+def fetch_due_dispatch_rows(config: AppConfig, limit: int) -> list[dict[str, Any]]:
+    with get_connection(config) as conn:
+        cursor = conn.cursor()
+        rows = cursor.execute(
+            """
+            SELECT TOP (?)
+                d.DispatchId,
+                d.EventId,
+                d.Sink,
+                d.Status,
+                d.AttemptCount,
+                e.OccurredAtUtc,
+                e.SourceDomain,
+                e.SourceSurface,
+                e.DistinctId,
+                e.EventName,
+                e.SubjectType,
+                e.SubjectId,
+                e.SchemaVersion,
+                e.PropertiesJson
+            FROM dbo.AnalyticsDispatch d
+            INNER JOIN dbo.AnalyticsEvents e
+                ON e.EventId = d.EventId
+            WHERE d.Sink = 'mixpanel'
+              AND d.Status IN ('pending', 'retry')
+              AND d.NextAttemptAtUtc <= SYSUTCDATETIME()
+            ORDER BY e.OccurredAtUtc ASC
+            """,
+            int(limit),
+        ).fetchall()
+
+        conn.commit()
+
+    result = []
+    for row in rows:
+        result.append(
+            {
+                "DispatchId": str(row.DispatchId),
+                "EventId": str(row.EventId),
+                "Sink": row.Sink,
+                "Status": row.Status,
+                "AttemptCount": int(row.AttemptCount or 0),
+                "OccurredAtUtc": row.OccurredAtUtc,
+                "SourceDomain": row.SourceDomain,
+                "SourceSurface": row.SourceSurface,
+                "DistinctId": row.DistinctId,
+                "EventName": row.EventName,
+                "SubjectType": row.SubjectType,
+                "SubjectId": row.SubjectId,
+                "SchemaVersion": row.SchemaVersion,
+                "PropertiesJson": row.PropertiesJson,
+            }
+        )
+
+    return result
+
+
+def mark_dispatch_sending(config: AppConfig, dispatch_ids: list[str]) -> None:
+    if not dispatch_ids:
+        return
+
+    placeholders = ",".join("?" for _ in dispatch_ids)
+
+    with get_connection(config) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""
+            UPDATE dbo.AnalyticsDispatch
+            SET Status = 'sending',
+                LastAttemptAtUtc = SYSUTCDATETIME()
+            WHERE DispatchId IN ({placeholders})
+              AND Status IN ('pending', 'retry')
+            """,
+            *dispatch_ids,
+        )
+        conn.commit()
+
+
+def mark_dispatch_sent(config: AppConfig, dispatch_ids: list[str]) -> None:
+    if not dispatch_ids:
+        return
+
+    placeholders = ",".join("?" for _ in dispatch_ids)
+
+    with get_connection(config) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""
+            UPDATE dbo.AnalyticsDispatch
+            SET Status = 'sent',
+                SentAtUtc = SYSUTCDATETIME(),
+                LastErrorCode = NULL,
+                LastErrorJson = NULL
+            WHERE DispatchId IN ({placeholders})
+            """,
+            *dispatch_ids,
+        )
+        conn.commit()
+
+
+def mark_dispatch_dead(
+    config: AppConfig,
+    dispatch_ids: list[str],
+    error_code: str,
+    error_json: str,
+) -> None:
+    if not dispatch_ids:
+        return
+
+    placeholders = ",".join("?" for _ in dispatch_ids)
+
+    with get_connection(config) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""
+            UPDATE dbo.AnalyticsDispatch
+            SET Status = 'dead',
+                LastAttemptAtUtc = COALESCE(LastAttemptAtUtc, SYSUTCDATETIME()),
+                LastErrorCode = ?,
+                LastErrorJson = ?
+            WHERE DispatchId IN ({placeholders})
+            """,
+            error_code[:80],
+            error_json[:4000],
+            *dispatch_ids,
+        )
+        conn.commit()
+
+
+def mark_dispatch_retry(
+    config: AppConfig,
+    dispatch_ids: list[str],
+    error_code: str,
+    error_json: str,
+    delay_seconds: int,
+) -> None:
+    if not dispatch_ids:
+        return
+
+    placeholders = ",".join("?" for _ in dispatch_ids)
+
+    with get_connection(config) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""
+            UPDATE dbo.AnalyticsDispatch
+            SET Status = 'retry',
+                AttemptCount = AttemptCount + 1,
+                LastAttemptAtUtc = COALESCE(LastAttemptAtUtc, SYSUTCDATETIME()),
+                NextAttemptAtUtc = DATEADD(second, ?, SYSUTCDATETIME()),
+                LastErrorCode = ?,
+                LastErrorJson = ?
+            WHERE DispatchId IN ({placeholders})
+            """,
+            int(delay_seconds),
+            error_code[:80],
+            error_json[:4000],
+            *dispatch_ids,
+        )
+        conn.commit()
+        
