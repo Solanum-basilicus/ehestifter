@@ -7,6 +7,7 @@ from helpers.enrichment_snapshot import write_input_snapshot
 from helpers.runs_create import create_run_db, mark_queued, dispatch_via_gateway
 from domain.runs_service import RunsService  # keep for get_run normalization
 from helpers.snapshot_clients import get_job_snapshot, get_user_cv_snapshot
+from helpers.analytics import emit_enrichers_event, source_surface_from_request
 
 def register(app: func.FunctionApp):
     svc = RunsService()
@@ -35,6 +36,22 @@ def register(app: func.FunctionApp):
 
         # 1) DB create (Pending)
         run = create_run_db(job_id, user_id, enricher_type)
+
+        source_surface = source_surface_from_request(req)
+        if source_surface == "web":
+            emit_enrichers_event(
+                "Compatibility Requested",
+                user_id=user_id,
+                source_surface=source_surface,
+                subject_type="enrichment_run",
+                subject_id=run["runId"],
+                correlation_id=corr,
+                properties={
+                    "job_id": run["jobOfferingId"],
+                    "run_id": run["runId"],
+                    "enricher_type": run["enricherType"],
+                },
+            )
 
         # 2) Fetch inputs + write snapshot (any failure => leave Pending and return 201)
         try:

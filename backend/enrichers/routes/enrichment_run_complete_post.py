@@ -3,7 +3,12 @@ import logging
 import azure.functions as func
 
 from helpers.enrichment_completion import complete_run_transactionally
-
+from helpers.analytics import (
+    emit_enrichers_event,
+    extract_score,
+    get_run_analytics_context,
+    safe_failure_stage,
+)
 
 def register(app: func.FunctionApp):
     @app.route(route="enrichment/runs/{runId:guid}/complete", methods=["POST"])
@@ -48,6 +53,44 @@ def register(app: func.FunctionApp):
                 error_code=error_code,
                 error_message=error_message,
             )
+
+            if outcome.outcome == "completed":
+                run_ctx = get_run_analytics_context(run_id)
+
+                if run_ctx:
+                    props = {
+                        "job_id": run_ctx.get("jobOfferingId"),
+                        "run_id": run_ctx.get("runId"),
+                        "enricher_type": run_ctx.get("enricherType"),
+                    }
+
+                    if status == "Succeeded":
+                        score = extract_score(result)
+                        if score is not None:
+                            props["score"] = score
+
+                        emit_enrichers_event(
+                            "Compatibility Completed",
+                            user_id=run_ctx.get("userId"),
+                            source_surface="worker",
+                            subject_type="enrichment_run",
+                            subject_id=run_ctx.get("runId"),
+                            properties=props,
+                        )
+
+                    elif status == "Failed":
+                        failure_stage = safe_failure_stage(error_code)
+                        if failure_stage:
+                            props["failure_stage"] = failure_stage
+
+                        emit_enrichers_event(
+                            "Compatibility Failed",
+                            user_id=run_ctx.get("userId"),
+                            source_surface="worker",
+                            subject_type="enrichment_run",
+                            subject_id=run_ctx.get("runId"),
+                            properties=props,
+                        )
 
             # old/stale/already-terminal completion should still be non-fatal for Gateway
             if outcome.outcome in ("completed", "stale_ignored", "already_terminal"):
