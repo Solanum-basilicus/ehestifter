@@ -6,6 +6,8 @@ from helpers.db import get_connection
 from helpers.auth import UnauthorizedError, get_current_user_id
 from helpers.ids import normalize_guid, is_guid
 from helpers.history import insert_history
+from helpers.analytics import emit_jobs_event
+from helpers.domain_constants import FINAL_STATUSES
 
 
 def upsert_user_status(cur, job_id: str, user_id: str, status: str) -> None:
@@ -74,6 +76,20 @@ def register(app: func.FunctionApp):
                 return func.HttpResponse(str(ve), status_code=400)
 
             conn.commit()
+
+            emit_jobs_event(
+                "Job Status Changed",
+                req=req,
+                user_id=user_id,
+                subject_type="job",
+                subject_id=job_id,
+                properties={
+                    "job_id": job_id,
+                    "new_status": status,
+                    "is_final_status": status in FINAL_STATUSES,
+                },
+            )
+
             return func.HttpResponse(
                 json.dumps({"jobId": normalize_guid(job_id), "userId": normalize_guid(user_id), "status": status}),
                 mimetype="application/json", status_code=200
