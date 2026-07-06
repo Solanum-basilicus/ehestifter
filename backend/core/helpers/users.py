@@ -51,6 +51,7 @@ def _b2c_headers_from_context(context: dict) -> dict:
         "x-user-email": context["user"].get("email") or "",
         "x-user-name": context["user"].get("name") or context["user"].get("preferred_username") or "",
         "Accept": "application/json",
+        "X-Source-Surface": "web",
     }
     if fxkey:
         h["x-functions-key"] = fxkey

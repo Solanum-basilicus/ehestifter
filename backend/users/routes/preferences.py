@@ -7,7 +7,7 @@ from helpers.db import get_connection
 from helpers.b2c_headers import get_b2c_headers
 from helpers.blob_storage import upload_json, upload_text, download_json, download_text
 from helpers.quill_to_text import canonical_json, quill_delta_to_text, normalize_text
-
+from helpers.analytics import emit_users_event
 
 def register(app):
     @app.route(route="users/preferences", methods=["POST"])
@@ -81,6 +81,18 @@ def register(app):
             )
 
             conn.commit()
+
+            user_id_str = str(user_id)
+            emit_users_event(
+                "CV Updated",
+                req=req,
+                user_id=user_id_str,
+                subject_type="cv",
+                subject_id=cv_version_id,
+                properties={
+                    "cv_version_id": cv_version_id,
+                },
+            )
 
             return func.HttpResponse(
                 body=json.dumps(
