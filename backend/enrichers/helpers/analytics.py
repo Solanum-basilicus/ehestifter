@@ -74,10 +74,10 @@ def get_run_analytics_context(run_id: str) -> dict[str, Any] | None:
             return None
 
         return {
-            "runId": str(row[0]),
+            "runId": _clean_uuid(row[0]),
             "enricherType": str(row[1]) if row[1] is not None else None,
-            "jobOfferingId": str(row[2]) if row[2] is not None else None,
-            "userId": str(row[3]) if row[3] is not None else None,
+            "jobOfferingId": _clean_uuid(row[2]),
+            "userId": _clean_uuid(row[3]),
             "status": str(row[4]) if row[4] is not None else None,
         }
     finally:
@@ -307,4 +307,3 @@ def _optional_str(value: Any) -> str | None:
 
 def _drop_none_values(value: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in value.items() if v is not None}
-    
