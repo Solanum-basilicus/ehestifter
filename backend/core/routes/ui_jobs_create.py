@@ -2,6 +2,7 @@ from flask import Blueprint, request, jsonify
 from helpers.http import jobs_base, jobs_fx_headers, fx_post_json
 from helpers.users import get_in_app_user_id
 from helpers.job_form import clean_job_payload
+from helpers.analytics import ensure_job_create_flow_id
 
 def create_blueprint(auth):
     bp = Blueprint("ui_jobs_create", __name__)
@@ -15,12 +16,16 @@ def create_blueprint(auth):
         if not url or not (url.startswith("http://") or url.startswith("https://")):
             return jsonify({"error":"bad_request","message":"Field 'url' (http/https) is required"}), 400
 
+        correlation_id = ensure_job_create_flow_id()
+
         # Try to pass user id for provenance
         try:
             uid = get_in_app_user_id(context)
             headers = jobs_fx_headers(context={"userId": uid})
         except Exception:
             headers = jobs_fx_headers()
+
+        headers["X-Correlation-Id"] = correlation_id
 
         r = fx_post_json(f"{jobs_base()}/jobs", headers=headers, json_body=payload)
         if r.status_code in (200,201):

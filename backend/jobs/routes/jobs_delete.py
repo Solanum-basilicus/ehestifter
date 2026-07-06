@@ -3,6 +3,7 @@ import azure.functions as func
 from helpers.db import get_connection
 from helpers.auth import detect_actor
 from helpers.history import insert_history
+from helpers.analytics import emit_jobs_event
 
 def register(app: func.FunctionApp):
 
@@ -27,6 +28,19 @@ def register(app: func.FunctionApp):
 
             insert_history(cur, job_id, "job_deleted", {"softDelete": True}, actor_type, actor_id)
             conn.commit()
+
+            user_id = actor_id if actor_type == "user" else None
+            emit_jobs_event(
+                "Job Deleted",
+                req=req,
+                user_id=user_id,
+                subject_type="job",
+                subject_id=job_id,
+                properties={
+                    "job_id": job_id,
+                },
+            )
+
             return func.HttpResponse("Job marked as deleted", status_code=200)
 
         except Exception as e:

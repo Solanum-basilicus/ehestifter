@@ -34,6 +34,13 @@ def source_surface_from_request(req) -> str | None:
         return raw
     return None
 
+def correlation_id_from_request(req) -> str | None:
+    raw = (req.headers.get("X-Correlation-Id") or "").strip()
+    if not raw:
+        return None
+    if len(raw) > 100:
+        return None
+    return raw
 
 def emit_jobs_event(
     event_name: str,

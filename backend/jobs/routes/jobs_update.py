@@ -6,6 +6,8 @@ from helpers.auth import detect_actor
 from helpers.history import insert_history
 from helpers.validation import validate_job_payload
 from typing import List, Dict, Any, Optional
+from helpers.analytics import emit_jobs_event
+
 
 # mapping: JSON -> DB column
 _MAPPING = {
@@ -34,6 +36,24 @@ def _canon_locs(locs: List[Dict[str, Any]]) -> List[Dict[str, Optional[str]]]:
     items.sort(key=lambda x: (x["countryCode"] or "", x["countryName"] or "", x["region"] or "", x["cityName"] or ""))
     return items
 
+def _analytics_update_props(job_id: str, data: dict) -> dict:
+    props = {"job_id": job_id}
+
+    provider = (data.get("provider") or "").strip()
+    provider_tenant = (data.get("providerTenant") or "").strip()
+    remote_type = (data.get("remoteType") or "").strip()
+
+    if provider:
+        props["provider"] = provider
+    if provider_tenant:
+        props["provider_tenant"] = provider_tenant
+
+    # Existing field appears structured enough to include only when explicitly supplied.
+    # Keep the source name generic in analytics.
+    if remote_type:
+        props["work_mode"] = remote_type
+
+    return props
 
 def register(app: func.FunctionApp):
 
@@ -139,6 +159,17 @@ def register(app: func.FunctionApp):
                 insert_history(cur, job_id, "job_updated", details, actor_type, actor_id)
 
             conn.commit()
+            
+            user_id = actor_id if actor_type == "user" else None
+            emit_jobs_event(
+                "Job Updated",
+                req=req,
+                user_id=user_id,
+                subject_type="job",
+                subject_id=job_id,
+                properties=_analytics_update_props(job_id, data),
+            )
+
             return func.HttpResponse("Job updated", status_code=200)
 
         except Exception as e:
