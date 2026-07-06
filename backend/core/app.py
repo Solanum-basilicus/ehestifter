@@ -5,7 +5,11 @@ import app_config
 import logging
 from datetime import datetime, timezone
 from routes import register_all
-
+from helpers.analytics import (
+    emit_core_event,
+    ensure_job_create_flow_id,
+    get_user_id_for_analytics,
+)
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -60,6 +64,15 @@ def job_details(job_id: str, *, context):
 @app.route("/jobs/new")
 @auth.login_required
 def job_new(*, context):
+    correlation_id = ensure_job_create_flow_id()
+    user_id = get_user_id_for_analytics(context)
+
+    emit_core_event(
+        "Job Creation Started",
+        user_id=user_id,
+        correlation_id=correlation_id,
+    )
+
     return render_template(
         "job_new.html",
         user=context['user'],
