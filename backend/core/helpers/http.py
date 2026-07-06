@@ -16,7 +16,11 @@ def jobs_fx_headers(context=None) -> dict:
     Always send x-functions-key if set.
     If we have a user context, pass X-User-Id; else tell upstream it's a system actor.
     """
-    h = {"Accept":"application/json", "Content-Type":"application/json"}
+    h = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-Source-Surface": "web",
+    }
     fxkey = os.getenv("EHESTIFTER_JOBS_FUNCTION_KEY")
     if fxkey:
         h["x-functions-key"] = fxkey
