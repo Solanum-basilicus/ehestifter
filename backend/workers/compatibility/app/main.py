@@ -270,9 +270,9 @@ def main() -> None:
                             num_predict=num_predict,
                             format=None,  # schema removed intentionally
                             # llama.cpp / Qwen thinking controls
-                            enable_thinking=settings.enable_thinking,
-                            thinking_budget_tokens=settings.thinking_budget_tokens,
-                            reasoning_format=settings.reasoning_format,                            
+                            enable_thinking=s.enable_thinking,
+                            thinking_budget_tokens=s.thinking_budget_tokens,
+                            reasoning_format=s.reasoning_format,                            
                         )
 
                     def _status_from_exc(e: Exception):
