@@ -254,6 +254,17 @@ class LlamaCppClient:
 
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
 
+        self.log.info(
+            "llama.cpp controls model=%s max_tokens=%s thinking_budget_tokens=%s "
+            "reasoning_format=%s chat_template_kwargs=%s response_format=%s",
+            payload.get("model"),
+            payload.get("max_tokens"),
+            payload.get("thinking_budget_tokens"),
+            payload.get("reasoning_format"),
+            payload.get("chat_template_kwargs"),
+            payload.get("response_format"),
+        )
+
         try:
             resp = self.session.post(
                 url,
@@ -295,11 +306,26 @@ class LlamaCppClient:
                 "__client_debug": {"request_bytes_len": len(payload_bytes)},
             }
 
-        content = ""
+        msg: Dict[str, Any] = {}
+        choices0: Dict[str, Any] = {}
+
         try:
-            content = ((data.get("choices") or [{}])[0].get("message", {}) or {}).get("content", "")
+            choices0 = (data.get("choices") or [{}])[0]
+            msg = (choices0.get("message", {}) or {})
         except Exception:
-            content = ""
+            choices0 = {}
+            msg = {}
+
+        content = msg.get("content", "")
+        reasoning_content = msg.get("reasoning_content", "")
+
+        self.log.info(
+            "llama.cpp response finish_reason=%s content_len=%s reasoning_len=%s usage=%s",
+            choices0.get("finish_reason"),
+            len(str(content or "")),
+            len(str(reasoning_content or "")),
+            data.get("usage"),
+        )
 
         content_s = "" if content is None else str(content)
         envelope = self._build_envelope(data, content_s)
