@@ -167,6 +167,9 @@ class LlamaCppClient:
         presence_penalty: Optional[float] = None,
         repetition_penalty: Optional[float] = None,
         num_predict: Optional[int] = None,
+        enable_thinking: Optional[bool] = None,
+        thinking_budget_tokens: Optional[int] = None,
+        reasoning_format: Optional[str] = None,
         format: Any = "json",
     ) -> Dict[str, Any]:
         url = f"{self.base_url}/v1/chat/completions"
@@ -192,6 +195,26 @@ class LlamaCppClient:
 
         if presence_penalty is not None:
             payload["presence_penalty"] = float(presence_penalty)
+
+        if top_k is not None:
+            payload["top_k"] = int(top_k)
+
+        if min_p is not None:
+            payload["min_p"] = float(min_p)
+
+        if repetition_penalty is not None:
+            payload["repeat_penalty"] = float(repetition_penalty)
+
+        if enable_thinking is not None:
+            payload["chat_template_kwargs"] = {
+                "enable_thinking": bool(enable_thinking)
+            }
+
+        if thinking_budget_tokens is not None:
+            payload["thinking_budget_tokens"] = int(thinking_budget_tokens)
+
+        if reasoning_format:
+            payload["reasoning_format"] = reasoning_format
 
         if format is not None:
             if format == "json":

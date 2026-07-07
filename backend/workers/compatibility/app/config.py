@@ -64,6 +64,19 @@ def _opt_float(v: Any) -> Optional[float]:
     except Exception:
         return None
 
+def _opt_bool(v: Any) -> Optional[bool]:
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        s = v.strip().lower()
+        if s in {"1", "true", "yes", "y", "on"}:
+            return True
+        if s in {"0", "false", "no", "n", "off"}:
+            return False
+    return None
+
 
 @dataclass
 class Settings:
@@ -90,6 +103,10 @@ class Settings:
     min_p: Optional[float]
     presence_penalty: Optional[float]
     repetition_penalty: Optional[float]
+
+    enable_thinking: Optional[bool]
+    thinking_budget_tokens: Optional[int]
+    reasoning_format: Optional[str]    
 
     system_prompt: str
     rubric: str
@@ -129,6 +146,15 @@ def load_settings(config_path: str = "/app/config.yaml") -> Settings:
         min_p=_opt_float(c.get("min_p")),
         presence_penalty=_opt_float(presence_penalty_val),
         repetition_penalty=_opt_float(c.get("repetition_penalty")),
+
+        # Thinking budget
+        enable_thinking=_opt_bool(c.get("enable_thinking")),
+        thinking_budget_tokens=_opt_int(c.get("thinking_budget_tokens")),
+        reasoning_format=(
+            str(c.get("reasoning_format")).strip()
+            if c.get("reasoning_format") is not None
+            else None
+        ),
 
         system_prompt=str(c.get("system_prompt", "")),
         rubric=str(c.get("rubric", "")),
