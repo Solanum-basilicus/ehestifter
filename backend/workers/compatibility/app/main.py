@@ -267,8 +267,12 @@ def main() -> None:
                             min_p=getattr(s, "min_p", None),
                             presence_penalty=getattr(s, "presence_penalty", None),
                             repetition_penalty=getattr(s, "repetition_penalty", None),
-                            format=None,  # schema removed intentionally
                             num_predict=num_predict,
+                            format=None,  # schema removed intentionally
+                            # llama.cpp / Qwen thinking controls
+                            enable_thinking=settings.enable_thinking,
+                            thinking_budget_tokens=settings.thinking_budget_tokens,
+                            reasoning_format=settings.reasoning_format,                            
                         )
 
                     def _status_from_exc(e: Exception):
