@@ -1,7 +1,7 @@
 # Ehestifter System Design
 
-Status: current `as-is` system design  
-Audience: coding agents working on the repo, with enough detail for a human operator to follow  
+Status: current `as-is` system design
+Audience: coding agents working on the repo, with enough detail for a human operator to follow
 Primary goal: enable safe feature work without guessing, duplicating existing services, or bypassing ownership boundaries
 
 ---
@@ -58,6 +58,7 @@ Current implemented system areas:
 - Telegram bot,
 - enrichment subsystem for compatibility scoring,
 - Gateway running on GCP Cloud Run as the preferred worker/enrichment Gateway path, with Azure Functions Gateway retained as explicit rollback,
+- Analytics bounded context running on GCP Cloud Run with owned Azure SQL event storage and Mixpanel EU export,
 - local inference stack for compatibility worker.
 
 ### 2.1 High-level goals
@@ -68,18 +69,24 @@ Current practical goals:
 - allow each user to maintain a CV for later enrichment,
 - compute compatibility scores for `(jobId, userId)`,
 - expose those scores in UX without recomputing on every page load,
+- record selected product behavior events in owned storage and export them to Mixpanel for lightweight analysis,
 - keep the system cheap and simple enough to operate without managed enterprise tooling.
 
 ### 2.2 High-level component map
 
 ```mermaid
 flowchart TD
-    User[Browser User] --> Core[Web UI / Flask core\nAzure App Service: ehestifter]
-    TGUser[Telegram User] --> Bot[Telegram Bot\nAzure App Service: ehestifter-telegram-bot]
+    User[Browser User] --> Core[Web UI / Flask core
+Azure App Service: ehestifter]
+    TGUser[Telegram User] --> Bot[Telegram Bot
+Azure App Service: ehestifter-telegram-bot]
 
-    Core -->|x-functions-key| Jobs[Jobs Function App\nehestifter-jobs]
-    Core -->|x-functions-key| Users[Users Function App\nehestifter-users]
-    Core -->|x-functions-key| Enrichers[Enrichment Core Function App\nehestifter-enrichers]
+    Core -->|x-functions-key| Jobs[Jobs Function App
+ehestifter-jobs]
+    Core -->|x-functions-key| Users[Users Function App
+ehestifter-users]
+    Core -->|x-functions-key| Enrichers[Enrichment Core Function App
+ehestifter-enrichers]
 
     Bot -->|x-functions-key| Jobs
     Bot -->|x-functions-key| Users
@@ -87,24 +94,49 @@ flowchart TD
     Enrichers -->|x-functions-key| Jobs
     Enrichers -->|x-functions-key| Users
 
-    Enrichers -->|selected Gateway config\nUSE_GATEWAY_ALTERNATIVE| GatewaySelector[Gateway endpoint selection]
-    Worker[Compatibility Worker\nlocal Docker container] -->|selected Gateway config\nUSE_GATEWAY_ALTERNATIVE| GatewaySelector
+    Core -->|core analytics key
+server-side only| Analytics[Analytics
+GCP Cloud Run: ehestifter-analytics]
+    Jobs -->|jobs analytics key
+server-side only| Analytics
+    Users -->|users analytics key
+server-side only| Analytics
+    Enrichers -->|enrichers analytics key
+server-side only| Analytics
+    Scheduler[GCP Cloud Scheduler
+every minute] -->|scheduler analytics key| Analytics
 
-    GatewaySelector --> GcpGateway[Gateway\nGCP Cloud Run: ehestifter-gateway\npreferred/default]
-    GatewaySelector -. explicit rollback .-> AzureGateway[Gateway\nAzure Function App: ehestifter-gateway]
+    Analytics --> SQL[(Azure SQL Database)]
+    Analytics -->|Mixpanel EU /import| Mixpanel[Mixpanel EU
+external analysis sink]
 
-    GcpGateway --> SB[Azure Service Bus Namespace\nehestifter]
+    Enrichers -->|selected Gateway config
+USE_GATEWAY_ALTERNATIVE| GatewaySelector[Gateway endpoint selection]
+    Worker[Compatibility Worker
+local Docker container] -->|selected Gateway config
+USE_GATEWAY_ALTERNATIVE| GatewaySelector
+
+    GatewaySelector --> GcpGateway[Gateway
+GCP Cloud Run: ehestifter-gateway
+preferred/default]
+    GatewaySelector -. explicit rollback .-> AzureGateway[Gateway
+Azure Function App: ehestifter-gateway]
+
+    GcpGateway --> SB[Azure Service Bus Namespace
+ehestifter]
     AzureGateway --> SB
-    Worker --> Llama[llama.cpp server\nlocal Docker container]
+    Worker --> Llama[llama.cpp server
+local Docker container]
     Worker --> SB
 
     GcpGateway -->|x-functions-key| Enrichers
     AzureGateway -->|x-functions-key| Enrichers
 
-    Jobs --> SQL[(Azure SQL Database)]
+    Jobs --> SQL
     Users --> SQL
     Enrichers --> SQL
-    Users --> Blob[(Azure Blob Storage\nehestifterdata)]
+    Users --> Blob[(Azure Blob Storage
+ehestifterdata)]
     Enrichers --> Blob
 
     Auth[Azure AD B2C / Entra ID] --> Core
@@ -120,11 +152,14 @@ flowchart TD
 | `backend/users` | Users domain API and user-related storage ownership | Azure Function App `ehestifter-users` |
 | `backend/enrichers` | Enrichment Core, run lifecycle, snapshot building, projection dispatch | Azure Function App `ehestifter-enrichers` |
 | `backend/gateway` | Worker-facing APIs and Service Bus bridge | GCP Cloud Run service `ehestifter-gateway` is preferred/default; Azure Function App `ehestifter-gateway` remains deployed as explicit rollback |
+| `backend/analytics` | Owned analytics ingestion, event storage, Mixpanel mapping/dispatch, diagnostics | GCP Cloud Run service `ehestifter-analytics` |
 | `workers/compatibility` | Polls work, builds prompts, performs compatibility inference | Local Docker container `compatibility-worker` |
 | `infrastructure/docker/llama.cpp` | Local inference server | Local Docker container `llama-server` |
 | Azure Service Bus | Queue transport for enrichment requests | Azure namespace `ehestifter` |
 | Azure SQL | Main relational storage | Azure SQL server `eperidbserver` |
 | Azure Blob Storage | CV and enrichment snapshot blob storage | Storage account `ehestifterdata` |
+| GCP Cloud Scheduler | Periodic trigger for Analytics Mixpanel dispatch | GCP job `ehestifter-analytics-dispatch` in `europe-west3` |
+| Mixpanel EU | External analytics exploration UI and export sink | Mixpanel EU Data Residency project; server-side `/import` only |
 | Azure AD B2C / Entra ID | Browser auth | Azure-managed |
 | GitHub Actions | CI/CD for Azure-hosted services and GCP Gateway Cloud Run deployment | GitHub-hosted; GCP deployment uses Workload Identity Federation |
 
@@ -135,14 +170,15 @@ The system is effectively single-environment, even though the Gateway now has bo
 Constraints:
 - one shared hobby environment,
 - one main Azure resource group in one subscription,
-- one GCP project used for the Gateway experiment and current preferred Gateway runtime,
+- one GCP project used for the current preferred Gateway runtime and Analytics Cloud Run service,
 - no realistic support for multiple full environments on current budget/free tiers.
 
 Implication for agents:
 - changes should be incremental,
 - migrations and config changes should be conservative,
 - avoid large refactors that assume a staging environment exists,
-- do not mistake Azure Gateway and GCP Gateway for staging/production environments; they are explicit runtime alternatives for the same single system.
+- do not mistake Azure Gateway and GCP Gateway for staging/production environments; they are explicit runtime alternatives for the same single system,
+- Analytics is part of the same single system even though it runs on GCP Cloud Run and writes to Azure SQL.
 
 ---
 
@@ -167,7 +203,8 @@ These are not current goals and agents should not optimize for them unless expli
 - rich frontend SPA framework migration,
 - direct browser access to domain functions,
 - scrapers productionization,
-- analytics / Synapse / Parquet pipeline,
+- warehouse-style analytics, Synapse, Parquet archival, or broad BI platform work,
+- browser-side Mixpanel SDK/session replay/clickstream tracking,
 - replacing Azure Service Bus with GCP Pub/Sub as part of the current Gateway hosting setup.
 
 ---
@@ -195,6 +232,14 @@ For GCP Cloud Run Gateway:
 - protected worker/Gateway routes must reject missing or invalid keys before invoking shared handlers,
 - public reachability at Cloud Run level is acceptable only because protected routes enforce the same application-level key check.
 
+For GCP Cloud Run Analytics:
+- Cloud Run hosting does not provide Azure Functions platform-managed function-key validation,
+- the Analytics Flask/Cloud Run app checks `x-functions-key` in application code before protected route behavior,
+- each producer has a distinct Analytics key and source-domain binding,
+- Core, Jobs, Users, and Enrichers keys can ingest events only for their own `sourceDomain`,
+- Scheduler and operator keys are separate from producer keys,
+- browser JavaScript must never receive Analytics keys, Mixpanel credentials, or Mixpanel project tokens.
+
 ### 4.3 Canonical user identity
 
 Canonical internal user identity is carried as `X-User-Id`.
@@ -202,7 +247,8 @@ Canonical internal user identity is carried as `X-User-Id`.
 The web UI extracts it from session, then sends it to downstream domains. Jobs and Users treat that user ID as the caller identity.
 
 Important implication:
-- if a feature needs user identity in Jobs or Users, it should usually arrive via `X-User-Id` through the existing proxy/orchestration path rather than by inventing a new identity system.
+- if a feature needs user identity in Jobs or Users, it should usually arrive via `X-User-Id` through the existing proxy/orchestration path rather than by inventing a new identity system,
+- analytics events use the canonical internal `userId` only inside owned Analytics SQL storage; Mixpanel receives a stable pseudonymous `distinct_id` instead of the raw internal user ID.
 
 ### 4.4 Telegram identity
 
@@ -357,6 +403,31 @@ Does not own:
 - alternate write models,
 - persistent records beyond chat/session metadata.
 
+### 5.8 Analytics (`backend/analytics`)
+
+Owns:
+- analytics ingestion API,
+- canonical owned analytics event log,
+- vendor-specific Mixpanel dispatch/outbox state,
+- pseudonymous `distinct_id` generation for Mixpanel export,
+- Mixpanel `/import` payload mapping,
+- retry/dead/sent delivery state for Mixpanel export,
+- small diagnostics for dispatch health.
+
+Does not own:
+- Jobs, Users, or Enrichment business data,
+- product-domain decisions or write models,
+- Mixpanel dashboards as source of truth,
+- browser-side tracking,
+- Telegram analytics in v1,
+- Synapse, Parquet, or warehouse archival.
+
+Boundaries:
+- product services emit selected event facts to Analytics using server-side HTTP and producer-specific keys,
+- Analytics validates event names, source domains, source surfaces, schema version, and forbidden property names before persistence,
+- Analytics stores the raw internal `UserId` only in owned Azure SQL and exports only the pseudonymous `DistinctId` to Mixpanel,
+- Mixpanel is an external analysis sink, not a durable system of record.
+
 ---
 
 ## 6. Canonical domain model
@@ -507,6 +578,71 @@ Enrichment Core is responsible for dispatching projection results to owning doma
 Current implemented projection target:
 - Jobs compatibility score projection only.
 
+### 6.4 Analytics domain model
+
+#### `dbo.AnalyticsEvents`
+
+Purpose:
+- canonical owned analytics event log.
+
+Important fields:
+- `EventId` — canonical event ID and Mixpanel `$insert_id`,
+- `OccurredAtUtc` and `ReceivedAtUtc`,
+- `SourceDomain` — currently `core`, `jobs`, `users`, or `enrichers`,
+- `SourceSurface` — currently `web`, `worker`, `timer`, or `system`,
+- `UserId` — internal user ID retained in owned SQL only,
+- `DistinctId` — stable pseudonymous Mixpanel identity,
+- `EventName`, `SubjectType`, `SubjectId`, `CorrelationId`, `ProducerEventId`, `SchemaVersion`,
+- `PropertiesJson` — sanitized event properties.
+
+Current idempotency behavior:
+- when producers provide `ProducerEventId`, Analytics enforces uniqueness for `(SourceDomain, ProducerEventId)`,
+- Mixpanel export uses the canonical `EventId` as `$insert_id`.
+
+#### `dbo.AnalyticsDispatch`
+
+Purpose:
+- vendor-specific delivery/outbox state for Analytics events.
+
+Current sink:
+- `mixpanel`.
+
+Important fields:
+- `DispatchId`, `EventId`, `Sink`, `Status`,
+- `AttemptCount`, `NextAttemptAtUtc`, `LastAttemptAtUtc`, `SentAtUtc`,
+- `LastErrorCode`, `LastErrorJson`.
+
+Current statuses:
+- `pending`, `sending`, `sent`, `retry`, `dead`.
+
+Operational behavior:
+- GCP Cloud Scheduler calls a protected dispatch endpoint every minute,
+- the dispatcher maps pending events to Mixpanel EU `/import` payloads,
+- successful exports are marked `sent`, retryable failures become `retry`, permanent validation/mapping failures become `dead`.
+
+#### Analytics event taxonomy
+
+Current v1 event names:
+- `Job Creation Started`,
+- `Job Duplicate Checked`,
+- `Job List Viewed`,
+- `Job Detail Viewed`,
+- `Job Search Performed`,
+- `Job Created`,
+- `Job Creation Failed`,
+- `Job Updated`,
+- `Job Deleted`,
+- `Job Status Changed`,
+- `CV Updated`,
+- `Compatibility Requested`,
+- `Compatibility Completed`,
+- `Compatibility Failed`.
+
+Agent rules:
+- do not add new analytics event names without updating the Analytics allowlist and this design document,
+- do not send raw URLs, provider external IDs, job titles/names, company names, descriptions, CV text, CV length, emails, display names, Telegram identifiers, tokens, keys, cookies, stack traces, exception text, or compatibility summaries,
+- prefer safe enum-like properties and stable IDs over free text.
+
 ---
 
 ## 7. Terminology normalization
@@ -577,6 +713,8 @@ Agents should preserve these unless explicitly asked to change the model.
 - User-facing requests must be proxied through web core rather than calling domain functions directly.
 - Cross-domain writes should happen via owner domain APIs, not shared DB writes.
 - Static service-level configuration belongs in environment variables, not DB rows.
+- Analytics is a side channel for selected behavior facts; product correctness must not depend on Analytics ingestion or Mixpanel export succeeding.
+- Browser code must not call Analytics or Mixpanel directly.
 
 ---
 
@@ -591,7 +729,8 @@ Users domain currently owns:
 - Telegram link and unlink,
 - user preferences, currently primarily CV,
 - user-related blob management for CV storage,
-- internal plaintext CV snapshot retrieval for enrichment.
+- internal plaintext CV snapshot retrieval for enrichment,
+- emitting the safe `CV Updated` analytics event after successful web CV/preferences update.
 
 ### 9.2 Storage split
 
@@ -658,7 +797,8 @@ Jobs domain owns:
 - job history,
 - location storage and presentation,
 - compatibility score storage and exposure,
-- user-specific shaping of job lists and details.
+- user-specific shaping of job lists and details,
+- emitting safe web-originated Jobs analytics events after successful owner-domain writes.
 
 ### 10.2 Create/update/delete lifecycle
 
@@ -876,6 +1016,28 @@ Browser traffic that interacts with domain data should go through core proxy rou
 
 Do not expose direct browser calls to function apps just because it looks simpler.
 
+### 11.7 Web Core analytics producer role
+
+Web Core emits route-level analytics events server-side for selected web UX facts:
+- `Job Creation Started`,
+- `Job Duplicate Checked`,
+- `Job List Viewed`,
+- `Job Detail Viewed`,
+- `Job Search Performed`.
+
+Web Core also marks downstream domain calls with `X-Source-Surface: web` where producer domains need to distinguish web-originated events from Telegram, system, or worker-originated calls.
+
+Rules:
+- do not send analytics events from browser JavaScript,
+- do not expose Analytics or Mixpanel credentials to browser code,
+- do not send raw search terms, raw job URLs, provider external IDs, job titles/names, company names, or descriptions,
+- use best-effort server-side emission with short timeout.
+
+Known tradeoff:
+- current producer emission is synchronous inside request handling and can add up to the configured short timeout to the route that emits the event,
+- this is accepted for now because implementation is small and product action still wins if Analytics fails,
+- if UX is affected, replace or supplement this with asynchronous local emission, for example an in-process/background queue or a local durable cache/outbox that drains to Analytics later.
+
 ---
 
 ## 12. Telegram bot details
@@ -932,6 +1094,11 @@ This section supersedes the previously separate enrichment design doc and merges
 ### 13.1 Purpose
 
 Current enrichment subsystem computes compatibility score for `(jobId, userId)` and publishes a projection into Jobs domain so Jobs can expose it efficiently.
+
+It also emits safe enrichment lifecycle analytics events for web-triggered compatibility runs:
+- `Compatibility Requested`,
+- `Compatibility Completed`,
+- `Compatibility Failed`.
 
 ### 13.2 Bounded contexts inside enrichment
 
@@ -1069,6 +1236,10 @@ Currently relevant scheduled/background processes:
 - `dispatch_projections` in Enrichment Core,
 - `cleanup_runs` in Enrichment Core,
 - message consumption in compatibility worker.
+
+Analytics note:
+- normal worker/Gateway completion can emit `Compatibility Completed` or `Compatibility Failed`,
+- cleanup timer expiry currently is not the primary analytics emission path and should not be assumed to produce per-run analytics events unless deliberately extended.
 
 No other scheduled system jobs should be assumed.
 
@@ -1328,18 +1499,49 @@ POST /gateway/dispatch
 
 1. A compatibility run is requested.
 2. Enrichment Core creates run and fetches job + CV snapshots.
-3. Enrichment Core writes self-contained snapshot blob.
-4. Enrichment Core asks the selected Gateway to dispatch the run. Current default is GCP Cloud Run Gateway when `USE_GATEWAY_ALTERNATIVE=1`.
-5. Gateway enqueues work in Service Bus.
-6. Compatibility worker consumes message, leases work through Gateway, receives input payload.
-7. Worker builds prompt and calls local llama.cpp.
-8. Worker normalizes result into `score` and `summary`.
-9. Worker sends completion to the selected Gateway. Current default is GCP Cloud Run Gateway when `USE_GATEWAY_ALTERNATIVE=1`.
-10. Gateway forwards completion to Enrichment Core.
-11. Enrichment Core stores terminal result.
-12. Enrichment Core dispatches compatibility projection to Jobs.
-13. Jobs upserts into `dbo.CompatibilityScores`.
-14. Web UI later reads compatibility via Jobs APIs, not by calling Enrichment Core directly for list rendering.
+3. Enrichment Core emits `Compatibility Requested` for web-originated compatibility runs.
+4. Enrichment Core writes self-contained snapshot blob.
+5. Enrichment Core asks the selected Gateway to dispatch the run. Current default is GCP Cloud Run Gateway when `USE_GATEWAY_ALTERNATIVE=1`.
+6. Gateway enqueues work in Service Bus.
+7. Compatibility worker consumes message, leases work through Gateway, receives input payload.
+8. Worker builds prompt and calls local llama.cpp.
+9. Worker normalizes result into `score` and `summary`.
+10. Worker sends completion to the selected Gateway. Current default is GCP Cloud Run Gateway when `USE_GATEWAY_ALTERNATIVE=1`.
+11. Gateway forwards completion to Enrichment Core.
+12. Enrichment Core stores terminal result.
+13. Enrichment Core emits `Compatibility Completed` or `Compatibility Failed` for actual new terminal completions.
+14. Enrichment Core dispatches compatibility projection to Jobs.
+15. Jobs upserts into `dbo.CompatibilityScores`.
+16. Web UI later reads compatibility via Jobs APIs, not by calling Enrichment Core directly for list rendering.
+
+### 14.8 Analytics ingestion and Mixpanel export flow
+
+1. A product action or route succeeds in Core, Jobs, Users, or Enrichment Core.
+2. The producer emits a small server-side Analytics event with its own Analytics key.
+3. Analytics validates the key, source domain, source surface, event name, schema version, and property safety.
+4. Analytics stores the canonical event in `dbo.AnalyticsEvents` and creates a pending Mixpanel dispatch row in `dbo.AnalyticsDispatch`.
+5. GCP Cloud Scheduler calls `POST /analytics/dispatch/run` every minute with the scheduler Analytics key.
+6. Analytics maps due dispatch rows to Mixpanel EU `/import` payloads.
+7. Mixpanel receives stable event names, pseudonymous `distinct_id`, deterministic `$insert_id`, and sanitized properties.
+8. Dispatch rows become `sent`, `retry`, or `dead`.
+
+Producer behavior:
+- product success/failure is based on owner-domain behavior, not Analytics behavior,
+- Analytics emit helpers use short timeouts and do not raise errors into product routes,
+- synchronous event emission is a known tradeoff and may be replaced with async/local-cache-first emission if UX latency becomes visible.
+
+### 14.9 Analytics event sources
+
+Current implemented server-side event sources:
+
+| Source domain | Events |
+|---|---|
+| `core` | `Job Creation Started`, `Job Duplicate Checked`, `Job List Viewed`, `Job Detail Viewed`, `Job Search Performed` |
+| `jobs` | `Job Created`, `Job Creation Failed`, `Job Updated`, `Job Deleted`, `Job Status Changed` |
+| `users` | `CV Updated` |
+| `enrichers` | `Compatibility Requested`, `Compatibility Completed`, `Compatibility Failed` |
+
+Telegram analytics is intentionally deferred.
 
 ---
 
@@ -1371,6 +1573,52 @@ Agent protocol for hazardous DB work:
 4. ask for explicit clarification or approval if change is ambiguous or cross-domain,
 5. prefer adding/using owner-domain endpoint over direct cross-domain table access.
 
+### 15.4 Analytics API contract
+
+Ingest endpoint:
+- `POST /analytics/events`
+
+Dispatch endpoint:
+- `POST /analytics/dispatch/run`
+
+Diagnostics endpoint:
+- `GET /analytics/dispatch/status`
+
+Auth:
+- `x-functions-key` is required for protected Analytics routes,
+- each producer key is bound to exactly one allowed `sourceDomain`,
+- scheduler/operator keys are separate from producer keys.
+
+Ingest request shape:
+
+```json
+{
+  "eventName": "Job Status Changed",
+  "occurredAtUtc": "2026-07-06T10:15:30.123Z",
+  "sourceDomain": "jobs",
+  "sourceSurface": "web",
+  "userId": "GUID-or-null",
+  "subjectType": "job",
+  "subjectId": "GUID-or-null",
+  "correlationId": "optional-guid-or-request-id",
+  "properties": {
+    "job_id": "GUID",
+    "new_status": "Applied",
+    "is_final_status": false
+  },
+  "schemaVersion": 1,
+  "producerEventId": "optional-source-idempotency-key"
+}
+```
+
+Rules:
+- event names must be allowlisted unless local/test config explicitly allows unknown events,
+- `schemaVersion` is currently `1`,
+- `properties` must be a JSON object,
+- forbidden property names are rejected recursively,
+- `occurredAtUtc` must include timezone information and is stored as UTC,
+- raw internal `UserId` is not exported to Mixpanel.
+
 ---
 
 ## 16. Storage model
@@ -1380,7 +1628,8 @@ Agent protocol for hazardous DB work:
 Current SQL usage:
 - Users domain tables and metadata,
 - Jobs domain tables,
-- Enrichment run/projection dispatch tables.
+- Enrichment run/projection dispatch tables,
+- Analytics event and dispatch tables.
 
 Guideline:
 - DB stores domain data,
@@ -1399,14 +1648,31 @@ Not currently used for:
 - Parquet analytics,
 - general product file storage beyond CV/enrichment needs.
 
-### 16.3 Analytics / Synapse / Parquet
+### 16.3 Analytics storage and external export
 
-Not part of current live architecture.
+Current live Analytics storage:
+- `dbo.AnalyticsEvents` is the canonical owned analytics event log,
+- `dbo.AnalyticsDispatch` is the vendor-specific dispatch/outbox table for Mixpanel export.
 
-Previous analytics ideas were removed and should be treated as future work from a clean slate when revisited.
+Runtime SQL identity:
+- Analytics uses a dedicated restricted SQL runtime user,
+- the runtime user should have only `SELECT`, `INSERT`, and `UPDATE` on Analytics tables,
+- the runtime user should not be able to read or mutate Jobs, Users, or Enrichment domain tables,
+- no broad `db_datareader` or `db_datawriter` role should be used for the Analytics runtime user.
+
+External export:
+- Mixpanel EU is an analysis sink reached through server-side `/import`,
+- Mixpanel is not the source of truth,
+- Analytics export can be disabled without disabling owned SQL collection.
+
+Not currently active:
+- Synapse analytics stack,
+- Parquet archival pipeline,
+- data warehouse / BI pipeline beyond the owned SQL event log and Mixpanel export.
 
 Agent rule:
-- do not assume Synapse or Parquet archival exists.
+- do not assume Synapse or Parquet archival exists,
+- do not bypass Analytics validation by writing analytics rows directly from producer services.
 
 ---
 
@@ -1440,6 +1706,37 @@ For GCP Cloud Run Gateway:
 - secrets are stored in GCP Secret Manager and referenced by Cloud Run,
 - GitHub Actions deploys images only and should not recreate or duplicate runtime secrets.
 
+For GCP Cloud Run Analytics:
+- runtime environment variables are managed on the Cloud Run service,
+- secrets are stored in GCP Secret Manager and referenced by Cloud Run,
+- GCP Cloud Scheduler calls the protected dispatch endpoint with the scheduler-specific Analytics key,
+- do not print Scheduler HTTP headers in CLI output because they include `x-functions-key`.
+
+Core/Jobs/Users/Enrichers Analytics producer config:
+
+```env
+ANALYTICS_COLLECTION_ENABLED="1"
+ANALYTICS_BASE_URL="https://ehestifter-analytics-...run.app"
+ANALYTICS_FUNCTION_KEY="<service-specific analytics key>"
+ANALYTICS_EMIT_TIMEOUT_SECONDS="2"
+```
+
+Central Analytics config includes:
+
+```env
+ANALYTICS_COLLECTION_ENABLED="1"
+ANALYTICS_MIXPANEL_EXPORT_ENABLED="1"
+MIXPANEL_API_BASE_URL="https://api-eu.mixpanel.com"
+MIXPANEL_STRICT="1"
+MIXPANEL_BATCH_SIZE="500"
+MIXPANEL_MAX_ATTEMPTS="8"
+```
+
+Disable switches:
+- producer-side `ANALYTICS_COLLECTION_ENABLED=0` stops that producer from attempting Analytics calls,
+- central `ANALYTICS_COLLECTION_ENABLED=0` stops accepting/storing new Analytics events,
+- central `ANALYTICS_MIXPANEL_EXPORT_ENABLED=0` stops outbound Mixpanel export while keeping owned collection active.
+
 ---
 
 ## 18. Operational constraints and observability
@@ -1469,13 +1766,18 @@ Current observability tools:
 - Azure Application Insights,
 - Azure platform logs to limited practical effect,
 - GCP Cloud Run logs for GCP Gateway runtime behavior,
-- GCP Artifact Registry image tags for Gateway deployment traceability,
+- GCP Cloud Run logs for Analytics runtime and dispatch behavior,
+- Analytics `/analytics/dispatch/status` diagnostics,
+- Mixpanel Events view for inspecting exported event payloads,
+- GCP Cloud Scheduler status for Analytics dispatch trigger,
+- GCP Artifact Registry image tags for Gateway and Analytics deployment traceability,
 - GitHub Actions run logs for GCP Gateway deployment automation,
 - job history as partial end-to-end breadcrumbing.
 
 Known limitations:
 - Azure logs often include provider/platform noise and may miss the most useful error-stream detail,
-- Gateway diagnosis may require checking both Cloud Run logs and Enrichers Core logs because Gateway forwards work to Enrichers Core and Service Bus.
+- Gateway diagnosis may require checking both Cloud Run logs and Enrichers Core logs because Gateway forwards work to Enrichers Core and Service Bus,
+- Analytics producer emission is synchronous and best-effort; it can still add up to the configured short timeout to a product request when Analytics is slow.
 
 ### 18.4 Runbooks
 
@@ -1487,6 +1789,8 @@ Leave as future work:
 - clearing broken message states,
 - diagnosing projection-delivery failures,
 - formalizing GCP Gateway deploy/rollback checks,
+- deciding whether Analytics producer emission should move to async/local-cache-first if UX is affected,
+- adding Analytics retention/cleanup once event volume is understood,
 - setting GCP budget alerts.
 
 ---
@@ -1498,11 +1802,14 @@ These items should not be treated as working system capabilities:
 - StepStone scraper stub as usable source,
 - Synapse analytics stack,
 - Parquet archival pipeline,
+- broad data warehouse / BI pipeline beyond owned Analytics SQL and Mixpanel export,
+- browser-side Mixpanel SDK or direct browser-to-Analytics tracking,
+- Telegram analytics,
 - automated archival of old jobs,
 - additional enrichers beyond compatibility score,
 - automatic Gateway failover,
 - GCP Pub/Sub replacement for Azure Service Bus,
-- custom domain for GCP Gateway.
+- custom domain for GCP Gateway or Analytics.
 
 Agent rule:
 - do not build on stubs as though they are operational without explicit instruction.
@@ -1520,6 +1827,7 @@ These rules are intentionally blunt.
 - Preserve current trust boundaries.
 - Preserve explicit Gateway selection and no-fallback behavior.
 - Preserve cold-start-safe UI interaction patterns.
+- Keep Analytics best-effort and privacy-preserving.
 - Reuse existing constants and helpers before creating new ones.
 - Read migration SQL before touching DB-side behavior.
 - Ask for clarification when a DB write change is ambiguous.
@@ -1536,6 +1844,7 @@ These rules are intentionally blunt.
 - Do not assume unfinished experiments are production features.
 - Do not add automatic fallback between Azure Gateway and GCP Gateway.
 - Do not log function keys or duplicate GCP runtime secrets into GitHub Actions.
+- Do not put Mixpanel credentials, Analytics keys, raw user IDs, CV text, job descriptions, job titles, company names, raw URLs, external IDs, exception text, or tokens into Mixpanel events.
 
 ---
 
@@ -1617,7 +1926,22 @@ Usually touch:
 
 Do not make worker write directly to owner domain stores.
 
-### 22.4 Adding a new field to jobs or users
+### 22.4 Adding or changing an analytics event
+
+Usually touch:
+1. producer service helper/route where the owner-domain fact is known,
+2. Analytics event allowlist and validation tests,
+3. safe properties only, preferably enum-like or stable IDs,
+4. this design document if the event is part of steady-state taxonomy,
+5. manual validation in owned SQL and Mixpanel Events view.
+
+Rules:
+- product action must not depend on Analytics success,
+- do not emit from browser JavaScript,
+- do not add free-text properties without explicit review,
+- do not send raw internal `UserId` to Mixpanel; let Analytics derive/export `DistinctId`.
+
+### 22.5 Adding a new field to jobs or users
 
 Procedure:
 1. identify owner domain,
@@ -1654,7 +1978,34 @@ Flask templates plus JS are the intended frontend architecture for now.
 
 Compatibility worker and llama.cpp are intentionally local and simple. Do not redesign toward managed inference platforms without explicit instruction.
 
-### 23.6 Cross-cloud Gateway
+### 23.6 Synchronous Analytics producer emission
+
+Current producer helpers emit Analytics events synchronously inside request handling with short timeouts.
+
+This is a known tradeoff:
+- it kept the implementation simple,
+- it avoids adding a per-producer queue/outbox for a small hobby system,
+- product routes still continue if Analytics fails,
+- but slow Analytics responses can add latency up to the configured timeout.
+
+Do not treat this as a permanent architectural requirement. If UX latency becomes noticeable, prefer moving producer emission to an async/local-cache-first pattern, such as:
+- in-process background queue for low-risk route-level events,
+- local durable cache/outbox drained by a lightweight worker,
+- domain-owned replay from existing durable history where practical.
+
+### 23.7 Analytics Cloud Run to Azure SQL networking
+
+Analytics Cloud Run reaches Azure SQL from GCP. The current firewall/network posture is a hobby-budget compromise rather than best-practice private networking.
+
+Preferred enterprise-style shape would be static Cloud Run outbound IP through VPC egress and Cloud NAT, then allowlisting only that IP in Azure SQL. The current project accepted broader Azure SQL firewall allowance for selected Google Cloud ranges to avoid recurring NAT cost/complexity.
+
+Mitigations:
+- Analytics uses a restricted SQL runtime user,
+- the runtime user has access only to Analytics tables,
+- no broad DB roles are granted,
+- function keys and Mixpanel credentials are stored in GCP Secret Manager.
+
+### 23.8 Cross-cloud Gateway
 
 GCP Cloud Run Gateway is intentionally narrow. It does not mean the system has become broadly multi-cloud.
 
@@ -1678,6 +2029,7 @@ Update this document when any of the following happens:
 - enrichment snapshot schema changes,
 - storage responsibilities move,
 - Gateway default runtime, routing, auth, or deployment model changes,
+- Analytics event taxonomy, privacy rules, producer responsibilities, dispatch behavior, or Mixpanel export model changes,
 - a milestone finishes and becomes part of steady-state architecture.
 
 Do not update this document for every small bugfix.
@@ -1696,6 +2048,7 @@ Do not update this document for every small bugfix.
 | Telegram chat flow | Telegram bot |
 | Enrichment lifecycle / snapshot / dispatch | Enrichment Core |
 | Service Bus / lease / worker handoff / Gateway hosting wrapper behavior | Gateway |
+| Analytics event ingestion, validation, dispatch, Mixpanel mapping | Analytics |
 | Prompting / score generation / inference fallback behavior | Compatibility worker |
 
 ### 25.2 What should never be guessed?
@@ -1706,6 +2059,7 @@ Do not update this document for every small bugfix.
 - canonical job identity fields,
 - whether browser may call a function directly,
 - which Gateway endpoint is selected by configuration,
+- whether an Analytics event/property is privacy-safe,
 - whether a stub/experiment is production-ready.
 
 ### 25.3 What should usually trigger clarification?
@@ -1715,7 +2069,8 @@ Do not update this document for every small bugfix.
 - changing endpoint shapes used by another service,
 - introducing new dependencies or frameworks,
 - changing auth or trust model,
-- changing Gateway selection, Gateway auth, or deployment automation semantics.
+- changing Gateway selection, Gateway auth, or deployment automation semantics,
+- changing Analytics event names, property safety rules, auth, or export behavior.
 
 ---
 
