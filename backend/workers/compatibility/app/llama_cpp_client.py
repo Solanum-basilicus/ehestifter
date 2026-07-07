@@ -329,6 +329,8 @@ class LlamaCppClient:
 
         content_s = "" if content is None else str(content)
         envelope = self._build_envelope(data, content_s)
+        envelope["__llama_cpp"]["reasoning_len"] = len(str(reasoning_content or ""))
+        envelope["__llama_cpp"]["had_reasoning_content"] = bool(reasoning_content)
 
         if not content_s.strip():
             return {
