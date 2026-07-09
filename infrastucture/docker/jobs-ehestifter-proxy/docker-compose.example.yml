@@ -1,0 +1,22 @@
+services:
+  ehjobs-proxy:
+    build: .
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - ./secrets/config.json:/run/secrets/config.json:ro
+      - ./secrets/ehjobs-proxy.crt:/run/secrets/tls.crt:ro
+      - ./secrets/ehjobs-proxy.key:/run/secrets/tls.key:ro
+    networks:
+      - agent
+
+networks:
+  agent:
+    driver: bridge

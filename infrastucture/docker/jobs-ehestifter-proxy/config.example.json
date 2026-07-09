@@ -1,0 +1,32 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8787,
+    "tls": {
+      "enabled": true,
+      "certFile": "/run/secrets/tls.crt",
+      "keyFile": "/run/secrets/tls.key"
+    }
+  },
+  "agentAuth": {
+    "bearerToken": "replace-with-long-random-local-secret"
+  },
+  "ehestifter": {
+    "jobsBaseUrl": "https://ehestifter-jobs.azurewebsites.net/api",
+    "jobsFunctionKey": "replace-with-jobs-function-key",
+    "userId": "00000000-0000-0000-0000-000000000000",
+    "actorMode": "user",
+    "timeoutSeconds": 20
+  },
+  "limits": {
+    "maxSearchLength": 120,
+    "maxPageSize": 20,
+    "maxDescriptionCharsOnCreate": 80000,
+    "maxDescriptionCharsReturned": 20000
+  },
+  "features": {
+    "allowCreate": true,
+    "allowMarkApplied": false,
+    "allowUrlIdentityGuess": true
+  }
+}
