@@ -64,6 +64,7 @@ def create_job_record(req: func.HttpRequest, cur, data: dict, analytics_meta: di
     if analytics_meta is not None:
         analytics_meta["provider"] = provider
         analytics_meta["providerTenant"] = providerTenant
+        analytics_meta["foundOn"] = foundOn
 
     if not externalId:
         raise ValueError("Could not deduce externalId from url; please provide externalId")

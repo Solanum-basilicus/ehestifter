@@ -41,16 +41,11 @@ class IdentityResponse(StrictModel):
 
 
 class ExistsRequest(StrictModel):
-    provider: str | None = Field(default=None, max_length=80)
-    providerTenant: str | None = Field(default=None, max_length=160)
-    externalId: str | None = Field(default=None, max_length=240)
-    url: str | None = Field(default=None, max_length=4096)
+    url: str = Field(min_length=1, max_length=4096)
 
-    @field_validator("provider", "providerTenant", "externalId", "url")
+    @field_validator("url")
     @classmethod
-    def trim_optional(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
+    def trim_url(cls, value: str) -> str:
         return value.strip()
 
 

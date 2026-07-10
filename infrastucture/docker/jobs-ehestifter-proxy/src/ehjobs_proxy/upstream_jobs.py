@@ -34,6 +34,28 @@ class UpstreamJobsClient:
             headers["X-User-Id"] = str(self._settings.ehestifter.userId)
         return headers
 
+    async def exists_by_url(self, url: str) -> tuple[bool, UUID | None, dict[str, Any] | None]:
+        response = await self._safe_request("GET", "/jobs/exists", params={"url": url})
+
+        if response.status_code == 404:
+            return False, None, None
+        if response.status_code == 400:
+            raise HTTPException(status_code=400, detail={"code": "upstream_exists_400"})
+        if response.status_code >= 500:
+            raise HTTPException(status_code=502, detail={"code": "upstream_exists_5xx"})
+        if response.status_code >= 400:
+            raise HTTPException(status_code=502, detail={"code": "upstream_exists_unexpected_status"})
+
+        body = _json_or_empty(response)
+        if body is None:
+            return True, None, None
+
+        exists = _read_bool(body, ["exists", "Exists", "found", "isDuplicate"])
+        if exists is None:
+            exists = True
+
+        return exists, _extract_job_id(body), body if isinstance(body, dict) else None
+
     async def exists(self, identity: CanonicalIdentityModel) -> tuple[bool, UUID | None, dict[str, Any] | None]:
         params = {
             "provider": identity.provider,

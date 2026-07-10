@@ -1,7 +1,6 @@
 // Shared init for create/edit pages
 // Requires: quill.min.js, job-url-helpers.js, geo-dict.js, and a bootstrap window.__JOB_FORM_CTX__
 // Exports: window.initJobForm(opts)
-import { deduceFromUrl } from "/static/js/job-url-helpers.js";
 import { loadGeoDict, countryLookup, prioritizedCountries, citiesByCountry } from "/static/js/geo-dict.js";
 
 (function(){
@@ -254,24 +253,114 @@ import { loadGeoDict, countryLookup, prioritizedCountries, citiesByCountry } fro
       }
     });
 
-    // URL helpers
+    // URL identity: Jobs domain is authoritative.
+    let lastIdentityRequestUrl = "";
+    let identitySeq = 0;
+    let companyTouchedByUser = false;
+    let companyAutofilledFromIdentity = false;
+
+    const debounce = (fn, ms = 400) => {
+      let t;
+      return (...args) => {
+        clearTimeout(t);
+        t = setTimeout(() => fn(...args), ms);
+      };
+    };
+
+    function renderDuplicateBanner(state) {
+      const banner = document.querySelector('#dupBanner');
+      if (!banner) return;
+
+      if (!state || !state.exists || !state.id) {
+        banner.classList.remove('show');
+        banner.textContent = '';
+        return;
+      }
+
+      const id = state.id;
+      const uiHref = `/jobs/${encodeURIComponent(id)}`;
+      banner.innerHTML = `Already in your tracker. <a href="${uiHref}">Open job →</a>`;
+      banner.classList.add('show');
+    }
+
+    function applyIdentityResponse(data) {
+      if (!data || typeof data !== 'object') return;
+
+      const foundOn = data.foundOn;
+      const provider = data.provider;
+      const tenant = data.providerTenant;
+      const externalId = data.externalId;
+
+      if (foundOn) foundOnInput.value = foundOn;
+
+      if (!disableAts) {
+        if (provider) providerInput.value = provider;
+        if (tenant !== undefined && tenant !== null) tenantInput.value = tenant;
+        if (externalId) externalIdInput.value = externalId;
+      }
+
+      const company = tenant || '';
+      if (company && (!companyInput.value.trim() || (companyAutofilledFromIdentity && !companyTouchedByUser))) {
+        companyInput.value = company;
+        companyAutofilledFromIdentity = true;
+      }
+
+      renderDuplicateBanner(data);
+    }
+
+    companyInput.addEventListener('input', () => {
+      companyTouchedByUser = true;
+      companyAutofilledFromIdentity = false;
+    });
+
+    async function checkIdentityFromUrl({ force = false } = {}) {
+      if (mode !== 'create') return;
+
+      const raw = urlInput.value.trim();
+      if (!raw) {
+        lastIdentityRequestUrl = '';
+        renderDuplicateBanner(null);
+        return;
+      }
+
+      if (!force && raw === lastIdentityRequestUrl) return;
+
+      lastIdentityRequestUrl = raw;
+      const seq = ++identitySeq;
+
+      const params = new URLSearchParams({ url: raw });
+
+      try {
+        const res = await fetch(`/ui/jobs/exists?${params.toString()}`, {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' },
+          credentials: 'same-origin',
+        });
+
+        if (seq !== identitySeq || urlInput.value.trim() !== raw) return;
+
+        if (!res.ok) {
+          renderDuplicateBanner(null);
+          return;
+        }
+
+        const body = await res.json();
+        applyIdentityResponse(body);
+      } catch {
+        if (seq === identitySeq) renderDuplicateBanner(null);
+      }
+    }
+
+    const checkIdentityFromUrlDebounced = debounce(() => checkIdentityFromUrl(), 400);
+
+    urlInput.addEventListener('input', checkIdentityFromUrlDebounced);
+    urlInput.addEventListener('paste', () => setTimeout(checkIdentityFromUrlDebounced, 0));
+    urlInput.addEventListener('change', checkIdentityFromUrlDebounced);
     urlInput.addEventListener('blur', () => {
       const raw = urlInput.value.trim();
-      if (!raw) return;
-      const d = deduceFromUrl(raw) || {};
-      const foundOn = d.foundOn || d.source;
-      const extId = d.externalId || d.ExternalId;
-      const company = d.hiringCompanyName || d.company;
-      const provider = d.provider || null;
-      const tenant = d.providerTenant || d.tenant || null;
-      const title = d.title || null;
-
-      if (foundOn && !foundOnInput.value.trim()) foundOnInput.value = foundOn;
-      if (!disableAts && extId && !externalIdInput.value.trim()) externalIdInput.value = extId;
-      if (company && !companyInput.value.trim()) companyInput.value = company;
-      if (!disableAts && provider && !providerInput.value.trim()) providerInput.value = provider;
-      if (!disableAts && tenant && !tenantInput.value.trim()) tenantInput.value = tenant;
-      if (title && !titleInput.value.trim()) titleInput.value = title;
+      if (raw && raw !== lastIdentityRequestUrl) {
+        checkIdentityFromUrl({ force: true });
+      }
     });
 
     // hydrate initial (edit) after Quill + geo ready
@@ -418,106 +507,4 @@ import { loadGeoDict, countryLookup, prioritizedCountries, citiesByCountry } fro
   }
 
   window.initJobForm = initJobForm;
-})();
-
-// === Duplicate job inline banner logic (appended) ===
-// Shows a compact banner next to Create/Cancel if a job with the same (provider, tenant, externalId) already exists.
-// - No layout jumps: the banner area is pre-reserved by CSS and we just toggle visibility.
-// - Integrates with your existing init via a wrapper around window.initJobForm.
-(function () {
-  const qs = (s) => document.querySelector(s);
-
-  // Simple debounce to avoid spamming the API while typing
-  const debounce = (fn, ms = 400) => {
-    let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
-  };
-
-  function readUniqueTriple() {
-    const provider = qs('#provider')?.value?.trim() ?? '';
-    const providerTenant = qs('#providerTenant')?.value?.trim() ?? '';
-    const externalId = qs('#externalId')?.value?.trim() ?? '';
-    return { provider, providerTenant, externalId };
-  }
-
-  function renderBanner(state) {
-    const el = qs('#dupBanner');
-    if (!el) return;
-    if (!state || !state.exists) {
-      el.classList.remove('show');
-      el.textContent = ''; // keep the reserved min-height
-      return;
-    }
-    const id = state.id;
-    const uiHref = `/jobs/${encodeURIComponent(id)}`; // adjust if your UI path differs
-    el.innerHTML = `Already in your tracker. <a href="${uiHref}">Open job →</a>`;
-    el.classList.add('show');
-  }
-
-  async function checkExists() {
-    const { provider, providerTenant, externalId } = readUniqueTriple();
-    // Require provider + externalId; tenant may be intentionally empty-string in your schema
-    if (!provider || externalId === '') {
-      renderBanner(null);
-      return;
-    }
-    const params = new URLSearchParams({
-      provider,
-      providerTenant, // may be empty string
-      externalId
-    });
-    try {
-      const res = await fetch(`/ui/jobs/exists?${params.toString()}`, {
-        method: 'GET',
-        headers: { 'Accept': 'application/json' }
-      });
-      if (!res.ok) { renderBanner(null); return; }
-      const body = await res.json();
-      renderBanner(body);
-    } catch {
-      renderBanner(null);
-    }
-  }
-  const checkExistsDebounced = debounce(checkExists, 400);
-
-  // Patch your existing initializer so we don't fight with current logic
-  const originalInit = window.initJobForm;
-  window.initJobForm = function patchedInitJobForm(cfg) {
-    const rv = originalInit ? originalInit(cfg) : undefined;
-
-    // Decide whether to enable duplicate checking based on mode.
-    // We only want it on the "create" page, not when editing an existing job.
-    const mode =
-      (cfg && cfg.mode) ||
-      (window.__JOB_FORM_CTX__ && window.__JOB_FORM_CTX__.mode) ||
-      "create";
-
-    if (mode !== "create") {
-      // Ensure banner is hidden on edit pages
-      const banner = qs("#dupBanner");
-      if (banner) {
-        banner.classList.remove("show");
-        banner.textContent = "";
-      }
-      return rv;
-    }
-
-    // First run after your init (URL heuristics might have auto-filled ATS fields)
-    setTimeout(checkExistsDebounced, 0);
-
-    // Re-check on user edits of the uniqueness triple and URL (URL changes may re-populate ATS)
-    ['#provider', '#providerTenant', '#externalId', '#url'].forEach(sel => {
-      const el = qs(sel);
-      if (el) {
-        el.addEventListener('input', checkExistsDebounced);
-        el.addEventListener('change', checkExistsDebounced);
-        el.addEventListener('blur', checkExistsDebounced);
-      }
-    });
-
-    // If your URL helper dispatches an event after deducing ATS fields, listen for it.
-    // (If it doesn't, this is harmless.)
-    window.addEventListener('job:ats-deduced', checkExistsDebounced);
-
-    return rv;
-  };
 })();

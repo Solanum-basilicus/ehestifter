@@ -10,7 +10,6 @@ from uuid import UUID
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 
-from .identity import CanonicalIdentity, parse_identity_from_url
 from .models import (
     CanonicalIdentityModel,
     ExistsRequest,
@@ -62,18 +61,32 @@ def create_app(settings: Settings, *, jobs_client: Any | None = None) -> FastAPI
 
     @router.post("/jobs/identity", response_model=IdentityResponse)
     async def identity(req: IdentityRequest, request: Request) -> IdentityResponse:
-        settings = _settings(request)
-        if not settings.features.allowUrlIdentityGuess:
-            raise HTTPException(status_code=403, detail={"code": "url_identity_guess_disabled"})
+        # Deprecated compatibility endpoint.
+        # Jobs domain is authoritative for URL -> canonical identity.
         url = validate_public_http_url(req.url)
         assert url is not None
-        parsed = parse_identity_from_url(url)
-        return _identity_response(parsed.identity, parsed.confidence, parsed.warnings)
+
+        _, _, body = await _jobs_client(request).exists_by_url(url)
+        identity = _identity_from_jobs_exists_body(body)
+
+        return IdentityResponse(
+            ok=identity is not None,
+            identity=identity,
+            confidence="high" if identity else "none",
+            warnings=["deprecated_endpoint_use_/v1/jobs/exists"],
+        )
 
     @router.post("/jobs/exists", response_model=ExistsResponse)
     async def exists(req: ExistsRequest, request: Request) -> ExistsResponse:
-        identity, warnings = _resolve_identity_from_exists_request(req, request)
-        exists_flag, job_id, _ = await _jobs_client(request).exists(identity)
+        url = validate_public_http_url(req.url)
+        assert url is not None
+
+        exists_flag, job_id, body = await _jobs_client(request).exists_by_url(url)
+        identity = _identity_from_jobs_exists_body(body)
+
+        if identity is None:
+            raise HTTPException(status_code=502, detail={"code": "upstream_missing_canonical_identity"})
+
         logger.info(
             "exists outcome=%s provider=%s tenant=%s externalId=%s jobId=%s",
             exists_flag,
@@ -82,11 +95,12 @@ def create_app(settings: Settings, *, jobs_client: Any | None = None) -> FastAPI
             identity.externalId,
             job_id,
         )
+
         return ExistsResponse(
             exists=exists_flag,
             jobId=job_id,
             canonicalIdentity=identity,
-            warnings=warnings,
+            warnings=[],
         )
 
     @router.get("/jobs/search", response_model=JobSearchResponse)
@@ -214,36 +228,22 @@ def _identity_response(
     )
 
 
-def _resolve_identity_from_exists_request(req: ExistsRequest, request: Request) -> tuple[CanonicalIdentityModel, list[str]]:
-    warnings: list[str] = []
-    settings = _settings(request)
+def _identity_from_jobs_exists_body(body: dict[str, Any] | None) -> CanonicalIdentityModel | None:
+    if not isinstance(body, dict):
+        return None
 
-    if req.provider and req.externalId:
-        return (
-            CanonicalIdentityModel(
-                provider=req.provider,
-                providerTenant=req.providerTenant or "",
-                externalId=req.externalId,
-            ),
-            warnings,
-        )
+    provider = body.get("provider")
+    provider_tenant = body.get("providerTenant") or ""
+    external_id = body.get("externalId")
 
-    if req.url and settings.features.allowUrlIdentityGuess:
-        url = validate_public_http_url(req.url)
-        assert url is not None
-        parsed = parse_identity_from_url(url)
-        warnings.extend(parsed.warnings)
-        if parsed.identity is not None:
-            return (
-                CanonicalIdentityModel(
-                    provider=parsed.identity.provider,
-                    providerTenant=parsed.identity.providerTenant,
-                    externalId=parsed.identity.externalId,
-                ),
-                warnings,
-            )
+    if not provider or not external_id:
+        return None
 
-    raise HTTPException(status_code=400, detail={"code": "bad_identity"})
+    return CanonicalIdentityModel(
+        provider=str(provider),
+        providerTenant=str(provider_tenant),
+        externalId=str(external_id),
+    )
 
 
 def _truncate_description_fields(body: dict[str, Any], max_chars: int) -> bool:
