@@ -166,3 +166,9 @@ dist
 
 # Ignore generated credentials from google-github-actions/auth
 gha-creds-*.json
+
+# career-ops-scan specific:
+scrapers/career-ops-scan/secrets/.gitkeep
+scrapers/career-ops-scan/data/.gitkeep
+scrapers/career-ops-scan/config/scanner.local.json
+scrapers/career-ops-scan/node_modules/
