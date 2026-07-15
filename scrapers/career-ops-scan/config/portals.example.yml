@@ -1,0 +1,34 @@
+title_filter:
+  positive:
+    - "Product Manager"
+    - "Engineering Manager"
+  negative:
+    - "Junior"
+    - "Intern"
+
+location_filter:
+  always_allow:
+    - "Germany"
+    - "Berlin"
+  allow:
+    - "Remote"
+    - "Germany"
+    - "Berlin"
+  block:
+    - "United States only"
+    - "India"
+
+max_posting_age_days: 30
+
+tracked_companies:
+  - name: Example Greenhouse Company
+    careers_url: https://job-boards.greenhouse.io/example
+    enabled: true
+
+  - name: Example Lever Company
+    careers_url: https://jobs.lever.co/example
+    enabled: true
+
+  - name: Example Ashby Company
+    careers_url: https://jobs.ashbyhq.com/example
+    enabled: true

@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "runId": "2026-07-15T13-07-32-314Z-9b1867e4",
+  "jobs": [
+    {
+      "schemaVersion": 1,
+      "sourceMode": "tracked",
+      "sourceProvider": "greenhouse",
+      "sourceCompany": "Celonis",
+      "url": "https://job-boards.greenhouse.io/celonis/jobs/7798592003?gh_jid=7798592003",
+      "applyUrl": "https://job-boards.greenhouse.io/celonis/jobs/7798592003?gh_jid=7798592003",
+      "title": "Application Product Manager - AI System Transformations",
+      "hiringCompanyName": "Celonis",
+      "postingCompanyName": null,
+      "rawLocation": "Munich, Germany",
+      "locations": [],
+      "remoteType": "Unknown",
+      "description": "",
+      "descriptionStatus": "missing",
+      "postedAtUtc": "2026-07-08T13:10:04.000Z",
+      "salary": null,
+      "canonicalIdentity": null,
+      "existingJobId": null,
+      "preflight": null,
+      "provenance": {
+        "derivedFrom": "santifer/career-ops",
+        "upstreamRef": "493487462608c0cced82c1440e7ba8be6c01f306",
+        "providerNativeId": null
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "sourceMode": "tracked",
+      "sourceProvider": "greenhouse",
+      "sourceCompany": "Celonis",
+      "url": "https://job-boards.greenhouse.io/celonis/jobs/7788415003?gh_jid=7788415003",
+      "applyUrl": "https://job-boards.greenhouse.io/celonis/jobs/7788415003?gh_jid=7788415003",
+      "title": "Application Product Manager - AI System Transformations",
+      "hiringCompanyName": "Celonis",
+      "postingCompanyName": null,
+      "rawLocation": "Munich, Germany",
+      "locations": [],
+      "remoteType": "Unknown",
+      "description": "",
+      "descriptionStatus": "missing",
+      "postedAtUtc": "2026-06-30T16:09:38.000Z",
+      "salary": null,
+      "canonicalIdentity": null,
+      "existingJobId": null,
+      "preflight": null,
+      "provenance": {
+        "derivedFrom": "santifer/career-ops",
+        "upstreamRef": "493487462608c0cced82c1440e7ba8be6c01f306",
+        "providerNativeId": null
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "sourceMode": "tracked",
+      "sourceProvider": "ashby",
+      "sourceCompany": "n8n",
+      "url": "https://jobs.ashbyhq.com/n8n/42e72645-d99a-4545-97b7-53ba3a699893",
+      "applyUrl": "https://jobs.ashbyhq.com/n8n/42e72645-d99a-4545-97b7-53ba3a699893",
+      "title": "AI Product Manager",
+      "hiringCompanyName": "n8n",
+      "postingCompanyName": null,
+      "rawLocation": "Berlin Office · Bosnia · Romania · Norway · Estonia · Latvia · Slovenia · Netherlands · Hungary · Portugal · Poland · Serbia · Germany · Austria · Finland · Albania · Lithuania · Slovakia · Ireland · Bulgaria · Denmark · Belgium · Czech Republic · United Kingdom · Croatia · Spain · Greece",
+      "locations": [],
+      "remoteType": "Unknown",
+      "description": "",
+      "descriptionStatus": "missing",
+      "postedAtUtc": "2026-06-23T10:14:56.337Z",
+      "salary": null,
+      "canonicalIdentity": null,
+      "existingJobId": null,
+      "preflight": null,
+      "provenance": {
+        "derivedFrom": "santifer/career-ops",
+        "upstreamRef": "493487462608c0cced82c1440e7ba8be6c01f306",
+        "providerNativeId": null
+      }
+    }
+  ]
+}

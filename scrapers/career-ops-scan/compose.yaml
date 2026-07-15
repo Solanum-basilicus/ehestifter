@@ -1,0 +1,39 @@
+services:
+  career-ops-scan:
+    build:
+      context: .
+    image: ehestifter/career-ops-scan:local
+
+    # Override the image UID locally so bind-mounted artifacts belong
+    # to the host developer.
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+
+    read_only: true
+
+    tmpfs:
+      - /tmp:size=64m
+
+    volumes:
+      - ./config:/config:ro
+      - ./data:/data
+
+    secrets:
+      - jobs_function_key
+
+    environment:
+      SCANNER_CONFIG_PATH: /config/scanner.local.json
+      EHESTIFTER_JOBS_FUNCTION_KEY_FILE: /run/secrets/jobs_function_key
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    cap_drop:
+      - ALL
+
+    security_opt:
+      - no-new-privileges:true
+
+secrets:
+  jobs_function_key:
+    file: ./secrets/jobs-function-key.txt
+

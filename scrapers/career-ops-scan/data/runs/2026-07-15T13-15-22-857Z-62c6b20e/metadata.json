@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "runId": "2026-07-15T13-15-22-857Z-62c6b20e",
+  "mode": "preflight",
+  "scannerConfigPath": "/config/scanner.local.json",
+  "careerOpsUpstreamRef": "493487462608c0cced82c1440e7ba8be6c01f306"
+}

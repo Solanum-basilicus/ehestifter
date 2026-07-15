@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "runId": "2026-07-15T13-15-22-857Z-62c6b20e",
+  "mode": "preflight",
+  "startedAtUtc": "2026-07-15T13:15:22.857Z",
+  "finishedAtUtc": "2026-07-15T13:15:25.968Z",
+  "durationMs": 3111,
+  "targets": 3,
+  "providersLoaded": [
+    "ashby",
+    "greenhouse",
+    "lever",
+    "workday"
+  ],
+  "candidates": 3,
+  "rejected": 258,
+  "preflightExisting": 0,
+  "preflightMissing": 3,
+  "preflightErrors": 0
+}
