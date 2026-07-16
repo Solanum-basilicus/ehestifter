@@ -248,11 +248,22 @@ async function main() {
       (job) => job.detail?.status === 'error',
     ).length,
 
-    missingDescriptions: evaluated.filter(
+    candidateDescriptionsMissing: evaluated.filter(
       (job) =>
         typeof job.description !== 'string'
         || job.description.trim() === '',
-    ).length,    
+    ).length,
+
+    missingDescriptionsForImport: evaluated.filter(
+      (job) =>
+        job.preflight?.status === 'ok'
+        && job.preflight.exists === false
+        && (
+          typeof job.description !== 'string'
+          || job.description.trim() === ''
+        ),
+    ).length,
+
     importExisting: evaluated.filter(
       (job) =>
         job.import?.status === 'existing_preflight',
