@@ -131,11 +131,14 @@ async function main() {
 
   let client = null;
   let preflightResults = null;
+
   if (
     args.mode === 'preflight'
     || args.mode === 'import'
   ) {
-    const client = createJobsClient(config.jobsApi);
+    // Assignment, not "const client": retain the value for import mode.
+    client = createJobsClient(config.jobsApi);
+
     preflightResults = await preflightCandidates(
       scanResult.candidates,
       client,
@@ -163,30 +166,32 @@ async function main() {
           config.scan.description.timeoutMs,
       },
     );
-    let importResults = null;
+  }
 
-    if (args.mode === 'import') {
-      if (
-        args.maxCreate
-        > config.imports.maxCreatesPerRun
-      ) {
-        throw new Error(
-          `--max-create ${args.maxCreate} exceeds `
-          + `imports.maxCreatesPerRun `
-          + `${config.imports.maxCreatesPerRun}`,
-        );
-      }
+  // Must be in main() scope, outside the detail-fetch block.
+  let importResults = null;
 
-      importResults = await importCandidates(
-        detailResults ?? preflightResults,
-        client,
-        {
-          maxCreates: args.maxCreate,
-          requireDescription:
-            config.scan.requireDescriptionForCreate,
-        },
+  if (args.mode === 'import') {
+    if (
+      args.maxCreate
+      > config.imports.maxCreatesPerRun
+    ) {
+      throw new Error(
+        `--max-create ${args.maxCreate} exceeds `
+        + `imports.maxCreatesPerRun `
+        + `${config.imports.maxCreatesPerRun}`,
       );
     }
+
+    importResults = await importCandidates(
+      detailResults ?? preflightResults,
+      client,
+      {
+        maxCreates: args.maxCreate,
+        requireDescription:
+          config.scan.requireDescriptionForCreate,
+      },
+    );
   }
 
   const finishedAt = new Date();
