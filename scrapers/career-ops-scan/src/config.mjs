@@ -56,6 +56,10 @@ export async function loadRuntimeConfig({ mode }) {
     scan.description ?? {},
     'scan.description',
   );
+  const imports = requireObject(
+    raw.imports ?? {},
+    'imports',
+  );
   const jobsApi = requireObject(raw.jobsApi ?? {}, 'jobsApi');
   const careerOps = requireObject(raw.careerOps ?? {}, 'careerOps');
 
@@ -120,11 +124,23 @@ export async function loadRuntimeConfig({ mode }) {
     careerOps: {
       upstreamRef: requireString(careerOps.upstreamRef, 'careerOps.upstreamRef'),
     },
+    imports: {
+      enabled: booleanValue(
+        imports.enabled,
+        false,
+        'imports.enabled',
+      ),
+      maxCreatesPerRun: positiveInteger(
+        imports.maxCreatesPerRun,
+        5,
+        'imports.maxCreatesPerRun',
+      ),
+    },
   };
 
   await access(config.paths.portals, fsConstants.R_OK);
 
-  if (mode === 'preflight') {
+  if (mode === 'preflight' || mode === 'import') {
     config.jobsApi.baseUrl = requireString(config.jobsApi.baseUrl, 'jobsApi.baseUrl');
     config.jobsApi.functionKey = await readSecret({
       envName: 'EHESTIFTER_JOBS_FUNCTION_KEY',
@@ -135,6 +151,11 @@ export async function loadRuntimeConfig({ mode }) {
         'Preflight requires EHESTIFTER_JOBS_FUNCTION_KEY or EHESTIFTER_JOBS_FUNCTION_KEY_FILE',
       );
     }
+    if (mode === 'import' && !config.imports.enabled) {
+      throw new Error(
+        'Import mode requires imports.enabled=true',
+      );
+    }   
   }
 
   return config;

@@ -20,6 +20,7 @@ export async function writeRunArtifacts({
   rejected,
   preflightResults,
   detailResults,
+  importResults,
   summary,
 }) {
   const runPath = path.join(dataPath, 'runs', runId);
@@ -52,6 +53,16 @@ export async function writeRunArtifacts({
       },
     );
   }
+  if (importResults) {
+    await writeJsonAtomic(
+      path.join(runPath, 'import-results.json'),
+      {
+        schemaVersion: 1,
+        runId,
+        jobs: importResults,
+      },
+    );
+  }  
   await writeJsonAtomic(path.join(runPath, 'summary.json'), summary);
   return runPath;
 }

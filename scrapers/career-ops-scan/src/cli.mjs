@@ -6,28 +6,106 @@ import { runTrackedScan } from './scan/tracked-source.mjs';
 import { createJobsClient, preflightCandidates } from './ehestifter/jobs-client.mjs';
 import { createRunId, writeRunArtifacts } from './artifacts/run-writer.mjs';
 import { enrichCandidateDetails } from './details/fetchers.mjs';
+import { importCandidates, } from './ehestifter/import-jobs.mjs';
 
 function usage() {
   console.log(`Usage:
   node src/cli.mjs scan tracked --offline
   node src/cli.mjs scan tracked --preflight
-
-Phase 1A/B intentionally has no --import mode.`);
+  node src/cli.mjs scan tracked --import --max-create N
+`);
 }
 
 function parseArgs(argv) {
-  if (argv.includes('--help') || argv.includes('-h')) return { help: true };
+  if (
+    argv.includes('--help')
+    || argv.includes('-h')
+  ) {
+    return {
+      help: true,
+    };
+  }
+
   const [command, source, ...flags] = argv;
-  if (command !== 'scan' || source !== 'tracked') {
-    throw new Error('Only "scan tracked" is implemented in Phase 1A/B');
+
+  if (
+    command !== 'scan'
+    || source !== 'tracked'
+  ) {
+    throw new Error(
+      'Only "scan tracked" is currently implemented',
+    );
   }
-  const modes = flags.filter((flag) => flag === '--offline' || flag === '--preflight');
-  if (modes.length !== 1) {
-    throw new Error('Choose exactly one of --offline or --preflight');
+
+  let mode = null;
+  let maxCreate = null;
+
+  for (let index = 0; index < flags.length; index += 1) {
+    const flag = flags[index];
+
+    if (
+      flag === '--offline'
+      || flag === '--preflight'
+      || flag === '--import'
+    ) {
+      if (mode !== null) {
+        throw new Error(
+          'Choose exactly one mode',
+        );
+      }
+
+      mode = flag.slice(2);
+      continue;
+    }
+
+    if (flag === '--max-create') {
+      const rawValue = flags[index + 1];
+      const value = Number.parseInt(rawValue, 10);
+
+      if (
+        !rawValue
+        || !Number.isInteger(value)
+        || value <= 0
+        || String(value) !== rawValue
+      ) {
+        throw new Error(
+          '--max-create requires a positive integer',
+        );
+      }
+
+      maxCreate = value;
+      index += 1;
+      continue;
+    }
+
+    throw new Error(
+      `Unknown argument: ${flag}`,
+    );
   }
-  const unknown = flags.filter((flag) => !['--offline', '--preflight'].includes(flag));
-  if (unknown.length > 0) throw new Error(`Unknown argument(s): ${unknown.join(', ')}`);
-  return { help: false, mode: modes[0].slice(2) };
+
+  if (mode === null) {
+    throw new Error(
+      'Choose one of --offline, --preflight, or --import',
+    );
+  }
+
+  if (mode === 'import' && maxCreate === null) {
+    throw new Error(
+      'Import mode requires --max-create N',
+    );
+  }
+
+  if (mode !== 'import' && maxCreate !== null) {
+    throw new Error(
+      '--max-create is valid only with --import',
+    );
+  }
+
+  return {
+    help: false,
+    mode,
+    maxCreate,
+  };
 }
 
 async function main() {
@@ -51,8 +129,12 @@ async function main() {
     upstreamRef: config.careerOps.upstreamRef,
   });
 
+  let client = null;
   let preflightResults = null;
-  if (args.mode === 'preflight') {
+  if (
+    args.mode === 'preflight'
+    || args.mode === 'import'
+  ) {
     const client = createJobsClient(config.jobsApi);
     preflightResults = await preflightCandidates(
       scanResult.candidates,
@@ -64,7 +146,10 @@ async function main() {
   let detailResults = null;
 
   if (
-    args.mode === 'preflight'
+    (
+      args.mode === 'preflight'
+      || args.mode === 'import'
+    )
     && config.scan.description.fetchMissing
   ) {
     detailResults = await enrichCandidateDetails(
@@ -78,11 +163,36 @@ async function main() {
           config.scan.description.timeoutMs,
       },
     );
+    let importResults = null;
+
+    if (args.mode === 'import') {
+      if (
+        args.maxCreate
+        > config.imports.maxCreatesPerRun
+      ) {
+        throw new Error(
+          `--max-create ${args.maxCreate} exceeds `
+          + `imports.maxCreatesPerRun `
+          + `${config.imports.maxCreatesPerRun}`,
+        );
+      }
+
+      importResults = await importCandidates(
+        detailResults ?? preflightResults,
+        client,
+        {
+          maxCreates: args.maxCreate,
+          requireDescription:
+            config.scan.requireDescriptionForCreate,
+        },
+      );
+    }
   }
 
   const finishedAt = new Date();
   const evaluated =
-    detailResults
+    importResults
+    ?? detailResults
     ?? preflightResults
     ?? scanResult.candidates;
   const summary = {
@@ -124,6 +234,32 @@ async function main() {
         typeof job.description !== 'string'
         || job.description.trim() === '',
     ).length,    
+    importExisting: evaluated.filter(
+      (job) =>
+        job.import?.status === 'existing_preflight',
+    ).length,
+
+    importSubmitted: evaluated.filter(
+      (job) =>
+        job.import?.status === 'submitted',
+    ).length,
+
+    importReconciled: evaluated.filter(
+      (job) =>
+        job.import?.status
+          === 'reconciled_after_ambiguous_post',
+    ).length,
+
+    importSkipped: evaluated.filter(
+      (job) =>
+        typeof job.import?.status === 'string'
+        && job.import.status.startsWith('skipped_'),
+    ).length,
+
+    importErrors: evaluated.filter(
+      (job) =>
+        job.import?.status === 'error',
+    ).length,
   };
 
   const runPath = await writeRunArtifacts({
@@ -139,13 +275,19 @@ async function main() {
     },
     candidates: scanResult.candidates,
     rejected: scanResult.rejected,
+    importResults,
     preflightResults,
     detailResults,
     summary,
   });
 
   console.log(JSON.stringify({ runPath, summary }, null, 2));
-  if (summary.preflightErrors > 0) process.exitCode = 2;
+  if (
+    summary.preflightErrors > 0
+    || summary.importErrors > 0
+  ) {
+    process.exitCode = 2;
+  }
 }
 
 main().catch((error) => {

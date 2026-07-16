@@ -78,24 +78,160 @@ export function createJobsClient(config, { fetchImpl = fetch } = {}) {
     'x-source-surface': 'system',
   };
 
+  async function existsByUrl(jobUrl) {
+    const endpoint = new URL(
+      `${config.baseUrl}/jobs/exists`,
+    );
+
+    endpoint.searchParams.set('url', jobUrl);
+
+    const payload = await getJsonWithRetry({
+      fetchImpl,
+      url: endpoint,
+      headers,
+      timeoutMs: config.timeoutMs,
+      retryCount: config.retryCount,
+    });
+
+    return {
+      exists: payload.exists === true,
+      id:
+        typeof payload.id === 'string'
+          ? payload.id
+          : null,
+      identity: validateIdentity(payload),
+      urlInference: extractUrlInference(payload),
+    };
+  }
+
+  async function createJob(
+    payload,
+    {
+      reconcileUrl = payload.url,
+    } = {},
+  ) {
+    const endpoint = new URL(
+      `${config.baseUrl}/jobs`,
+    );
+
+    let lastError = null;
+
+    for (
+      let attempt = 0;
+      attempt <= config.retryCount;
+      attempt += 1
+    ) {
+      let response = null;
+
+      try {
+        response = await fetchWithTimeout(
+          fetchImpl,
+          endpoint,
+          {
+            method: 'POST',
+            headers: {
+              ...headers,
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify(payload),
+          },
+          config.timeoutMs,
+        );
+      } catch (error) {
+        lastError = error;
+      }
+
+      if (response?.ok) {
+        try {
+          const body = await response.json();
+
+          if (
+            !body
+            || typeof body.id !== 'string'
+            || body.id.trim() === ''
+          ) {
+            throw new Error(
+              'Jobs create response is missing id',
+            );
+          }
+
+          return {
+            id: body.id.trim(),
+            disposition: 'submitted',
+            reconciled: false,
+            responseStatus: response.status,
+          };
+        } catch (error) {
+          /*
+           * The server may have committed before a malformed or
+           * truncated response reached us.
+           */
+          lastError = error;
+        }
+      } else if (response) {
+        const body = await response
+          .text()
+          .catch(() => '');
+
+        const error = new Error(
+          `Jobs API returned ${response.status}: `
+          + body.slice(0, 500),
+        );
+
+        error.status = response.status;
+        lastError = error;
+
+        if (!isRetryable(null, response)) {
+          throw error;
+        }
+      }
+
+      /*
+       * A timeout, transport error, malformed success response,
+       * 429, or 5xx may have happened after the server committed.
+       */
+      try {
+        const reconciliation =
+          await existsByUrl(reconcileUrl);
+
+        if (
+          reconciliation.exists
+          && reconciliation.id
+        ) {
+          return {
+            id: reconciliation.id,
+            disposition:
+              'reconciled_after_ambiguous_post',
+            reconciled: true,
+            responseStatus:
+              response?.status ?? null,
+          };
+        }
+      } catch {
+        /*
+         * Preserve the POST failure as the primary error.
+         */
+      }
+
+      if (attempt === config.retryCount) {
+        throw lastError ?? new Error(
+          'Jobs create failed without an error',
+        );
+      }
+
+      await sleep(
+        Math.min(500 * 2 ** attempt, 4000),
+      );
+    }
+
+    throw lastError ?? new Error(
+      'Jobs create failed without an error',
+    );
+  }
+
   return {
-    async existsByUrl(jobUrl) {
-      const endpoint = new URL(`${config.baseUrl}/jobs/exists`);
-      endpoint.searchParams.set('url', jobUrl);
-      const payload = await getJsonWithRetry({
-        fetchImpl,
-        url: endpoint,
-        headers,
-        timeoutMs: config.timeoutMs,
-        retryCount: config.retryCount,
-      });
-      return {
-        exists: payload.exists === true,
-        id: typeof payload.id === 'string' ? payload.id : null,
-        identity: validateIdentity(payload),
-        urlInference: extractUrlInference(payload),
-      };
-    },
+    existsByUrl,
+    createJob,
   };
 }
 
