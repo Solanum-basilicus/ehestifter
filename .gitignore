@@ -174,3 +174,4 @@ scrapers/career-ops-scan/config/scanner.local.json
 scrapers/career-ops-scan/node_modules/
 scrapers/career-ops-scan/secrets/jobs-function-key.txt
 scrapers/career-ops-scan/config/portals.yml
+scrapers/career-ops-scan/data/runs/*
