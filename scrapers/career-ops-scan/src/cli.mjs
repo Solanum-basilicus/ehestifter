@@ -7,6 +7,7 @@ import { createJobsClient, preflightCandidates } from './ehestifter/jobs-client.
 import { createRunId, writeRunArtifacts } from './artifacts/run-writer.mjs';
 import { enrichCandidateDetails } from './details/fetchers.mjs';
 import { importCandidates, } from './ehestifter/import-jobs.mjs';
+import { normalizeCandidateLocations, } from './locations/normalizer.mjs';
 
 function usage() {
   console.log(`Usage:
@@ -168,6 +169,18 @@ async function main() {
     );
   }
 
+  let locationResults = null;
+
+  if (
+    args.mode === 'preflight'
+    || args.mode === 'import'
+  ) {
+    locationResults =
+      normalizeCandidateLocations(
+        detailResults ?? preflightResults,
+      );
+  }
+
   // Must be in main() scope, outside the detail-fetch block.
   let importResults = null;
 
@@ -184,7 +197,7 @@ async function main() {
     }
 
     importResults = await importCandidates(
-      detailResults ?? preflightResults,
+      locationResults,
       client,
       {
         maxCreates: args.maxCreate,
@@ -197,6 +210,7 @@ async function main() {
   const finishedAt = new Date();
   const evaluated =
     importResults
+    ?? locationResults    
     ?? detailResults
     ?? preflightResults
     ?? scanResult.candidates;
@@ -265,6 +279,37 @@ async function main() {
       (job) =>
         job.import?.status === 'error',
     ).length,
+
+    locationProviderStructured: evaluated.filter(
+      (job) =>
+        job.locationNormalization?.status
+          === 'provider_structured',
+    ).length,
+
+    locationNormalized: evaluated.filter(
+      (job) =>
+        job.locationNormalization?.status
+          === 'normalized_city_country'
+        || job.locationNormalization?.status
+          === 'normalized_country'
+        || job.locationNormalization?.status
+          === 'normalized_country_scope',
+    ).length,
+
+    locationUnparsed: evaluated.filter(
+      (job) =>
+        typeof job.locationNormalization?.status
+          === 'string'
+        && job.locationNormalization.status.startsWith(
+          'unparsed_',
+        ),
+    ).length,
+
+    locationMissing: evaluated.filter(
+      (job) =>
+        job.locationNormalization?.status
+          === 'missing',
+    ).length,    
   };
 
   const runPath = await writeRunArtifacts({
@@ -281,6 +326,7 @@ async function main() {
     candidates: scanResult.candidates,
     rejected: scanResult.rejected,
     importResults,
+    locationResults,
     preflightResults,
     detailResults,
     summary,

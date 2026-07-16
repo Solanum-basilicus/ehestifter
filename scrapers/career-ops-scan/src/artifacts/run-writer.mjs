@@ -20,6 +20,7 @@ export async function writeRunArtifacts({
   rejected,
   preflightResults,
   detailResults,
+  locationResults,
   importResults,
   summary,
 }) {
@@ -63,6 +64,16 @@ export async function writeRunArtifacts({
       },
     );
   }  
+  if (locationResults) {
+    await writeJsonAtomic(
+      path.join(runPath, 'location-results.json'),
+      {
+        schemaVersion: 1,
+        runId,
+        jobs: locationResults,
+      },
+    );
+  }
   await writeJsonAtomic(path.join(runPath, 'summary.json'), summary);
   return runPath;
 }
