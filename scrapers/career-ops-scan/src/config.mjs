@@ -23,6 +23,18 @@ function positiveInteger(value, fallback, name) {
   return value;
 }
 
+function booleanValue(value, fallback, name) {
+  if (value == null) {
+    return fallback;
+  }
+
+  if (typeof value !== 'boolean') {
+    throw new Error(`${name} must be a boolean`);
+  }
+
+  return value;
+}
+
 async function readSecret({ envName, fileEnvName }) {
   const direct = process.env[envName];
   if (direct?.trim()) return direct.trim();
@@ -40,6 +52,10 @@ export async function loadRuntimeConfig({ mode }) {
 
   const paths = requireObject(raw.paths, 'paths');
   const scan = requireObject(raw.scan ?? {}, 'scan');
+  const description = requireObject(
+    scan.description ?? {},
+    'scan.description',
+  );
   const jobsApi = requireObject(raw.jobsApi ?? {}, 'jobsApi');
   const careerOps = requireObject(raw.careerOps ?? {}, 'careerOps');
 
@@ -50,9 +66,48 @@ export async function loadRuntimeConfig({ mode }) {
       data: requireString(paths.data, 'paths.data'),
     },
     scan: {
-      providerConcurrency: positiveInteger(scan.providerConcurrency, 6, 'scan.providerConcurrency'),
-      jobsApiConcurrency: positiveInteger(scan.jobsApiConcurrency, 3, 'scan.jobsApiConcurrency'),
-      maxCandidatesPerRun: positiveInteger(scan.maxCandidatesPerRun, 100, 'scan.maxCandidatesPerRun'),
+      providerConcurrency: positiveInteger(
+        scan.providerConcurrency,
+        6,
+        'scan.providerConcurrency',
+      ),
+      jobsApiConcurrency: positiveInteger(
+        scan.jobsApiConcurrency,
+        3,
+        'scan.jobsApiConcurrency',
+      ),
+      maxCandidatesPerRun: positiveInteger(
+        scan.maxCandidatesPerRun,
+        100,
+        'scan.maxCandidatesPerRun',
+      ),
+      requireDescriptionForCreate: booleanValue(
+        scan.requireDescriptionForCreate,
+        true,
+        'scan.requireDescriptionForCreate',
+      ),
+      description: {
+        fetchMissing: booleanValue(
+          description.fetchMissing,
+          true,
+          'scan.description.fetchMissing',
+        ),
+        maxFetchesPerRun: positiveInteger(
+          description.maxFetchesPerRun,
+          50,
+          'scan.description.maxFetchesPerRun',
+        ),
+        concurrency: positiveInteger(
+          description.concurrency,
+          2,
+          'scan.description.concurrency',
+        ),
+        timeoutMs: positiveInteger(
+          description.timeoutMs,
+          30000,
+          'scan.description.timeoutMs',
+        ),
+      },
     },
     jobsApi: {
       baseUrl: typeof jobsApi.baseUrl === 'string' ? jobsApi.baseUrl.replace(/\/$/, '') : '',

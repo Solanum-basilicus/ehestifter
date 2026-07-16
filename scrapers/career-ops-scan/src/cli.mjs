@@ -5,6 +5,7 @@ import { loadRuntimeConfig } from './config.mjs';
 import { runTrackedScan } from './scan/tracked-source.mjs';
 import { createJobsClient, preflightCandidates } from './ehestifter/jobs-client.mjs';
 import { createRunId, writeRunArtifacts } from './artifacts/run-writer.mjs';
+import { enrichCandidateDetails } from './details/fetchers.mjs';
 
 function usage() {
   console.log(`Usage:
@@ -60,8 +61,30 @@ async function main() {
     );
   }
 
+  let detailResults = null;
+
+  if (
+    args.mode === 'preflight'
+    && config.scan.description.fetchMissing
+  ) {
+    detailResults = await enrichCandidateDetails(
+      preflightResults,
+      {
+        concurrency:
+          config.scan.description.concurrency,
+        maxFetches:
+          config.scan.description.maxFetchesPerRun,
+        timeoutMs:
+          config.scan.description.timeoutMs,
+      },
+    );
+  }
+
   const finishedAt = new Date();
-  const evaluated = preflightResults ?? scanResult.candidates;
+  const evaluated =
+    detailResults
+    ?? preflightResults
+    ?? scanResult.candidates;
   const summary = {
     schemaVersion: 1,
     runId,
@@ -76,6 +99,31 @@ async function main() {
     preflightExisting: evaluated.filter((job) => job.preflight?.status === 'ok' && job.preflight.exists).length,
     preflightMissing: evaluated.filter((job) => job.preflight?.status === 'ok' && !job.preflight.exists).length,
     preflightErrors: evaluated.filter((job) => job.preflight?.status === 'error').length,
+    detailReady: evaluated.filter(
+      (job) => job.detail?.status === 'ok',
+    ).length,
+
+    detailAlreadyPresent: evaluated.filter(
+      (job) => job.detail?.status === 'already_present',
+    ).length,
+
+    detailExistingSkipped: evaluated.filter(
+      (job) => job.detail?.status === 'skipped_existing',
+    ).length,
+
+    detailUnsupported: evaluated.filter(
+      (job) => job.detail?.status === 'unsupported_provider',
+    ).length,
+
+    detailErrors: evaluated.filter(
+      (job) => job.detail?.status === 'error',
+    ).length,
+
+    missingDescriptions: evaluated.filter(
+      (job) =>
+        typeof job.description !== 'string'
+        || job.description.trim() === '',
+    ).length,    
   };
 
   const runPath = await writeRunArtifacts({
@@ -86,11 +134,13 @@ async function main() {
       runId,
       mode: args.mode,
       scannerConfigPath: config.configPath,
-      careerOpsUpstreamRef: config.careerOps.upstreamRef,
+      careerOpsUpstreamRef:
+        config.careerOps.upstreamRef,
     },
     candidates: scanResult.candidates,
     rejected: scanResult.rejected,
     preflightResults,
+    detailResults,
     summary,
   });
 
