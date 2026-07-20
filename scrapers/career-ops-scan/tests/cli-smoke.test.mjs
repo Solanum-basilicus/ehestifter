@@ -113,3 +113,62 @@ test('CLI catalog sync branch writes catalog and does not enter scan orchestrati
     assert.deepEqual(persisted.tenants, ['n8n']);
   });
 });
+
+test('CLI offline branch publishes Phase 3 artifacts and scanner-owned state without network targets', async () => {
+  await withTempDir(async (directory) => {
+    const dataPath = path.join(directory, 'data');
+    const configPath = path.join(directory, 'scanner.json');
+    const portalsPath = path.join(directory, 'portals.yml');
+    const overridesPath = path.join(directory, 'overrides.yml');
+    const policyPath = path.join(directory, 'policy.yml');
+
+    await writeFile(portalsPath, JSON.stringify({ tracked_companies: [] }));
+    await writeFile(overridesPath, JSON.stringify({
+      schema_version: 1,
+      priority: { ashby: [] },
+      disabled: { ashby: [] },
+    }));
+    await writeFile(policyPath, JSON.stringify({
+      schema_version: 1,
+      providers: {
+        ashby: {
+          catalog_enabled: false,
+          max_normal_targets_per_run: 100,
+          target_full_sweep_days: 3,
+        },
+      },
+    }));
+    await writeFile(configPath, JSON.stringify({
+      schemaVersion: 1,
+      careerOps: { upstreamRef: 'test-ref' },
+      paths: {
+        portals: portalsPath,
+        companyOverrides: overridesPath,
+        discoveryPolicy: policyPath,
+        catalogs: path.join(dataPath, 'catalogs'),
+        state: path.join(dataPath, 'state'),
+        data: dataPath,
+      },
+      scan: { providerConcurrency: 3, maxCandidatesPerRun: 100 },
+      jobsApi: {},
+      imports: {},
+    }));
+
+    const result = await runNode(
+      [cliPath, 'scan', 'tracked', '--offline'],
+      { env: { SCANNER_CONFIG_PATH: configPath } },
+    );
+    assert.equal(result.code, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.summary.targetsPlanned, 0);
+    assert.equal(output.tenantStatePath, path.join(dataPath, 'state', 'tenant-state.json'));
+
+    const files = await import('node:fs/promises').then(({ readdir }) => readdir(output.runPath));
+    assert.ok(files.includes('tenant-state-changes.json'));
+    assert.ok(files.includes('rate-observations.json'));
+    const state = JSON.parse(
+      await readFile(path.join(dataPath, 'state', 'tenant-state.json'), 'utf8'),
+    );
+    assert.equal(state.schemaVersion, 1);
+  });
+});

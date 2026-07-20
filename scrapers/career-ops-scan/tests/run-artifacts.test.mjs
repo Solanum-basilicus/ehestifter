@@ -1,9 +1,4 @@
-import {
-  mkdtemp,
-  readFile,
-  readdir,
-  rm,
-} from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -15,9 +10,7 @@ import { buildRunSummary } from '../src/run-summary.mjs';
 
 async function withTempDir(worker) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'run-artifacts-'));
-  try {
-    return await worker(directory);
-  } finally {
+  try { return await worker(directory); } finally {
     await rm(directory, { recursive: true, force: true });
   }
 }
@@ -27,98 +20,75 @@ test('writeJsonAtomic replaces destination and leaves no temporary file', async 
     const filePath = path.join(directory, 'value.json');
     await writeJsonAtomic(filePath, { version: 1 });
     await writeJsonAtomic(filePath, { version: 2 });
-
     assert.deepEqual(JSON.parse(await readFile(filePath, 'utf8')), { version: 2 });
     assert.deepEqual(await readdir(directory), ['value.json']);
   });
 });
 
-test('run writer emits target plan and provider result artifacts with envelopes', async () => {
+test('run writer emits Phase 3 state and rate artifacts in one published directory', async () => {
   await withTempDir(async (directory) => {
     const runPath = await writeRunArtifacts({
       dataPath: directory,
       runId: 'run-1',
-      metadata: { schemaVersion: 1 },
-      targetPlan: {
-        schemaVersion: 1,
-        targets: [{ sequence: 0, tenant: 'n8n' }],
-      },
+      metadata: { schemaVersion: 2 },
+      targetPlan: { schemaVersion: 2, targets: [] },
       providerResults: [{ sequence: 0, status: 'ok' }],
-      candidates: [],
-      rejected: [],
-      preflightResults: null,
-      detailResults: null,
-      locationResults: null,
-      importResults: null,
-      summary: { schemaVersion: 1 },
+      tenantStateChanges: { schemaVersion: 1, generatedAtUtc: '2026-07-20T00:00:00Z', tenantChanges: [], providerChanges: [] },
+      rateObservations: { schemaVersion: 1, generatedAtUtc: '2026-07-20T00:00:00Z', providers: [] },
+      candidates: [], rejected: [], preflightResults: null, detailResults: null,
+      locationResults: null, importResults: null,
+      summary: { schemaVersion: 2 },
     });
-
-    const plan = JSON.parse(await readFile(path.join(runPath, 'target-plan.json'), 'utf8'));
-    const providerResults = JSON.parse(
-      await readFile(path.join(runPath, 'provider-results.json'), 'utf8'),
-    );
-    assert.equal(plan.targets[0].tenant, 'n8n');
-    assert.deepEqual(providerResults, {
-      schemaVersion: 1,
-      runId: 'run-1',
-      results: [{ sequence: 0, status: 'ok' }],
-    });
+    const files = await readdir(runPath);
+    assert.ok(files.includes('tenant-state-changes.json'));
+    assert.ok(files.includes('rate-observations.json'));
+    const provider = JSON.parse(await readFile(path.join(runPath, 'provider-results.json'), 'utf8'));
+    assert.equal(provider.schemaVersion, 2);
   });
 });
 
-test('run summary retains old metrics and adds Phase 2 target/provider metrics', () => {
+test('run directory is not visible until all artifact writes succeed', async () => {
+  await withTempDir(async (directory) => {
+    const runPath = await writeRunArtifacts({
+      dataPath: directory, runId: 'run-atomic', metadata: {}, targetPlan: {}, providerResults: [],
+      tenantStateChanges: null, rateObservations: null, candidates: [], rejected: [],
+      preflightResults: null, detailResults: null, locationResults: null, importResults: null,
+      summary: {},
+    });
+    assert.equal(path.basename(runPath), 'run-atomic');
+    const runs = await readdir(path.join(directory, 'runs'));
+    assert.deepEqual(runs, ['run-atomic']);
+  });
+});
+
+test('run summary reports scheduling, breaker, sweep, and state metrics', () => {
   const summary = buildRunSummary({
-    runId: 'run-1',
-    mode: 'offline',
-    startedAt: new Date('2026-07-20T00:00:00.000Z'),
-    finishedAt: new Date('2026-07-20T00:00:01.000Z'),
+    runId: 'run-1', mode: 'offline',
+    startedAt: new Date('2026-07-20T00:00:00Z'),
+    finishedAt: new Date('2026-07-20T00:00:01Z'),
     targetPlan: {
-      targets: [{}, {}],
-      counts: {
-        priority: 1,
-        normal: 1,
-        disabled: 2,
-        disabledRemoved: 1,
-        planningRejected: 1,
-      },
-      catalogs: {
-        ashby: {
-          acceptedItemCount: 3000,
-          rawSha256: 'a'.repeat(64),
-        },
-      },
+      targets: [{ lookbackStartUtc: '2026-07-17T00:00:00Z', lookbackUnbounded: false }],
+      counts: { priority: 0, normal: 1, disabled: 0, disabledRemoved: 0, planningRejected: 0,
+        catalogEligible: 3000, skippedNotDue: 10, skippedProviderCooldown: 0,
+        skippedNormalBudget: 2890, skippedTotal: 2900 },
+      catalogs: { ashby: { acceptedItemCount: 3161, rawSha256: 'a'.repeat(64) } },
+      sweep: { targetFullSweepDays: 3, estimatedHealthySweepDays: 30,
+        recommendedHealthyTargetsPerRun: 1000, recommendedNormalTargetsPerRun: 1000,
+        feasibleAtConfiguredBudget: false },
     },
     scanResult: {
-      candidates: [{ description: '' }],
-      rejected: [{ reason: 'title_filter' }],
-      providerIds: ['ashby'],
-      providerResults: [
-        {
-          status: 'ok',
-          errorClass: null,
-          jobsReturned: 12,
-        },
-        {
-          status: 'error',
-          errorClass: 'rate_limited',
-          jobsReturned: 0,
-        },
-      ],
+      candidates: [], rejected: [], providerIds: ['ashby'],
+      breakerEvents: [{ provider: 'ashby' }],
+      providerResults: [{ status: 'skipped', skipReason: 'provider_circuit_open', errorClass: null, jobsReturned: 0 }],
     },
-    evaluated: [{ description: '' }],
+    evaluated: [],
+    tenantStateChanges: { tenantChanges: [{ health: 'suspected_dead' }], providerChanges: [] },
+    rateObservations: { providers: [{ recommendation: { action: 'decrease' } }] },
   });
-
-  assert.equal(summary.targets, 2);
-  assert.equal(summary.targetsPlanned, 2);
-  assert.equal(summary.targetsAttempted, 2);
-  assert.equal(summary.priorityTargets, 1);
-  assert.equal(summary.normalTargets, 1);
-  assert.equal(summary.providerSuccesses, 1);
-  assert.equal(summary.providerErrors, 1);
-  assert.equal(summary.providerRateLimited, 1);
-  assert.equal(summary.rawJobsReturned, 12);
-  assert.equal(summary.catalogAshbyItemCount, 3000);
-  assert.equal(summary.candidates, 1);
-  assert.equal(summary.rejected, 2);
-  assert.equal(summary.candidateDescriptionsMissing, 1);
+  assert.equal(summary.targetsSkippedByCircuit, 1);
+  assert.equal(summary.targetsSkippedBySchedule, 2900);
+  assert.equal(summary.providerBreakersActivated, 1);
+  assert.equal(summary.sweepRecommendedTargetsPerRun, 1000);
+  assert.equal(summary.tenantsMarkedSuspectedDead, 1);
+  assert.equal(summary.rateRecommendationsDecrease, 1);
 });

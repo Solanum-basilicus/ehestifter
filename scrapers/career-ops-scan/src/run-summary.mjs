@@ -10,42 +10,69 @@ export function buildRunSummary({
   targetPlan,
   scanResult,
   evaluated,
+  tenantStateChanges = null,
+  rateObservations = null,
 }) {
   const providerResults = scanResult.providerResults;
+  const attempted = providerResults.filter((result) => result.status !== 'skipped');
+  const lookbacks = targetPlan.targets
+    .map((target) => target.lookbackStartUtc)
+    .filter(Boolean)
+    .sort();
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     runId,
     mode,
     startedAtUtc: startedAt.toISOString(),
     finishedAtUtc: finishedAt.toISOString(),
     durationMs: finishedAt.getTime() - startedAt.getTime(),
 
-    // `targets` is retained as a compatibility alias for Phase 1 artifacts.
     targets: targetPlan.targets.length,
     targetsPlanned: targetPlan.targets.length,
-    targetsAttempted: providerResults.length,
+    targetsAttempted: attempted.length,
+    targetsSkippedByCircuit: count(
+      providerResults,
+      (result) => result.skipReason === 'provider_circuit_open',
+    ),
+    targetsSkippedBySchedule: targetPlan.counts.skippedTotal,
     priorityTargets: targetPlan.counts.priority,
     normalTargets: targetPlan.counts.normal,
     disabledTargets: targetPlan.counts.disabled,
     disabledTargetsRemoved: targetPlan.counts.disabledRemoved,
     planningRejected: targetPlan.counts.planningRejected,
+    catalogEligibleTargets: targetPlan.counts.catalogEligible,
+    skippedNotDue: targetPlan.counts.skippedNotDue,
+    skippedProviderCooldown: targetPlan.counts.skippedProviderCooldown,
+    skippedNormalBudget: targetPlan.counts.skippedNormalBudget,
+
+    sweepTargetDays: targetPlan.sweep.targetFullSweepDays,
+    sweepEstimatedHealthyDays: targetPlan.sweep.estimatedHealthySweepDays,
+    sweepRecommendedHealthyTargetsPerRun:
+      targetPlan.sweep.recommendedHealthyTargetsPerRun,
+    sweepRecommendedTargetsPerRun:
+      targetPlan.sweep.recommendedNormalTargetsPerRun,
+    sweepFeasibleAtConfiguredBudget:
+      targetPlan.sweep.feasibleAtConfiguredBudget,
 
     providersLoaded: scanResult.providerIds,
-    providerSuccesses: count(
-      providerResults,
-      (result) => result.status === 'ok',
-    ),
-    providerErrors: count(
-      providerResults,
-      (result) => result.status === 'error',
-    ),
+    providerSuccesses: count(providerResults, (result) => result.status === 'ok'),
+    providerErrors: count(providerResults, (result) => result.status === 'error'),
     providerRateLimited: count(
       providerResults,
       (result) => result.errorClass === 'rate_limited',
     ),
+    providerBreakersActivated: scanResult.breakerEvents.length,
     rawJobsReturned: providerResults.reduce(
       (total, result) => total + result.jobsReturned,
+      0,
+    ),
+    candidatesMatchedBeforeCap: providerResults.reduce(
+      (total, result) => total + (result.candidatesMatched ?? result.candidatesRetained ?? 0),
+      0,
+    ),
+    candidatesDroppedByCap: providerResults.reduce(
+      (total, result) => total + (result.candidatesDroppedByCap ?? 0),
       0,
     ),
 
@@ -53,6 +80,41 @@ export function buildRunSummary({
       targetPlan.catalogs.ashby?.acceptedItemCount ?? null,
     catalogAshbySha256:
       targetPlan.catalogs.ashby?.rawSha256 ?? null,
+    effectiveLookbackEarliestUtc: lookbacks[0] ?? null,
+    effectiveLookbackLatestUtc: lookbacks.at(-1) ?? null,
+    unboundedLookbackTargets: count(
+      targetPlan.targets,
+      (target) => target.lookbackUnbounded === true,
+    ),
+
+    tenantStateChanges:
+      tenantStateChanges?.tenantChanges.length ?? 0,
+    tenantProviderStateChanges:
+      tenantStateChanges?.providerChanges.length ?? 0,
+    tenantsMarkedActive: count(
+      tenantStateChanges?.tenantChanges ?? [],
+      (change) => change.health === 'active',
+    ),
+    tenantsMarkedLongEmpty: count(
+      tenantStateChanges?.tenantChanges ?? [],
+      (change) => change.health === 'long_empty',
+    ),
+    tenantsMarkedSuspectedDead: count(
+      tenantStateChanges?.tenantChanges ?? [],
+      (change) => change.health === 'suspected_dead',
+    ),
+    tenantsMarkedConfirmedDead: count(
+      tenantStateChanges?.tenantChanges ?? [],
+      (change) => change.health === 'confirmed_dead',
+    ),
+    rateRecommendationsDecrease: count(
+      rateObservations?.providers ?? [],
+      (item) => item.recommendation.action === 'decrease',
+    ),
+    rateRecommendationsIncrease: count(
+      rateObservations?.providers ?? [],
+      (item) => item.recommendation.action === 'consider_increase',
+    ),
 
     candidates: scanResult.candidates.length,
     rejected: scanResult.rejected.length + targetPlan.counts.planningRejected,
@@ -83,10 +145,7 @@ export function buildRunSummary({
       evaluated,
       (job) => job.detail?.status === 'unsupported_provider',
     ),
-    detailErrors: count(
-      evaluated,
-      (job) => job.detail?.status === 'error',
-    ),
+    detailErrors: count(evaluated, (job) => job.detail?.status === 'error'),
 
     candidateDescriptionsMissing: count(
       evaluated,
@@ -120,10 +179,7 @@ export function buildRunSummary({
       (job) => typeof job.import?.status === 'string'
         && job.import.status.startsWith('skipped_'),
     ),
-    importErrors: count(
-      evaluated,
-      (job) => job.import?.status === 'error',
-    ),
+    importErrors: count(evaluated, (job) => job.import?.status === 'error'),
 
     locationProviderStructured: count(
       evaluated,

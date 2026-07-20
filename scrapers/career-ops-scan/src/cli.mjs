@@ -12,7 +12,12 @@ import { createJobsClient, preflightCandidates } from './ehestifter/jobs-client.
 import { normalizeCandidateLocations } from './locations/normalizer.mjs';
 import { loadProviders } from './providers/_registry.mjs';
 import { buildRunSummary } from './run-summary.mjs';
+import { buildRateObservations } from './scan/rate-observations.mjs';
 import { runTrackedScan } from './scan/tracked-source.mjs';
+import {
+  buildNextTenantState,
+  saveTenantState,
+} from './state/tenant-state.mjs';
 import { buildTargetPlanFromFiles } from './targets/planner.mjs';
 
 function assertNoCatalogTargetsOutsideOffline(mode, runtimeTargets) {
@@ -57,6 +62,7 @@ async function runScan(args) {
     companyOverridesPath: config.paths.companyOverrides,
     discoveryPolicyPath: config.paths.discoveryPolicy,
     ashbyCatalogPath: config.catalogs.ashbyPath,
+    tenantStatePath: config.state.tenantStatePath,
     providers,
     mode: args.mode,
     generatedAt: startedAt,
@@ -67,6 +73,7 @@ async function runScan(args) {
     portalConfig: planning.portalConfig,
     targets: planning.runtimeTargets,
     providers,
+    policy: planning.policy,
     concurrency: config.scan.providerConcurrency,
     maxCandidates: config.scan.maxCandidatesPerRun,
     upstreamRef: config.careerOps.upstreamRef,
@@ -122,6 +129,31 @@ async function runScan(args) {
     ?? preflightResults
     ?? scanResult.candidates;
   const finishedAt = new Date();
+
+  const rateObservations = buildRateObservations({
+    providerResults: scanResult.providerResults,
+    breakerEvents: scanResult.breakerEvents,
+    policy: planning.policy,
+    targetPlan: planning.plan,
+    generatedAt: finishedAt,
+  });
+
+  let nextTenantState = null;
+  let tenantStateChanges = null;
+  if (args.mode === 'offline') {
+    const transition = buildNextTenantState({
+      previousState: planning.tenantState,
+      targets: planning.runtimeTargets,
+      providerResults: scanResult.providerResults,
+      rateObservations,
+      breakerEvents: scanResult.breakerEvents,
+      policy: planning.policy,
+      finishedAt,
+    });
+    nextTenantState = transition.state;
+    tenantStateChanges = transition.changes;
+  }
+
   const summary = buildRunSummary({
     runId,
     mode: args.mode,
@@ -130,6 +162,8 @@ async function runScan(args) {
     targetPlan: planning.plan,
     scanResult,
     evaluated,
+    tenantStateChanges,
+    rateObservations,
   });
 
   const rejected = [
@@ -140,15 +174,22 @@ async function runScan(args) {
     dataPath: config.paths.data,
     runId,
     metadata: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       runId,
       mode: args.mode,
       scannerConfigPath: config.configPath,
       careerOpsUpstreamRef: config.careerOps.upstreamRef,
       catalogAshbySha256: planning.plan.catalogs.ashby?.rawSha256 ?? null,
+      tenantStatePath: args.mode === 'offline'
+        ? config.state.tenantStatePath
+        : null,
+      previousTenantStateUpdatedAtUtc:
+        planning.tenantState.updatedAtUtc,
     },
     targetPlan: planning.plan,
     providerResults: scanResult.providerResults,
+    tenantStateChanges,
+    rateObservations,
     candidates: scanResult.candidates,
     rejected,
     preflightResults,
@@ -158,7 +199,23 @@ async function runScan(args) {
     summary,
   });
 
-  console.log(JSON.stringify({ runPath, summary }, null, 2));
+  if (nextTenantState) {
+    try {
+      await saveTenantState(config.state.tenantStatePath, nextTenantState);
+    } catch (error) {
+      throw new Error(
+        `Run artifacts were published at ${runPath}, but tenant state `
+        + `could not be persisted to ${config.state.tenantStatePath}`,
+        { cause: error },
+      );
+    }
+  }
+
+  console.log(JSON.stringify({
+    runPath,
+    tenantStatePath: nextTenantState ? config.state.tenantStatePath : null,
+    summary,
+  }, null, 2));
   if (summary.preflightErrors > 0 || summary.importErrors > 0) {
     process.exitCode = 2;
   }

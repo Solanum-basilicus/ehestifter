@@ -1,5 +1,3 @@
-import { performance } from 'node:perf_hooks';
-
 import { makeHttpCtx } from '../providers/_http.mjs';
 import {
   buildContentFilter,
@@ -9,31 +7,13 @@ import {
   buildTitleFilter,
   matchedTitleKeywords,
 } from './filters.mjs';
+import { executeProviderTargets } from './provider-executor.mjs';
+import {
+  classifyProviderError,
+  providerErrorMessage,
+} from './provider-errors.mjs';
 
-async function mapLimit(items, limit, worker) {
-  if (!Number.isInteger(limit) || limit <= 0) {
-    throw new Error('provider concurrency must be a positive integer');
-  }
-  const results = new Array(items.length);
-  let next = 0;
-
-  async function consume() {
-    while (true) {
-      const index = next;
-      next += 1;
-      if (index >= items.length) return;
-      results[index] = await worker(items[index], index);
-    }
-  }
-
-  await Promise.all(
-    Array.from(
-      { length: Math.min(limit, items.length) },
-      () => consume(),
-    ),
-  );
-  return results;
-}
+export { classifyProviderError } from './provider-errors.mjs';
 
 function validHttpUrl(value) {
   try {
@@ -97,6 +77,7 @@ export function candidateFromJob(job, target, upstreamRef) {
       providerNativeId: job.id != null ? String(job.id) : null,
       targetReason: target.reason,
       catalog: target.catalog ?? null,
+      lookbackStartUtc: target.lookbackStartUtc ?? null,
     },
   };
 }
@@ -105,82 +86,38 @@ function reject(reason, candidate = null, details = null) {
   return { reason, candidate, details };
 }
 
-function errorChain(error) {
-  const values = [];
-  let current = error;
-  const seen = new Set();
-  while (current && typeof current === 'object' && !seen.has(current)) {
-    seen.add(current);
-    values.push(current);
-    current = current.cause;
+function targetSinceMs(target, portalConfig, nowMs) {
+  if (target.lookbackUnbounded === true) return undefined;
+  if (typeof target.lookbackStartUtc === 'string') {
+    const parsed = Date.parse(target.lookbackStartUtc);
+    if (!Number.isNaN(parsed)) return parsed;
   }
-  return values;
-}
-
-export function classifyProviderError(error) {
-  const chain = errorChain(error);
-  if (chain.some((item) => item.name === 'AbortError')) return 'timeout';
-
-  const codes = chain
-    .map((item) => item.code)
-    .filter((value) => typeof value === 'string');
-  if (codes.includes('ETIMEDOUT')) return 'timeout';
-
-  const status = chain
-    .map((item) => Number(
-      item.status
-      ?? item.statusCode
-      ?? item.response?.status,
-    ))
-    .find((value) => Number.isInteger(value));
-
-  if (status === 429) return 'rate_limited';
-  if (status >= 400 && status < 500) return 'http_4xx';
-  if (status >= 500) return 'http_5xx';
-
-  const networkCodes = new Set([
-    'ECONNRESET',
-    'ECONNREFUSED',
-    'ENOTFOUND',
-    'EAI_AGAIN',
-    'EHOSTUNREACH',
-    'ENETUNREACH',
-  ]);
-  if (codes.some((code) => networkCodes.has(code))) return 'network';
-  if (chain.some(
-    (item) => item instanceof TypeError
-      && /fetch failed|network|socket|connection/i.test(item.message),
-  )) return 'network';
-
-  return 'provider_error';
-}
-
-function errorMessage(error, maxLength = 500) {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.length <= maxLength
-    ? message
-    : `${message.slice(0, maxLength - 3)}...`;
+  const maxAgeDays = Number(portalConfig.max_posting_age_days);
+  return Number.isInteger(maxAgeDays) && maxAgeDays > 0
+    ? nowMs - maxAgeDays * 86_400_000
+    : undefined;
 }
 
 export async function runTrackedScan({
   portalConfig,
   targets,
   providers,
+  policy,
   concurrency,
   maxCandidates,
   upstreamRef,
   nowMs = Date.now(),
-  monotonicNow = () => performance.now(),
+  monotonicNow,
+  sleep,
   httpContextFactory = makeHttpCtx,
 }) {
   if (!portalConfig || typeof portalConfig !== 'object' || Array.isArray(portalConfig)) {
     throw new Error('portalConfig must be an object');
   }
-  if (!Array.isArray(targets)) {
-    throw new Error('targets must be an array');
-  }
-  if (!(providers instanceof Map)) {
-    throw new Error('providers must be a Map');
+  if (!Array.isArray(targets)) throw new Error('targets must be an array');
+  if (!(providers instanceof Map)) throw new Error('providers must be a Map');
+  if (!policy || policy.schemaVersion !== 1) {
+    throw new Error('parsed discovery policy is required');
   }
   if (!Number.isInteger(maxCandidates) || maxCandidates <= 0) {
     throw new Error('maxCandidates must be a positive integer');
@@ -195,66 +132,37 @@ export async function runTrackedScan({
   const salaryFilter = buildSalaryFilter(portalConfig.salary_filter);
   const contentFilter = buildContentFilter(portalConfig.content_filter);
 
-  const maxAgeDays = Number(portalConfig.max_posting_age_days);
-  const sinceMs = Number.isInteger(maxAgeDays) && maxAgeDays > 0
-    ? nowMs - maxAgeDays * 86_400_000
-    : undefined;
-  const httpContext = { ...httpContextFactory(), sinceMs };
-
-  const batches = await mapLimit(targets, concurrency, async (target) => {
-    const started = monotonicNow();
-    try {
-      const jobs = await target._provider.fetch(target, httpContext);
-      if (!Array.isArray(jobs)) {
-        const error = new Error('Provider returned a non-array job list');
-        error.code = 'INVALID_PROVIDER_RESULT';
-        throw error;
-      }
-      return {
-        target,
-        jobs,
-        error: null,
-        durationMs: Math.max(0, Math.round(monotonicNow() - started)),
-      };
-    } catch (error) {
-      return {
-        target,
-        jobs: [],
-        error,
-        durationMs: Math.max(0, Math.round(monotonicNow() - started)),
-      };
-    }
+  const execution = await executeProviderTargets({
+    targets,
+    policy,
+    globalConcurrency: concurrency,
+    monotonicNow,
+    sleep,
+    fetchTarget: async (target) => {
+      const sinceMs = targetSinceMs(target, portalConfig, nowMs);
+      const httpContext = { ...httpContextFactory(), sinceMs };
+      return target._provider.fetch(target, httpContext);
+    },
   });
 
-  const providerResults = batches.map((batch) => ({
-    sequence: batch.target.sequence,
-    provider: batch.target.provider,
-    tenant: batch.target.tenant,
-    targetClass: batch.target.targetClass,
-    status: batch.error ? 'error' : 'ok',
-    errorClass: batch.error ? classifyProviderError(batch.error) : null,
-    errorMessage: batch.error ? errorMessage(batch.error) : null,
-    jobsReturned: batch.jobs.length,
-    candidatesRetained: 0,
-    durationMs: batch.durationMs,
-  }));
+  const providerResults = execution.batches.map((batch) => batch.providerResult);
   const resultBySequence = new Map(
     providerResults.map((result) => [result.sequence, result]),
   );
-
   const candidates = [];
   const rejected = [];
   const seenUrls = new Set();
 
-  outer:
-  for (const batch of batches) {
+  for (const batch of execution.batches) {
+    if (batch.providerResult.status === 'skipped') continue;
     if (batch.error) {
       rejected.push(reject('provider_fetch_failed', null, {
         company: batch.target.name,
         provider: batch.target.provider,
         tenant: batch.target.tenant,
-        errorClass: classifyProviderError(batch.error),
-        error: errorMessage(batch.error),
+        errorClass: batch.providerResult.errorClass,
+        httpStatus: batch.providerResult.httpStatus,
+        error: providerErrorMessage(batch.error),
       }));
       continue;
     }
@@ -306,10 +214,19 @@ export async function runTrackedScan({
         continue;
       }
 
-      candidates.push(candidate);
       const providerResult = resultBySequence.get(batch.target.sequence);
-      providerResult.candidatesRetained += 1;
-      if (candidates.length >= maxCandidates) break outer;
+      providerResult.candidatesMatched += 1;
+      if (candidates.length < maxCandidates) {
+        candidates.push(candidate);
+        providerResult.candidatesRetained += 1;
+      } else {
+        providerResult.candidatesDroppedByCap += 1;
+        rejected.push(reject('candidate_cap', null, {
+          provider: batch.target.provider,
+          tenant: batch.target.tenant,
+          url: candidate.url,
+        }));
+      }
     }
   }
 
@@ -319,5 +236,6 @@ export async function runTrackedScan({
     targetCount: targets.length,
     providerIds: [...providers.keys()].sort(),
     providerResults,
+    breakerEvents: execution.breakerEvents,
   };
 }

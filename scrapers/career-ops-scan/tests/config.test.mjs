@@ -28,6 +28,7 @@ function configFor(directory, overrides = {}) {
       companyOverrides: path.join(directory, 'company-overrides.yml'),
       discoveryPolicy: path.join(directory, 'discovery-policy.yml'),
       catalogs: path.join(directory, 'catalogs'),
+      state: path.join(directory, 'state'),
       data: path.join(directory, 'data'),
     },
     scan: {
@@ -72,7 +73,7 @@ test('scanner config schema version is enforced', async () => {
   });
 });
 
-test('loadRuntimeConfig returns Phase 2 paths and derived Ashby path', async () => {
+test('loadRuntimeConfig returns Phase 3 paths and derived state path', async () => {
   await withTempDir(async (directory) => {
     await writeScanFiles(directory);
     const configPath = path.join(directory, 'scanner.json');
@@ -83,6 +84,8 @@ test('loadRuntimeConfig returns Phase 2 paths and derived Ashby path', async () 
     assert.equal(config.paths.discoveryPolicy, path.join(directory, 'discovery-policy.yml'));
     assert.equal(config.paths.catalogs, path.join(directory, 'catalogs'));
     assert.equal(config.catalogs.ashbyPath, path.join(directory, 'catalogs', 'ashby.json'));
+    assert.equal(config.paths.state, path.join(directory, 'state'));
+    assert.equal(config.state.tenantStatePath, path.join(directory, 'state', 'tenant-state.json'));
     assert.equal(config.scan.providerConcurrency, 3);
     assert.equal(config.jobsApi.baseUrl, 'https://jobs.example/api');
     assert.equal(config.jobsApi.retryCount, 0);
@@ -124,6 +127,8 @@ test('catalog sync operation does not require scan policy files', async () => {
       operation: 'catalog-sync',
     });
     assert.equal(config.catalogs.ashbyPath, path.join(directory, 'catalogs', 'ashby.json'));
+    assert.equal(config.paths.state, path.join(directory, 'state'));
+    assert.equal(config.state.tenantStatePath, path.join(directory, 'state', 'tenant-state.json'));
   });
 });
 

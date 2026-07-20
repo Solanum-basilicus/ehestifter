@@ -96,6 +96,9 @@ export async function loadRuntimeConfig({
   const catalogsPath = typeof paths.catalogs === 'string' && paths.catalogs.trim()
     ? paths.catalogs.trim()
     : path.join(dataPath, 'catalogs');
+  const statePath = typeof paths.state === 'string' && paths.state.trim()
+    ? paths.state.trim()
+    : path.join(dataPath, 'state');
 
   const config = {
     configPath: resolvedConfigPath,
@@ -110,10 +113,14 @@ export async function loadRuntimeConfig({
         'paths.discoveryPolicy',
       ),
       catalogs: catalogsPath,
+      state: statePath,
       data: dataPath,
     },
     catalogs: {
       ashbyPath: path.join(catalogsPath, 'ashby.json'),
+    },
+    state: {
+      tenantStatePath: path.join(statePath, 'tenant-state.json'),
     },
     scan: {
       providerConcurrency: positiveInteger(

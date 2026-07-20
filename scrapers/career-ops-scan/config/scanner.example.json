@@ -13,7 +13,8 @@
     "companyOverrides": "/config/company-overrides.yml",
     "discoveryPolicy": "/config/discovery-policy.yml",
     "catalogs": "/data/catalogs",
-    "data": "/data"
+    "data": "/data",
+    "state": "/data/state"
   },
   "scan": {
     "providerConcurrency": 3,

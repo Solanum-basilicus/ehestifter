@@ -1,7 +1,47 @@
 schema_version: 1
 
+defaults:
+  scheduling:
+    priority_interval_hours: 24
+    active_interval_hours: 24
+    healthy_interval_hours: 72
+    recent_activity_window_hours: 168
+    long_empty_after_empty_scans: 3
+    long_empty_interval_hours: 168
+    first_durable_failure_retry_hours: 24
+    suspected_dead_after_failures: 2
+    confirmed_dead_after_failures: 4
+    dead_reprobe_interval_hours: 720
+    transient_failure_cooldown_minutes: 360
+    rate_limit_cooldown_minutes: 1440
+  lookback:
+    initial_hours: 72
+    overlap_hours: 12
+    max_hours: 240
+    dead_reprobe_unbounded: true
+  execution:
+    concurrency: 3
+    min_request_interval_ms: 150
+    breaker:
+      rate_limit_threshold: 2
+      transient_error_threshold: 8
+      transient_error_ratio_threshold: 0.5
+      minimum_requests_for_ratio: 10
+      cooldown_minutes: 1440
+  recommendations:
+    minimum_requests: 20
+    healthy_success_ratio: 0.98
+    high_transient_error_ratio: 0.2
+    fast_p95_ms: 5000
+    maximum_suggested_concurrency: 8
+
 providers:
   ashby:
     catalog_enabled: true
+    # Keep 100 for the first stateful canary. Phase 3 validation should raise
+    # this gradually toward the recommendation emitted in target-plan.json.
     max_normal_targets_per_run: 100
-    
+    target_full_sweep_days: 3
+    execution:
+      concurrency: 3
+      min_request_interval_ms: 150

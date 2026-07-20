@@ -178,3 +178,4 @@ scrapers/career-ops-scan/secrets/jobs-function-key.txt
 scrapers/career-ops-scan/config/portals.yml
 scrapers/career-ops-scan/data/runs/*
 scrapers/career-ops-scan/data/catalogs/*
+scrapers/career-ops-scan/data/state/*

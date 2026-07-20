@@ -27,6 +27,8 @@ export async function writeRunArtifacts({
   metadata,
   targetPlan,
   providerResults,
+  tenantStateChanges,
+  rateObservations,
   candidates,
   rejected,
   preflightResults,
@@ -49,10 +51,22 @@ export async function writeRunArtifacts({
     await writeJsonAtomic(path.join(stagingPath, 'metadata.json'), metadata);
     await writeJsonAtomic(path.join(stagingPath, 'target-plan.json'), targetPlan);
     await writeJsonAtomic(path.join(stagingPath, 'provider-results.json'), {
-      schemaVersion: 1,
+      schemaVersion: 2,
       runId,
       results: providerResults,
     });
+    if (tenantStateChanges) {
+      await writeJsonAtomic(
+        path.join(stagingPath, 'tenant-state-changes.json'),
+        { ...tenantStateChanges, runId },
+      );
+    }
+    if (rateObservations) {
+      await writeJsonAtomic(
+        path.join(stagingPath, 'rate-observations.json'),
+        { ...rateObservations, runId },
+      );
+    }
     await writeJsonAtomic(path.join(stagingPath, 'candidates.json'), {
       schemaVersion: 1,
       runId,
