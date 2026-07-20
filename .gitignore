@@ -171,7 +171,10 @@ gha-creds-*.json
 scrapers/career-ops-scan/secrets/.gitkeep
 scrapers/career-ops-scan/data/.gitkeep
 scrapers/career-ops-scan/config/scanner.local.json
+scrapers/career-ops-scan/config/company-overrides.yml
+scrapers/career-ops-scan/config/discovery-policy.yml
 scrapers/career-ops-scan/node_modules/
 scrapers/career-ops-scan/secrets/jobs-function-key.txt
 scrapers/career-ops-scan/config/portals.yml
 scrapers/career-ops-scan/data/runs/*
+scrapers/career-ops-scan/data/catalogs/*

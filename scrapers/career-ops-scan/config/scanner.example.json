@@ -1,0 +1,34 @@
+{
+  "careerOps": {
+    "upstreamRef": "493487462608c0cced82c1440e7ba8be6c01f306"
+  },
+  "schemaVersion": 1,
+  "jobsApi": {
+    "baseUrl": "https://ehestifter-jobs.azurewebsites.net/api",
+    "timeoutMs": 15000,
+    "retryCount": 2
+  },
+  "paths": {
+    "portals": "/config/portals.yml",
+    "companyOverrides": "/config/company-overrides.yml",
+    "discoveryPolicy": "/config/discovery-policy.yml",
+    "catalogs": "/data/catalogs",
+    "data": "/data"
+  },
+  "scan": {
+    "providerConcurrency": 3,
+    "jobsApiConcurrency": 3,
+    "maxCandidatesPerRun": 100,
+    "requireDescriptionForCreate": true,
+    "description": {
+      "fetchMissing": true,
+      "maxFetchesPerRun": 50,
+      "concurrency": 2,
+      "timeoutMs": 30000
+    }
+  },
+  "imports": {
+    "enabled": false,
+    "maxCreatesPerRun": 5
+  }
+}

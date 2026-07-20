@@ -1,8 +1,6 @@
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
-import yaml from 'js-yaml';
+import { performance } from 'node:perf_hooks';
+
 import { makeHttpCtx } from '../providers/_http.mjs';
-import { loadProviders, resolveProvider } from '../providers/_registry.mjs';
 import {
   buildContentFilter,
   buildLocationFilter,
@@ -13,16 +11,27 @@ import {
 } from './filters.mjs';
 
 async function mapLimit(items, limit, worker) {
+  if (!Number.isInteger(limit) || limit <= 0) {
+    throw new Error('provider concurrency must be a positive integer');
+  }
   const results = new Array(items.length);
   let next = 0;
+
   async function consume() {
     while (true) {
-      const index = next++;
+      const index = next;
+      next += 1;
       if (index >= items.length) return;
       results[index] = await worker(items[index], index);
     }
   }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, consume));
+
+  await Promise.all(
+    Array.from(
+      { length: Math.min(limit, items.length) },
+      () => consume(),
+    ),
+  );
   return results;
 }
 
@@ -43,15 +52,28 @@ function inferRemoteType(rawLocation) {
   return 'Unknown';
 }
 
-function candidateFromJob(job, target, upstreamRef) {
-  const postedAtUtc = typeof job.postedAt === 'number' && Number.isFinite(job.postedAt)
-    ? new Date(job.postedAt).toISOString()
-    : null;
-  const description = typeof job.description === 'string' ? job.description.trim() : '';
+function normalizePostedAt(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const date = new Date(value);
+    if (!Number.isNaN(date.getTime())) return date.toISOString();
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Date.parse(value);
+    if (!Number.isNaN(parsed)) return new Date(parsed).toISOString();
+  }
+  return null;
+}
+
+export function candidateFromJob(job, target, upstreamRef) {
+  const postedAtUtc = normalizePostedAt(job.postedAt);
+  const description = typeof job.description === 'string'
+    ? job.description.trim()
+    : '';
+
   return {
     schemaVersion: 1,
-    sourceMode: 'tracked',
-    sourceProvider: target._provider.id,
+    sourceMode: target.targetClass === 'normal' ? 'catalog' : 'priority',
+    sourceProvider: target.provider,
     sourceCompany: target.name,
     url: String(job.url ?? '').trim(),
     applyUrl: String(job.url ?? '').trim(),
@@ -73,6 +95,8 @@ function candidateFromJob(job, target, upstreamRef) {
       derivedFrom: 'santifer/career-ops',
       upstreamRef,
       providerNativeId: job.id != null ? String(job.id) : null,
+      targetReason: target.reason,
+      catalog: target.catalog ?? null,
     },
   };
 }
@@ -81,60 +105,145 @@ function reject(reason, candidate = null, details = null) {
   return { reason, candidate, details };
 }
 
-export async function runTrackedScan({ portalsPath, providersDir, concurrency, maxCandidates, upstreamRef }) {
-  const rawConfig = yaml.load(await readFile(portalsPath, 'utf8')) ?? {};
-  if (!rawConfig || typeof rawConfig !== 'object' || Array.isArray(rawConfig)) {
-    throw new Error('portals.yml root must be an object');
+function errorChain(error) {
+  const values = [];
+  let current = error;
+  const seen = new Set();
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current);
+    values.push(current);
+    current = current.cause;
+  }
+  return values;
+}
+
+export function classifyProviderError(error) {
+  const chain = errorChain(error);
+  if (chain.some((item) => item.name === 'AbortError')) return 'timeout';
+
+  const codes = chain
+    .map((item) => item.code)
+    .filter((value) => typeof value === 'string');
+  if (codes.includes('ETIMEDOUT')) return 'timeout';
+
+  const status = chain
+    .map((item) => Number(
+      item.status
+      ?? item.statusCode
+      ?? item.response?.status,
+    ))
+    .find((value) => Number.isInteger(value));
+
+  if (status === 429) return 'rate_limited';
+  if (status >= 400 && status < 500) return 'http_4xx';
+  if (status >= 500) return 'http_5xx';
+
+  const networkCodes = new Set([
+    'ECONNRESET',
+    'ECONNREFUSED',
+    'ENOTFOUND',
+    'EAI_AGAIN',
+    'EHOSTUNREACH',
+    'ENETUNREACH',
+  ]);
+  if (codes.some((code) => networkCodes.has(code))) return 'network';
+  if (chain.some(
+    (item) => item instanceof TypeError
+      && /fetch failed|network|socket|connection/i.test(item.message),
+  )) return 'network';
+
+  return 'provider_error';
+}
+
+function errorMessage(error, maxLength = 500) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.length <= maxLength
+    ? message
+    : `${message.slice(0, maxLength - 3)}...`;
+}
+
+export async function runTrackedScan({
+  portalConfig,
+  targets,
+  providers,
+  concurrency,
+  maxCandidates,
+  upstreamRef,
+  nowMs = Date.now(),
+  monotonicNow = () => performance.now(),
+  httpContextFactory = makeHttpCtx,
+}) {
+  if (!portalConfig || typeof portalConfig !== 'object' || Array.isArray(portalConfig)) {
+    throw new Error('portalConfig must be an object');
+  }
+  if (!Array.isArray(targets)) {
+    throw new Error('targets must be an array');
+  }
+  if (!(providers instanceof Map)) {
+    throw new Error('providers must be a Map');
+  }
+  if (!Number.isInteger(maxCandidates) || maxCandidates <= 0) {
+    throw new Error('maxCandidates must be a positive integer');
   }
 
-  const providers = await loadProviders(path.resolve(providersDir));
-  if (providers.size === 0) throw new Error(`No providers loaded from ${providersDir}`);
+  const titleFilter = buildTitleFilter(portalConfig.title_filter);
+  const locationFilter = buildLocationFilter(portalConfig.location_filter);
+  const postingAgeFilter = buildPostingAgeFilter(
+    portalConfig.max_posting_age_days,
+    nowMs,
+  );
+  const salaryFilter = buildSalaryFilter(portalConfig.salary_filter);
+  const contentFilter = buildContentFilter(portalConfig.content_filter);
 
-  const titleFilter = buildTitleFilter(rawConfig.title_filter);
-  const locationFilter = buildLocationFilter(rawConfig.location_filter);
-  const postingAgeFilter = buildPostingAgeFilter(rawConfig.max_posting_age_days);
-  const salaryFilter = buildSalaryFilter(rawConfig.salary_filter);
-  const contentFilter = buildContentFilter(rawConfig.content_filter);
-
-  const targets = [];
-  const rejected = [];
-  for (const entry of Array.isArray(rawConfig.tracked_companies) ? rawConfig.tracked_companies : []) {
-    if (!entry || typeof entry !== 'object' || entry.enabled === false) continue;
-    if (typeof entry.name !== 'string' || !entry.name.trim()) {
-      rejected.push(reject('invalid_portal_entry', null, { entry }));
-      continue;
-    }
-    const resolved = resolveProvider(entry, providers);
-    if (!resolved) {
-      rejected.push(reject('provider_not_resolved', null, { company: entry.name }));
-      continue;
-    }
-    if (resolved.error) {
-      rejected.push(reject('provider_resolution_error', null, {
-        company: entry.name,
-        error: resolved.error,
-      }));
-      continue;
-    }
-    targets.push({ ...entry, _provider: resolved.provider });
-  }
-
-  const maxAgeDays = Number(rawConfig.max_posting_age_days);
+  const maxAgeDays = Number(portalConfig.max_posting_age_days);
   const sinceMs = Number.isInteger(maxAgeDays) && maxAgeDays > 0
-    ? Date.now() - maxAgeDays * 86_400_000
+    ? nowMs - maxAgeDays * 86_400_000
     : undefined;
-  const httpContext = { ...makeHttpCtx(), sinceMs };
+  const httpContext = { ...httpContextFactory(), sinceMs };
 
   const batches = await mapLimit(targets, concurrency, async (target) => {
+    const started = monotonicNow();
     try {
       const jobs = await target._provider.fetch(target, httpContext);
-      return { target, jobs: Array.isArray(jobs) ? jobs : [], error: null };
+      if (!Array.isArray(jobs)) {
+        const error = new Error('Provider returned a non-array job list');
+        error.code = 'INVALID_PROVIDER_RESULT';
+        throw error;
+      }
+      return {
+        target,
+        jobs,
+        error: null,
+        durationMs: Math.max(0, Math.round(monotonicNow() - started)),
+      };
     } catch (error) {
-      return { target, jobs: [], error: error instanceof Error ? error.message : String(error) };
+      return {
+        target,
+        jobs: [],
+        error,
+        durationMs: Math.max(0, Math.round(monotonicNow() - started)),
+      };
     }
   });
 
+  const providerResults = batches.map((batch) => ({
+    sequence: batch.target.sequence,
+    provider: batch.target.provider,
+    tenant: batch.target.tenant,
+    targetClass: batch.target.targetClass,
+    status: batch.error ? 'error' : 'ok',
+    errorClass: batch.error ? classifyProviderError(batch.error) : null,
+    errorMessage: batch.error ? errorMessage(batch.error) : null,
+    jobsReturned: batch.jobs.length,
+    candidatesRetained: 0,
+    durationMs: batch.durationMs,
+  }));
+  const resultBySequence = new Map(
+    providerResults.map((result) => [result.sequence, result]),
+  );
+
   const candidates = [];
+  const rejected = [];
   const seenUrls = new Set();
 
   outer:
@@ -142,8 +251,10 @@ export async function runTrackedScan({ portalsPath, providersDir, concurrency, m
     if (batch.error) {
       rejected.push(reject('provider_fetch_failed', null, {
         company: batch.target.name,
-        provider: batch.target._provider.id,
-        error: batch.error,
+        provider: batch.target.provider,
+        tenant: batch.target.tenant,
+        errorClass: classifyProviderError(batch.error),
+        error: errorMessage(batch.error),
       }));
       continue;
     }
@@ -175,7 +286,9 @@ export async function runTrackedScan({ portalsPath, providersDir, concurrency, m
         rejected.push(reject('location_filter', candidate));
         continue;
       }
-      const postedAt = candidate.postedAtUtc ? Date.parse(candidate.postedAtUtc) : undefined;
+      const postedAt = candidate.postedAtUtc
+        ? Date.parse(candidate.postedAtUtc)
+        : undefined;
       if (!postingAgeFilter(postedAt)) {
         rejected.push(reject('posting_age_filter', candidate));
         continue;
@@ -184,12 +297,18 @@ export async function runTrackedScan({ portalsPath, providersDir, concurrency, m
         rejected.push(reject('salary_filter', candidate));
         continue;
       }
-      const matched = matchedTitleKeywords(candidate.title, rawConfig.title_filter);
+      const matched = matchedTitleKeywords(
+        candidate.title,
+        portalConfig.title_filter,
+      );
       if (!contentFilter(candidate.description, matched)) {
         rejected.push(reject('content_filter', candidate));
         continue;
       }
+
       candidates.push(candidate);
+      const providerResult = resultBySequence.get(batch.target.sequence);
+      providerResult.candidatesRetained += 1;
       if (candidates.length >= maxCandidates) break outer;
     }
   }
@@ -199,5 +318,6 @@ export async function runTrackedScan({ portalsPath, providersDir, concurrency, m
     rejected,
     targetCount: targets.length,
     providerIds: [...providers.keys()].sort(),
+    providerResults,
   };
 }
