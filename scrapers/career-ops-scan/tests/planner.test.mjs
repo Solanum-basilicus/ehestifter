@@ -118,6 +118,7 @@ function build(options = {}) {
     providers: options.providers ?? providers(),
     mode: options.mode ?? 'offline',
     generatedAt: options.generatedAt ?? NOW,
+    catalogTargetLimit: options.catalogTargetLimit ?? 0,
   });
 }
 
@@ -336,4 +337,111 @@ test('file-backed planner loads state and avoids catalog read in preflight', asy
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+
+test('live preflight includes an explicit bounded due catalog shard', () => {
+  const result = build({
+    mode: 'preflight',
+    catalogTargetLimit: 2,
+    discoveryPolicy: rawPolicy({ max: 5 }),
+  });
+  assert.equal(result.plan.counts.priority, 3);
+  assert.equal(result.plan.counts.normal, 2);
+  assert.equal(result.plan.limits.liveCatalogRequested, true);
+  assert.equal(result.plan.limits.catalogTargetsRequested, 2);
+  assert.equal(
+    result.plan.targets.slice(0, 3).every((item) => item.targetClass === 'priority'),
+    true,
+  );
+  assert.equal(
+    result.plan.targets.slice(3).every((item) => item.targetClass === 'normal'),
+    true,
+  );
+});
+
+test('live import includes catalog only when explicitly requested', () => {
+  const withoutCatalog = build({ mode: 'import', ashbyCatalog: null });
+  assert.equal(withoutCatalog.plan.counts.normal, 0);
+
+  const withCatalog = build({
+    mode: 'import',
+    catalogTargetLimit: 1,
+    discoveryPolicy: rawPolicy({ max: 5 }),
+  });
+  assert.equal(withCatalog.plan.counts.normal, 1);
+  assert.equal(withCatalog.plan.targets.length, 4);
+});
+
+test('live catalog normals respect cadence while priorities bypass it', () => {
+  const state = tenantState([
+    { tenant: 'alpha', nextEligibleScanAtUtc: '2026-07-21T12:00:00.000Z' },
+    { tenant: 'n8n', nextEligibleScanAtUtc: '2026-07-21T12:00:00.000Z' },
+  ]);
+  const result = build({
+    mode: 'preflight',
+    catalogTargetLimit: 5,
+    discoveryPolicy: rawPolicy({ max: 5 }),
+    tenantState: state,
+  });
+  assert.equal(result.plan.targets.some((item) => item.tenant === 'n8n'), true);
+  assert.equal(result.plan.targets.some((item) => item.tenant === 'alpha'), false);
+  assert.equal(result.plan.counts.skippedNotDue, 1);
+});
+
+test('live catalog normals respect provider cooldown', () => {
+  const state = tenantState([], [{
+    provider: 'ashby',
+    health: 'cooldown',
+    cooldownUntilUtc: '2026-07-21T12:00:00.000Z',
+    lastBreakerAtUtc: '2026-07-20T00:00:00.000Z',
+    lastBreakerReason: 'rate_limit_threshold',
+    lastRunAtUtc: '2026-07-20T00:00:00.000Z',
+    lastRequestsAttempted: 10,
+    lastRateLimited: 2,
+  }]);
+  const result = build({
+    mode: 'preflight',
+    catalogTargetLimit: 2,
+    discoveryPolicy: rawPolicy({ max: 5 }),
+    tenantState: state,
+  });
+  assert.equal(result.plan.counts.normal, 0);
+  assert.equal(result.plan.targets.some((item) => item.tenant === 'n8n'), true);
+  assert.ok(result.plan.counts.skippedProviderCooldown > 0);
+});
+
+test('live catalog target request cannot exceed discovery policy maximum', () => {
+  assert.throws(
+    () => build({
+      mode: 'preflight',
+      catalogTargetLimit: 4,
+      discoveryPolicy: rawPolicy({ max: 3 }),
+    }),
+    /exceeds policy maximum 3/,
+  );
+});
+
+test('live catalog request requires a readable valid catalog', () => {
+  assert.throws(
+    () => build({
+      mode: 'preflight',
+      catalogTargetLimit: 1,
+      ashbyCatalog: null,
+    }),
+    /catalog is required/,
+  );
+});
+
+test('live catalog normals use bounded lookback while priorities retain legacy listing', () => {
+  const result = build({
+    mode: 'preflight',
+    catalogTargetLimit: 1,
+    discoveryPolicy: rawPolicy({ max: 5 }),
+  });
+  const priorities = result.plan.targets.filter((item) => item.targetClass === 'priority');
+  const normal = result.plan.targets.find((item) => item.targetClass === 'normal');
+  assert.equal(priorities.every((item) => item.lookbackStartUtc === null), true);
+  assert.equal(typeof normal.lookbackStartUtc, 'string');
+  assert.equal(normal.lookbackUnbounded, false);
 });

@@ -68,6 +68,7 @@ test('run summary reports scheduling, breaker, sweep, and state metrics', () => 
     finishedAt: new Date('2026-07-20T00:00:01Z'),
     targetPlan: {
       targets: [{ lookbackStartUtc: '2026-07-17T00:00:00Z', lookbackUnbounded: false }],
+      limits: { liveCatalogRequested: false, catalogTargetsRequested: 0 },
       counts: { priority: 0, normal: 1, disabled: 0, disabledRemoved: 0, planningRejected: 0,
         catalogEligible: 3000, skippedNotDue: 10, skippedProviderCooldown: 0,
         skippedNormalBudget: 2890, skippedTotal: 2900 },
@@ -91,4 +92,61 @@ test('run summary reports scheduling, breaker, sweep, and state metrics', () => 
   assert.equal(summary.sweepRecommendedTargetsPerRun, 1000);
   assert.equal(summary.tenantsMarkedSuspectedDead, 1);
   assert.equal(summary.rateRecommendationsDecrease, 1);
+});
+
+
+test('Phase 4 summary quantifies catalog preflight ratio and scope rejections', () => {
+  const summary = buildRunSummary({
+    runId: 'run-live',
+    mode: 'preflight',
+    startedAt: new Date('2026-07-20T00:00:00Z'),
+    finishedAt: new Date('2026-07-20T00:00:02Z'),
+    targetPlan: {
+      targets: [
+        { lookbackStartUtc: null, lookbackUnbounded: false },
+        { lookbackStartUtc: '2026-07-17T00:00:00Z', lookbackUnbounded: false },
+      ],
+      limits: { liveCatalogRequested: true, catalogTargetsRequested: 10 },
+      counts: {
+        priority: 1, normal: 1, disabled: 0, disabledRemoved: 0,
+        planningRejected: 0, catalogEligible: 100, skippedNotDue: 0,
+        skippedProviderCooldown: 0, skippedNormalBudget: 99, skippedTotal: 99,
+      },
+      catalogs: { ashby: { acceptedItemCount: 100, rawSha256: 'a'.repeat(64) } },
+      sweep: {
+        targetFullSweepDays: 3, estimatedHealthySweepDays: 100,
+        recommendedHealthyTargetsPerRun: 34, recommendedNormalTargetsPerRun: 34,
+        feasibleAtConfiguredBudget: false,
+      },
+    },
+    scanResult: {
+      candidates: [
+        { sourceMode: 'priority' },
+        { sourceMode: 'catalog' },
+        { sourceMode: 'catalog' },
+      ],
+      rejected: [{ reason: 'location_scope_filter' }],
+      providerIds: ['ashby'],
+      breakerEvents: [],
+      providerResults: [{
+        status: 'ok', skipReason: null, errorClass: null, jobsReturned: 3,
+        candidatesMatched: 3, candidatesDroppedByCap: 0,
+      }],
+    },
+    evaluated: [
+      { sourceMode: 'priority', preflight: { status: 'ok', exists: true } },
+      { sourceMode: 'catalog', preflight: { status: 'ok', exists: true } },
+      { sourceMode: 'catalog', preflight: { status: 'ok', exists: false } },
+    ],
+    requestedMaxCreates: null,
+  });
+  assert.equal(summary.schemaVersion, 3);
+  assert.equal(summary.liveCatalogTargets, 1);
+  assert.equal(summary.locationScopeRejected, 1);
+  assert.equal(summary.preflightChecked, 3);
+  assert.equal(summary.preflightExistingRatio, 0.6667);
+  assert.equal(summary.catalogPreflightChecked, 2);
+  assert.equal(summary.catalogPreflightExistingRatio, 0.5);
+  assert.equal(summary.priorityCandidates, 1);
+  assert.equal(summary.catalogCandidates, 2);
 });

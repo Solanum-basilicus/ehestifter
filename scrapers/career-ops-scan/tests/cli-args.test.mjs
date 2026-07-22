@@ -31,12 +31,16 @@ test('parses offline and preflight scans', () => {
     source: 'tracked',
     mode: 'offline',
     maxCreate: null,
+    catalogTargets: null,
+    noProgress: false,
   });
   assert.deepEqual(parseArgs(['scan', 'tracked', '--preflight']), {
     command: 'scan',
     source: 'tracked',
     mode: 'preflight',
     maxCreate: null,
+    catalogTargets: null,
+    noProgress: false,
   });
 });
 
@@ -48,6 +52,8 @@ test('parses bounded import scan', () => {
       source: 'tracked',
       mode: 'import',
       maxCreate: 3,
+      catalogTargets: null,
+      noProgress: false,
     },
   );
 });
@@ -94,5 +100,63 @@ test('unknown top-level command fails clearly', () => {
   assert.throws(
     () => parseArgs(['discover', 'ashby']),
     /Expected "scan tracked" or "catalog sync ashby"/,
+  );
+});
+
+
+test('parses explicit live catalog targets and no-progress', () => {
+  assert.deepEqual(
+    parseArgs([
+      'scan', 'tracked', '--preflight',
+      '--catalog-targets', '25', '--no-progress',
+    ]),
+    {
+      command: 'scan',
+      source: 'tracked',
+      mode: 'preflight',
+      maxCreate: null,
+      catalogTargets: 25,
+      noProgress: true,
+    },
+  );
+  assert.deepEqual(
+    parseArgs([
+      'scan', 'tracked', '--import', '--max-create', '2',
+      '--catalog-targets', '100',
+    ]),
+    {
+      command: 'scan',
+      source: 'tracked',
+      mode: 'import',
+      maxCreate: 2,
+      catalogTargets: 100,
+      noProgress: false,
+    },
+  );
+});
+
+test('catalog target count is explicit, positive, and live-only', () => {
+  for (const value of ['0', '-1', '1.5', '01', 'nope']) {
+    assert.throws(
+      () => parseArgs([
+        'scan', 'tracked', '--preflight', '--catalog-targets', value,
+      ]),
+      /positive integer/,
+    );
+  }
+  assert.throws(
+    () => parseArgs([
+      'scan', 'tracked', '--offline', '--catalog-targets', '10',
+    ]),
+    /valid only with --preflight or --import/,
+  );
+});
+
+test('no-progress may be supplied once', () => {
+  assert.throws(
+    () => parseArgs([
+      'scan', 'tracked', '--offline', '--no-progress', '--no-progress',
+    ]),
+    /only once/,
   );
 });

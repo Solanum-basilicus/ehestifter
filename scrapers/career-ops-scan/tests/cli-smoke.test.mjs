@@ -161,6 +161,7 @@ test('CLI offline branch publishes Phase 3 artifacts and scanner-owned state wit
     assert.equal(result.code, 0, result.stderr);
     const output = JSON.parse(result.stdout);
     assert.equal(output.summary.targetsPlanned, 0);
+    assert.equal(result.stderr.includes('\x1b[2K'), false);
     assert.equal(output.tenantStatePath, path.join(dataPath, 'state', 'tenant-state.json'));
 
     const files = await import('node:fs/promises').then(({ readdir }) => readdir(output.runPath));
@@ -170,5 +171,128 @@ test('CLI offline branch publishes Phase 3 artifacts and scanner-owned state wit
       await readFile(path.join(dataPath, 'state', 'tenant-state.json'), 'utf8'),
     );
     assert.equal(state.schemaVersion, 1);
+  });
+});
+
+
+test('CLI refuses live catalog traffic when the explicit config gate is disabled', async () => {
+  await withTempDir(async (directory) => {
+    const dataPath = path.join(directory, 'data');
+    const portalsPath = path.join(directory, 'portals.yml');
+    const overridesPath = path.join(directory, 'overrides.yml');
+    const policyPath = path.join(directory, 'policy.yml');
+    const configPath = path.join(directory, 'scanner.json');
+    await writeFile(portalsPath, '{}\n');
+    await writeFile(overridesPath, JSON.stringify({
+      schema_version: 1,
+      priority: { ashby: [] },
+      disabled: { ashby: [] },
+    }));
+    await writeFile(policyPath, JSON.stringify({
+      schema_version: 1,
+      providers: {
+        ashby: {
+          catalog_enabled: true,
+          max_normal_targets_per_run: 100,
+          target_full_sweep_days: 3,
+        },
+      },
+    }));
+    await writeFile(configPath, JSON.stringify({
+      schemaVersion: 1,
+      careerOps: { upstreamRef: 'test-ref' },
+      paths: {
+        portals: portalsPath,
+        companyOverrides: overridesPath,
+        discoveryPolicy: policyPath,
+        catalogs: path.join(dataPath, 'catalogs'),
+        state: path.join(dataPath, 'state'),
+        data: dataPath,
+      },
+      scan: {},
+      jobsApi: { baseUrl: 'https://jobs.example/api' },
+      liveCatalog: { enabled: false },
+      imports: { enabled: false },
+    }));
+
+    const result = await runNode([
+      cliPath, 'scan', 'tracked', '--preflight', '--catalog-targets', '10',
+    ], {
+      env: {
+        SCANNER_CONFIG_PATH: configPath,
+        EHESTIFTER_JOBS_FUNCTION_KEY: 'secret',
+      },
+    });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /liveCatalog.enabled=true/);
+  });
+});
+
+test('CLI enforces mode-specific live catalog target ceilings', async () => {
+  await withTempDir(async (directory) => {
+    const dataPath = path.join(directory, 'data');
+    const portalsPath = path.join(directory, 'portals.yml');
+    const overridesPath = path.join(directory, 'overrides.yml');
+    const policyPath = path.join(directory, 'policy.yml');
+    const configPath = path.join(directory, 'scanner.json');
+    await writeFile(portalsPath, '{}\n');
+    await writeFile(overridesPath, JSON.stringify({
+      schema_version: 1,
+      priority: { ashby: [] },
+      disabled: { ashby: [] },
+    }));
+    await writeFile(policyPath, JSON.stringify({
+      schema_version: 1,
+      providers: {
+        ashby: {
+          catalog_enabled: true,
+          max_normal_targets_per_run: 100,
+          target_full_sweep_days: 3,
+        },
+      },
+    }));
+    await writeFile(configPath, JSON.stringify({
+      schemaVersion: 1,
+      careerOps: { upstreamRef: 'test-ref' },
+      paths: {
+        portals: portalsPath,
+        companyOverrides: overridesPath,
+        discoveryPolicy: policyPath,
+        catalogs: path.join(dataPath, 'catalogs'),
+        state: path.join(dataPath, 'state'),
+        data: dataPath,
+      },
+      scan: {},
+      jobsApi: { baseUrl: 'https://jobs.example/api' },
+      liveCatalog: {
+        enabled: true,
+        maxPreflightTargetsPerRun: 5,
+        maxImportTargetsPerRun: 3,
+      },
+      imports: { enabled: true, maxCreatesPerRun: 1 },
+    }));
+
+    const preflight = await runNode([
+      cliPath, 'scan', 'tracked', '--preflight', '--catalog-targets', '6',
+    ], {
+      env: {
+        SCANNER_CONFIG_PATH: configPath,
+        EHESTIFTER_JOBS_FUNCTION_KEY: 'secret',
+      },
+    });
+    assert.equal(preflight.code, 1);
+    assert.match(preflight.stderr, /exceeds preflight ceiling 5/);
+
+    const importing = await runNode([
+      cliPath, 'scan', 'tracked', '--import', '--max-create', '1',
+      '--catalog-targets', '4',
+    ], {
+      env: {
+        SCANNER_CONFIG_PATH: configPath,
+        EHESTIFTER_JOBS_FUNCTION_KEY: 'secret',
+      },
+    });
+    assert.equal(importing.code, 1);
+    assert.match(importing.stderr, /exceeds import ceiling 3/);
   });
 });

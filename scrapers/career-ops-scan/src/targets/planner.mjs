@@ -47,6 +47,14 @@ function parseYaml(text, name) {
   return requireObject(parsed, name);
 }
 
+function normalizeCatalogTargetLimit(value) {
+  if (value == null) return 0;
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error('catalogTargetLimit must be a non-negative integer');
+  }
+  return value;
+}
+
 function normalizeMode(mode) {
   if (!['offline', 'preflight', 'import'].includes(mode)) {
     throw new Error(`Unsupported scan mode: ${mode}`);
@@ -290,8 +298,15 @@ function lookbackWindow(state, providerPolicy, now) {
   };
 }
 
-function targetWithSchedule(target, state, providerPolicy, now, bucket, mode) {
-  const lookback = mode === 'offline'
+function targetWithSchedule(
+  target,
+  state,
+  providerPolicy,
+  now,
+  bucket,
+  useScheduledLookback,
+) {
+  const lookback = useScheduledLookback
     ? lookbackWindow(state, providerPolicy, now)
     : { startUtc: null, unbounded: false };
   return {
@@ -375,10 +390,17 @@ export function buildTargetPlan({
   providers,
   mode,
   generatedAt = new Date(),
+  catalogTargetLimit = 0,
 }) {
   requireObject(portalConfig, 'portals config');
   if (!(providers instanceof Map)) throw new Error('providers must be a Map');
   normalizeMode(mode);
+  const requestedCatalogTargetLimit = normalizeCatalogTargetLimit(
+    catalogTargetLimit,
+  );
+  if (mode === 'offline' && requestedCatalogTargetLimit > 0) {
+    throw new Error('offline catalog target count must come from discovery policy');
+  }
 
   const now = generatedAt instanceof Date ? generatedAt : new Date(generatedAt);
   if (Number.isNaN(now.getTime())) throw new Error('generatedAt must be a valid date');
@@ -468,7 +490,7 @@ export function buildTargetPlan({
       providerPolicy,
       now,
       'priority',
-      mode,
+      mode === 'offline',
     ));
   }
 
@@ -477,13 +499,28 @@ export function buildTargetPlan({
   const populationByBucket = Object.fromEntries(BUCKET_ORDER.map((key) => [key, 0]));
   const dueByBucket = Object.fromEntries(BUCKET_ORDER.map((key) => [key, 0]));
   const selectedNormal = [];
-  const includeCatalog = mode === 'offline' && ashbyPolicy.catalogEnabled;
+  const liveCatalogRequested = mode !== 'offline'
+    && requestedCatalogTargetLimit > 0;
+  if (liveCatalogRequested && !ashbyPolicy.catalogEnabled) {
+    throw new Error('Live catalog scanning requires providers.ashby.catalog_enabled=true');
+  }
+  if (requestedCatalogTargetLimit > ashbyPolicy.maxNormalTargetsPerRun) {
+    throw new Error(
+      `Requested ${requestedCatalogTargetLimit} catalog targets exceeds `
+      + `policy maximum ${ashbyPolicy.maxNormalTargetsPerRun}`,
+    );
+  }
+  const includeCatalog = ashbyPolicy.catalogEnabled
+    && (mode === 'offline' || liveCatalogRequested);
+  const effectiveCatalogTargetLimit = mode === 'offline'
+    ? ashbyPolicy.maxNormalTargetsPerRun
+    : requestedCatalogTargetLimit;
 
   if (includeCatalog) {
     if (!ashbyProvider) throw new Error('Ashby catalog scanning requires the ashby provider');
     if (!ashbyCatalog) {
       throw new Error(
-        'Ashby catalog is required for catalog-enabled offline planning. '
+        'Ashby catalog is required for catalog-enabled planning. '
         + 'Run "catalog sync ashby" first.',
       );
     }
@@ -535,14 +572,14 @@ export function buildTargetPlan({
         ashbyPolicy,
         now,
         bucket,
-        mode,
+        true,
       ));
     }
 
     for (const bucket of BUCKET_ORDER) {
       buckets.get(bucket).sort(compareScheduledTargets);
       for (const target of buckets.get(bucket)) {
-        if (selectedNormal.length >= ashbyPolicy.maxNormalTargetsPerRun) {
+        if (selectedNormal.length >= effectiveCatalogTargetLimit) {
           recordSkipped(target, 'normal_budget', target.state);
           continue;
         }
@@ -556,19 +593,22 @@ export function buildTargetPlan({
   const sweep = catalogSweep({
     populationByBucket,
     dueByBucket,
-    maxTargets: ashbyPolicy.maxNormalTargetsPerRun,
+    maxTargets: includeCatalog ? effectiveCatalogTargetLimit : 0,
     targetDays: ashbyPolicy.targetFullSweepDays,
   });
 
   const plan = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     generatedAtUtc: now.toISOString(),
     mode,
     catalogs: { ashby: catalogMetadata },
     limits: {
       ashbyNormalTargets: includeCatalog
-        ? ashbyPolicy.maxNormalTargetsPerRun
+        ? effectiveCatalogTargetLimit
         : 0,
+      catalogTargetsRequested: requestedCatalogTargetLimit,
+      liveCatalogRequested,
+      normalTargetsHardMaximum: PHASE3_MAX_NORMAL_TARGETS_PER_RUN,
       phase3HardMaximum: PHASE3_MAX_NORMAL_TARGETS_PER_RUN,
     },
     sweep,
@@ -609,6 +649,7 @@ export async function buildTargetPlanFromFiles({
   providers,
   mode,
   generatedAt = new Date(),
+  catalogTargetLimit = 0,
 }) {
   const [portalsText, overridesText, policyText, tenantState] = await Promise.all([
     readFile(portalsPath, 'utf8'),
@@ -624,7 +665,9 @@ export async function buildTargetPlanFromFiles({
   const ashbyPolicy = getProviderPolicy(policy, 'ashby');
 
   let ashbyCatalog = null;
-  if (mode === 'offline' && ashbyPolicy.catalogEnabled) {
+  const shouldReadCatalog = ashbyPolicy.catalogEnabled
+    && (mode === 'offline' || catalogTargetLimit > 0);
+  if (shouldReadCatalog) {
     let text;
     try {
       text = await readFile(ashbyCatalogPath, 'utf8');
@@ -653,5 +696,6 @@ export async function buildTargetPlanFromFiles({
     providers,
     mode,
     generatedAt,
+    catalogTargetLimit,
   });
 }

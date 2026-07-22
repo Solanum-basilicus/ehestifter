@@ -2,6 +2,11 @@ function count(items, predicate) {
   return items.filter(predicate).length;
 }
 
+function ratio(numerator, denominator) {
+  if (denominator === 0) return null;
+  return Math.round((numerator / denominator) * 10_000) / 10_000;
+}
+
 export function buildRunSummary({
   runId,
   mode,
@@ -12,6 +17,7 @@ export function buildRunSummary({
   evaluated,
   tenantStateChanges = null,
   rateObservations = null,
+  requestedMaxCreates = null,
 }) {
   const providerResults = scanResult.providerResults;
   const attempted = providerResults.filter((result) => result.status !== 'skipped');
@@ -19,9 +25,34 @@ export function buildRunSummary({
     .map((target) => target.lookbackStartUtc)
     .filter(Boolean)
     .sort();
+  const preflightOk = count(
+    evaluated,
+    (job) => job.preflight?.status === 'ok',
+  );
+  const preflightExisting = count(
+    evaluated,
+    (job) => job.preflight?.status === 'ok' && job.preflight.exists,
+  );
+  const preflightMissing = count(
+    evaluated,
+    (job) => job.preflight?.status === 'ok' && !job.preflight.exists,
+  );
+  const catalogEvaluated = evaluated.filter((job) => job.sourceMode === 'catalog');
+  const catalogPreflightOk = count(
+    catalogEvaluated,
+    (job) => job.preflight?.status === 'ok',
+  );
+  const catalogPreflightExisting = count(
+    catalogEvaluated,
+    (job) => job.preflight?.status === 'ok' && job.preflight.exists,
+  );
+  const catalogPreflightMissing = count(
+    catalogEvaluated,
+    (job) => job.preflight?.status === 'ok' && !job.preflight.exists,
+  );
 
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     runId,
     mode,
     startedAtUtc: startedAt.toISOString(),
@@ -38,6 +69,9 @@ export function buildRunSummary({
     targetsSkippedBySchedule: targetPlan.counts.skippedTotal,
     priorityTargets: targetPlan.counts.priority,
     normalTargets: targetPlan.counts.normal,
+    liveCatalogRequested: targetPlan.limits?.liveCatalogRequested === true,
+    liveCatalogTargets: mode === 'offline' ? 0 : targetPlan.counts.normal,
+    catalogTargetsRequested: targetPlan.limits?.catalogTargetsRequested ?? 0,
     disabledTargets: targetPlan.counts.disabled,
     disabledTargetsRemoved: targetPlan.counts.disabledRemoved,
     planningRejected: targetPlan.counts.planningRejected,
@@ -68,7 +102,8 @@ export function buildRunSummary({
       0,
     ),
     candidatesMatchedBeforeCap: providerResults.reduce(
-      (total, result) => total + (result.candidatesMatched ?? result.candidatesRetained ?? 0),
+      (total, result) => total
+        + (result.candidatesMatched ?? result.candidatesRetained ?? 0),
       0,
     ),
     candidatesDroppedByCap: providerResults.reduce(
@@ -117,19 +152,38 @@ export function buildRunSummary({
     ),
 
     candidates: scanResult.candidates.length,
+    priorityCandidates: count(
+      scanResult.candidates,
+      (job) => job.sourceMode === 'priority',
+    ),
+    catalogCandidates: count(
+      scanResult.candidates,
+      (job) => job.sourceMode === 'catalog',
+    ),
     rejected: scanResult.rejected.length + targetPlan.counts.planningRejected,
+    locationScopeRejected: count(
+      scanResult.rejected,
+      (item) => item.reason === 'location_scope_filter',
+    ),
 
-    preflightExisting: count(
-      evaluated,
-      (job) => job.preflight?.status === 'ok' && job.preflight.exists,
-    ),
-    preflightMissing: count(
-      evaluated,
-      (job) => job.preflight?.status === 'ok' && !job.preflight.exists,
-    ),
+    preflightChecked: preflightOk,
+    preflightExisting,
+    preflightMissing,
     preflightErrors: count(
       evaluated,
       (job) => job.preflight?.status === 'error',
+    ),
+    preflightExistingRatio: ratio(preflightExisting, preflightOk),
+    catalogPreflightChecked: catalogPreflightOk,
+    catalogPreflightExisting,
+    catalogPreflightMissing,
+    catalogPreflightErrors: count(
+      catalogEvaluated,
+      (job) => job.preflight?.status === 'error',
+    ),
+    catalogPreflightExistingRatio: ratio(
+      catalogPreflightExisting,
+      catalogPreflightOk,
     ),
 
     detailReady: count(evaluated, (job) => job.detail?.status === 'ok'),
@@ -140,6 +194,10 @@ export function buildRunSummary({
     detailExistingSkipped: count(
       evaluated,
       (job) => job.detail?.status === 'skipped_existing',
+    ),
+    detailFetchLimited: count(
+      evaluated,
+      (job) => job.detail?.status === 'skipped_limit',
     ),
     detailUnsupported: count(
       evaluated,
@@ -162,6 +220,7 @@ export function buildRunSummary({
         ),
     ),
 
+    importCreateLimit: requestedMaxCreates,
     importExisting: count(
       evaluated,
       (job) => job.import?.status === 'existing_preflight',

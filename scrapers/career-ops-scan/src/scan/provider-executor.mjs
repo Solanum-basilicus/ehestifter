@@ -217,9 +217,31 @@ export async function executeProviderTargets({
   fetchTarget,
   monotonicNow = () => performance.now(),
   sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  onProgress = null,
 }) {
   if (!Array.isArray(targets)) throw new Error('targets must be an array');
   if (typeof fetchTarget !== 'function') throw new Error('fetchTarget must be a function');
+  if (onProgress != null && typeof onProgress !== 'function') {
+    throw new Error('onProgress must be a function');
+  }
+
+  let completed = 0;
+  function report(result) {
+    completed += 1;
+    if (!onProgress) return;
+    try {
+      onProgress({
+        stage: 'scan',
+        current: completed,
+        total: targets.length,
+        provider: result.providerResult.provider,
+        tenant: result.providerResult.tenant,
+        status: result.providerResult.status,
+      });
+    } catch {
+      /* Progress reporting must never alter provider execution. */
+    }
+  }
 
   const guards = new Map();
   function guardFor(provider) {
@@ -235,9 +257,11 @@ export async function executeProviderTargets({
   }
 
   async function executeGroup(group) {
-    return mapLimit(group, globalConcurrency, (target) => (
-      guardFor(target.provider).execute(target, fetchTarget)
-    ));
+    return mapLimit(group, globalConcurrency, async (target) => {
+      const result = await guardFor(target.provider).execute(target, fetchTarget);
+      report(result);
+      return result;
+    });
   }
 
   const priority = targets.filter((target) => target.targetClass === 'priority');

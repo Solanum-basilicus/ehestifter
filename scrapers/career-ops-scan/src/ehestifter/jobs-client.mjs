@@ -17,15 +17,28 @@ function isRetryable(error, response) {
   return response.status === 429 || response.status >= 500;
 }
 
-async function getJsonWithRetry({ fetchImpl, url, headers, timeoutMs, retryCount }) {
+async function getJsonWithRetry({
+  fetchImpl,
+  url,
+  headers,
+  timeoutMs,
+  retryCount,
+}) {
   let lastError;
   for (let attempt = 0; attempt <= retryCount; attempt += 1) {
     let response;
     try {
-      response = await fetchWithTimeout(fetchImpl, url, { method: 'GET', headers }, timeoutMs);
+      response = await fetchWithTimeout(
+        fetchImpl,
+        url,
+        { method: 'GET', headers },
+        timeoutMs,
+      );
       if (response.ok) return await response.json();
       const body = await response.text().catch(() => '');
-      const error = new Error(`Jobs API returned ${response.status}: ${body.slice(0, 500)}`);
+      const error = new Error(
+        `Jobs API returned ${response.status}: ${body.slice(0, 500)}`,
+      );
       error.status = response.status;
       if (!isRetryable(null, response) || attempt === retryCount) throw error;
       lastError = error;
@@ -42,21 +55,17 @@ function validateIdentity(payload) {
   if (!payload || typeof payload !== 'object') {
     throw new Error('Jobs API returned invalid JSON');
   }
-
   if (typeof payload.provider !== 'string' || payload.provider.trim() === '') {
     throw new Error('Jobs API response is missing provider');
   }
-
   if (typeof payload.externalId !== 'string' || payload.externalId.trim() === '') {
     throw new Error('Jobs API response is missing externalId');
   }
-
   return {
     provider: payload.provider.trim(),
-    providerTenant:
-      typeof payload.providerTenant === 'string'
-        ? payload.providerTenant.trim()
-        : '',
+    providerTenant: typeof payload.providerTenant === 'string'
+      ? payload.providerTenant.trim()
+      : '',
     externalId: payload.externalId.trim(),
     identitySource: payload.identitySource ?? null,
   };
@@ -79,12 +88,8 @@ export function createJobsClient(config, { fetchImpl = fetch } = {}) {
   };
 
   async function existsByUrl(jobUrl) {
-    const endpoint = new URL(
-      `${config.baseUrl}/jobs/exists`,
-    );
-
+    const endpoint = new URL(`${config.baseUrl}/jobs/exists`);
     endpoint.searchParams.set('url', jobUrl);
-
     const payload = await getJsonWithRetry({
       fetchImpl,
       url: endpoint,
@@ -92,37 +97,19 @@ export function createJobsClient(config, { fetchImpl = fetch } = {}) {
       timeoutMs: config.timeoutMs,
       retryCount: config.retryCount,
     });
-
     return {
       exists: payload.exists === true,
-      id:
-        typeof payload.id === 'string'
-          ? payload.id
-          : null,
+      id: typeof payload.id === 'string' ? payload.id : null,
       identity: validateIdentity(payload),
       urlInference: extractUrlInference(payload),
     };
   }
 
-  async function createJob(
-    payload,
-    {
-      reconcileUrl = payload.url,
-    } = {},
-  ) {
-    const endpoint = new URL(
-      `${config.baseUrl}/jobs`,
-    );
-
+  async function createJob(payload, { reconcileUrl = payload.url } = {}) {
+    const endpoint = new URL(`${config.baseUrl}/jobs`);
     let lastError = null;
-
-    for (
-      let attempt = 0;
-      attempt <= config.retryCount;
-      attempt += 1
-    ) {
+    for (let attempt = 0; attempt <= config.retryCount; attempt += 1) {
       let response = null;
-
       try {
         response = await fetchWithTimeout(
           fetchImpl,
@@ -144,17 +131,9 @@ export function createJobsClient(config, { fetchImpl = fetch } = {}) {
       if (response?.ok) {
         try {
           const body = await response.json();
-
-          if (
-            !body
-            || typeof body.id !== 'string'
-            || body.id.trim() === ''
-          ) {
-            throw new Error(
-              'Jobs create response is missing id',
-            );
+          if (!body || typeof body.id !== 'string' || body.id.trim() === '') {
+            throw new Error('Jobs create response is missing id');
           }
-
           return {
             id: body.id.trim(),
             disposition: 'submitted',
@@ -162,116 +141,110 @@ export function createJobsClient(config, { fetchImpl = fetch } = {}) {
             responseStatus: response.status,
           };
         } catch (error) {
-          /*
-           * The server may have committed before a malformed or
-           * truncated response reached us.
-           */
           lastError = error;
         }
       } else if (response) {
-        const body = await response
-          .text()
-          .catch(() => '');
-
+        const body = await response.text().catch(() => '');
         const error = new Error(
-          `Jobs API returned ${response.status}: `
-          + body.slice(0, 500),
+          `Jobs API returned ${response.status}: ${body.slice(0, 500)}`,
         );
-
         error.status = response.status;
         lastError = error;
-
-        if (!isRetryable(null, response)) {
-          throw error;
-        }
+        if (!isRetryable(null, response)) throw error;
       }
 
-      /*
-       * A timeout, transport error, malformed success response,
-       * 429, or 5xx may have happened after the server committed.
-       */
+      /* An ambiguous POST may have committed before its response was lost. */
       try {
-        const reconciliation =
-          await existsByUrl(reconcileUrl);
-
-        if (
-          reconciliation.exists
-          && reconciliation.id
-        ) {
+        const reconciliation = await existsByUrl(reconcileUrl);
+        if (reconciliation.exists && reconciliation.id) {
           return {
             id: reconciliation.id,
-            disposition:
-              'reconciled_after_ambiguous_post',
+            disposition: 'reconciled_after_ambiguous_post',
             reconciled: true,
-            responseStatus:
-              response?.status ?? null,
+            responseStatus: response?.status ?? null,
           };
         }
       } catch {
-        /*
-         * Preserve the POST failure as the primary error.
-         */
+        /* Preserve the POST failure as the primary error. */
       }
 
       if (attempt === config.retryCount) {
-        throw lastError ?? new Error(
-          'Jobs create failed without an error',
-        );
+        throw lastError ?? new Error('Jobs create failed without an error');
       }
-
-      await sleep(
-        Math.min(500 * 2 ** attempt, 4000),
-      );
+      await sleep(Math.min(500 * 2 ** attempt, 4000));
     }
-
-    throw lastError ?? new Error(
-      'Jobs create failed without an error',
-    );
+    throw lastError ?? new Error('Jobs create failed without an error');
   }
 
-  return {
-    existsByUrl,
-    createJob,
-  };
+  return { existsByUrl, createJob };
 }
 
-async function mapLimit(items, limit, worker) {
+function safeProgress(onProgress, value) {
+  if (!onProgress) return;
+  try {
+    onProgress(value);
+  } catch {
+    /* Progress is diagnostic and must not affect Jobs calls. */
+  }
+}
+
+async function mapLimit(items, limit, worker, onProgress) {
   const results = new Array(items.length);
   let next = 0;
+  let completed = 0;
   async function consume() {
     while (true) {
-      const index = next++;
+      const index = next;
+      next += 1;
       if (index >= items.length) return;
-      results[index] = await worker(items[index]);
+      results[index] = await worker(items[index], index);
+      completed += 1;
+      safeProgress(onProgress, {
+        stage: 'preflight',
+        current: completed,
+        total: items.length,
+      });
     }
   }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, consume));
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => consume()),
+  );
   return results;
 }
 
-export async function preflightCandidates(candidates, client, concurrency) {
-  return mapLimit(candidates, concurrency, async (candidate) => {
-    try {
-      const result = await client.existsByUrl(candidate.url);
-      return {
-        ...candidate,
-        canonicalIdentity: result.identity,
-        urlInference: result.urlInference,
-        existingJobId: result.id,
-        preflight: {
-          status: 'ok',
-          exists: result.exists,
-        },
-      };
-    } catch (error) {
-      return {
-        ...candidate,
-        preflight: {
-          status: 'error',
-          exists: null,
-          error: error instanceof Error ? error.message : String(error),
-        },
-      };
-    }
-  });
+export async function preflightCandidates(
+  candidates,
+  client,
+  concurrency,
+  { onProgress = null } = {},
+) {
+  return mapLimit(
+    candidates,
+    concurrency,
+    async (candidate) => {
+      try {
+        const result = await client.existsByUrl(candidate.url);
+        return {
+          ...candidate,
+          canonicalIdentity: result.identity,
+          urlInference: result.urlInference,
+          existingJobId: result.id,
+          preflight: {
+            status: 'ok',
+            exists: result.exists,
+          },
+        };
+      } catch (error) {
+        return {
+          ...candidate,
+          preflight: {
+            status: 'error',
+            exists: null,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        };
+      }
+    },
+    onProgress,
+  );
 }

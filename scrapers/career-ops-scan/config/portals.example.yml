@@ -6,6 +6,36 @@ title_filter:
     - "Junior"
     - "Intern"
 
+location_scope_filter:
+  enabled: true
+  # A compatible broad scope wins over a blocked scope in mixed listings,
+  # e.g. "Remote (Europe or US)" remains eligible.
+  allow:
+    - "Germany"
+    - "Deutschland"
+    - "Europe"
+    - "European Union"
+    - "EU"
+    - "EEA"
+    - "EMEA"
+    - "DACH"
+    - "Worldwide"
+    - "Anywhere"
+  block:
+    - "United States"
+    - "USA"
+    - "US"
+    - "Canada"
+  restriction_markers:
+    - "only"
+    - "based"
+    - "resident"
+    - "residents"
+    - "located"
+    - "within"
+    - "must be"
+    - "work authorization"
+
 location_filter:
   always_allow:
     - "Germany"
@@ -21,14 +51,14 @@ location_filter:
 max_posting_age_days: 30
 
 tracked_companies:
-  - name: Example Greenhouse Company
-    careers_url: https://job-boards.greenhouse.io/example
+  - name: Celonis
+    careers_url: https://job-boards.greenhouse.io/celonis
     enabled: true
 
-  - name: Example Lever Company
-    careers_url: https://jobs.lever.co/example
+  - name: Rainfocus
+    careers_url: https://jobs.lever.co/rainfocus
     enabled: true
 
-  - name: Example Ashby Company
-    careers_url: https://jobs.ashbyhq.com/example
+  - name: n8n
+    careers_url: https://jobs.ashbyhq.com/n8n
     enabled: true

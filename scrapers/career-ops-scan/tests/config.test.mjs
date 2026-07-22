@@ -8,7 +8,11 @@ import path from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { loadRuntimeConfig } from '../src/config.mjs';
+import {
+  LIVE_CATALOG_HARD_MAX_TARGETS,
+  loadRuntimeConfig,
+  validateLiveCatalogTargetRequest,
+} from '../src/config.mjs';
 
 async function withTempDir(worker) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'scanner-config-'));
@@ -41,6 +45,11 @@ function configFor(directory, overrides = {}) {
       baseUrl: 'https://jobs.example/api/',
       timeoutMs: 1000,
       retryCount: 0,
+    },
+    liveCatalog: {
+      enabled: true,
+      maxPreflightTargetsPerRun: 25,
+      maxImportTargetsPerRun: 10,
     },
     imports: {
       enabled: true,
@@ -89,6 +98,11 @@ test('loadRuntimeConfig returns Phase 3 paths and derived state path', async () 
     assert.equal(config.scan.providerConcurrency, 3);
     assert.equal(config.jobsApi.baseUrl, 'https://jobs.example/api');
     assert.equal(config.jobsApi.retryCount, 0);
+    assert.deepEqual(config.liveCatalog, {
+      enabled: true,
+      maxPreflightTargetsPerRun: 25,
+      maxImportTargetsPerRun: 10,
+    });
   });
 });
 
@@ -174,6 +188,119 @@ test('import mode still requires imports.enabled=true', async () => {
         env: { EHESTIFTER_JOBS_FUNCTION_KEY: 'secret-key' },
       }),
       /imports.enabled=true/,
+    );
+  });
+});
+
+
+test('live catalog gates use conservative defaults', async () => {
+  await withTempDir(async (directory) => {
+    await writeScanFiles(directory);
+    const configPath = path.join(directory, 'scanner.json');
+    const raw = configFor(directory);
+    delete raw.liveCatalog;
+    await writeFile(configPath, JSON.stringify(raw));
+
+    const config = await loadRuntimeConfig({ configPath, operation: 'scan' });
+    assert.deepEqual(config.liveCatalog, {
+      enabled: false,
+      maxPreflightTargetsPerRun: 100,
+      maxImportTargetsPerRun: 100,
+    });
+  });
+});
+
+test('live catalog gate values are strictly validated', async () => {
+  await withTempDir(async (directory) => {
+    await writeScanFiles(directory);
+    const configPath = path.join(directory, 'scanner.json');
+
+    for (const liveCatalog of [
+      { enabled: 'yes' },
+      { maxPreflightTargetsPerRun: 0 },
+      { maxImportTargetsPerRun: -1 },
+    ]) {
+      const raw = configFor(directory, { liveCatalog });
+      await writeFile(configPath, JSON.stringify(raw));
+      await assert.rejects(
+        loadRuntimeConfig({ configPath, operation: 'scan' }),
+        /liveCatalog/,
+      );
+    }
+  });
+});
+
+
+test('live catalog request validation requires an explicit enabled live mode', () => {
+  const liveCatalog = {
+    enabled: true,
+    maxPreflightTargetsPerRun: 25,
+    maxImportTargetsPerRun: 10,
+  };
+
+  assert.equal(validateLiveCatalogTargetRequest({
+    mode: 'preflight',
+    requested: 25,
+    liveCatalog,
+  }), 25);
+  assert.equal(validateLiveCatalogTargetRequest({
+    mode: 'import',
+    requested: null,
+    liveCatalog,
+  }), 0);
+
+  assert.throws(
+    () => validateLiveCatalogTargetRequest({
+      mode: 'offline',
+      requested: 1,
+      liveCatalog,
+    }),
+    /valid only for preflight or import/,
+  );
+  assert.throws(
+    () => validateLiveCatalogTargetRequest({
+      mode: 'preflight',
+      requested: 1,
+      liveCatalog: { ...liveCatalog, enabled: false },
+    }),
+    /liveCatalog.enabled=true/,
+  );
+  assert.throws(
+    () => validateLiveCatalogTargetRequest({
+      mode: 'import',
+      requested: 11,
+      liveCatalog,
+    }),
+    /exceeds import ceiling 10/,
+  );
+});
+
+test('live catalog ceilings and requests retain a hard safety maximum', async () => {
+  assert.equal(LIVE_CATALOG_HARD_MAX_TARGETS, 2000);
+
+  assert.throws(
+    () => validateLiveCatalogTargetRequest({
+      mode: 'preflight',
+      requested: LIVE_CATALOG_HARD_MAX_TARGETS + 1,
+      liveCatalog: {
+        enabled: true,
+        maxPreflightTargetsPerRun: LIVE_CATALOG_HARD_MAX_TARGETS + 1,
+        maxImportTargetsPerRun: 1,
+      },
+    }),
+    /cannot exceed 2000/,
+  );
+
+  await withTempDir(async (directory) => {
+    await writeScanFiles(directory);
+    const configPath = path.join(directory, 'scanner.json');
+    const raw = configFor(directory);
+    raw.liveCatalog.maxPreflightTargetsPerRun = LIVE_CATALOG_HARD_MAX_TARGETS + 1;
+    await writeFile(configPath, JSON.stringify(raw));
+
+    await assert.rejects(
+      loadRuntimeConfig({ configPath, operation: 'scan' }),
+      /no greater than 2000/,
     );
   });
 });

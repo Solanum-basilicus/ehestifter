@@ -8,6 +8,7 @@ import {
   matchedTitleKeywords,
 } from './filters.mjs';
 import { executeProviderTargets } from './provider-executor.mjs';
+import { buildLocationScopeFilter } from './location-scope.mjs';
 import {
   classifyProviderError,
   providerErrorMessage,
@@ -110,6 +111,7 @@ export async function runTrackedScan({
   monotonicNow,
   sleep,
   httpContextFactory = makeHttpCtx,
+  onProgress = null,
 }) {
   if (!portalConfig || typeof portalConfig !== 'object' || Array.isArray(portalConfig)) {
     throw new Error('portalConfig must be an object');
@@ -125,6 +127,9 @@ export async function runTrackedScan({
 
   const titleFilter = buildTitleFilter(portalConfig.title_filter);
   const locationFilter = buildLocationFilter(portalConfig.location_filter);
+  const locationScopeFilter = buildLocationScopeFilter(
+    portalConfig.location_scope_filter,
+  );
   const postingAgeFilter = buildPostingAgeFilter(
     portalConfig.max_posting_age_days,
     nowMs,
@@ -138,6 +143,7 @@ export async function runTrackedScan({
     globalConcurrency: concurrency,
     monotonicNow,
     sleep,
+    onProgress,
     fetchTarget: async (target) => {
       const sinceMs = targetSinceMs(target, portalConfig, nowMs);
       const httpContext = { ...httpContextFactory(), sinceMs };
@@ -188,6 +194,16 @@ export async function runTrackedScan({
       seenUrls.add(candidate.url);
       if (!titleFilter(candidate.title)) {
         rejected.push(reject('title_filter', candidate));
+        continue;
+      }
+      const locationScope = locationScopeFilter(candidate.rawLocation);
+      if (!locationScope.allowed) {
+        rejected.push(reject('location_scope_filter', candidate, {
+          reason: locationScope.reason,
+          allowedMatches: locationScope.allowedMatches,
+          blockedMatches: locationScope.blockedMatches,
+          markerMatches: locationScope.markerMatches ?? [],
+        }));
         continue;
       }
       if (!locationFilter(candidate.rawLocation)) {

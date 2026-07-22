@@ -1,10 +1,23 @@
 export function usageText() {
   return `Usage:
   node src/cli.mjs catalog sync ashby
-  node src/cli.mjs scan tracked --offline
-  node src/cli.mjs scan tracked --preflight
-  node src/cli.mjs scan tracked --import --max-create N
+  node src/cli.mjs scan tracked --offline [--no-progress]
+  node src/cli.mjs scan tracked --preflight [--catalog-targets N] [--no-progress]
+  node src/cli.mjs scan tracked --import --max-create N [--catalog-targets N] [--no-progress]
 `;
+}
+
+function parsePositiveInteger(rawValue, flag) {
+  const value = Number.parseInt(rawValue, 10);
+  if (
+    !rawValue
+    || !Number.isInteger(value)
+    || value <= 0
+    || String(value) !== rawValue
+  ) {
+    throw new Error(`${flag} requires a positive integer`);
+  }
+  return value;
 }
 
 export function parseArgs(argv) {
@@ -38,6 +51,8 @@ export function parseArgs(argv) {
   const flags = [providerOrFlag, ...rest].filter((value) => value != null);
   let mode = null;
   let maxCreate = null;
+  let catalogTargets = null;
+  let noProgress = false;
 
   for (let index = 0; index < flags.length; index += 1) {
     const flag = flags[index];
@@ -48,18 +63,23 @@ export function parseArgs(argv) {
     }
 
     if (flag === '--max-create') {
-      const rawValue = flags[index + 1];
-      const value = Number.parseInt(rawValue, 10);
-      if (
-        !rawValue
-        || !Number.isInteger(value)
-        || value <= 0
-        || String(value) !== rawValue
-      ) {
-        throw new Error('--max-create requires a positive integer');
-      }
-      maxCreate = value;
+      maxCreate = parsePositiveInteger(flags[index + 1], '--max-create');
       index += 1;
+      continue;
+    }
+
+    if (flag === '--catalog-targets') {
+      catalogTargets = parsePositiveInteger(
+        flags[index + 1],
+        '--catalog-targets',
+      );
+      index += 1;
+      continue;
+    }
+
+    if (flag === '--no-progress') {
+      if (noProgress) throw new Error('--no-progress may be supplied only once');
+      noProgress = true;
       continue;
     }
 
@@ -75,11 +95,19 @@ export function parseArgs(argv) {
   if (mode !== 'import' && maxCreate !== null) {
     throw new Error('--max-create is valid only with --import');
   }
+  if (mode === 'offline' && catalogTargets !== null) {
+    throw new Error(
+      '--catalog-targets is valid only with --preflight or --import; '
+      + 'offline target count comes from discovery policy',
+    );
+  }
 
   return {
     command: 'scan',
     source: 'tracked',
     mode,
     maxCreate,
+    catalogTargets,
+    noProgress,
   };
 }

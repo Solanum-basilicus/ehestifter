@@ -2,6 +2,8 @@ import { constants as fsConstants } from 'node:fs';
 import { access, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
+export const LIVE_CATALOG_HARD_MAX_TARGETS = 2000;
+
 function requireObject(value, name) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`${name} must be a JSON object`);
@@ -16,10 +18,12 @@ function requireString(value, name) {
   return value.trim();
 }
 
-function positiveInteger(value, fallback, name) {
+function positiveInteger(value, fallback, name, { max = Number.MAX_SAFE_INTEGER } = {}) {
   if (value == null) return fallback;
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new Error(`${name} must be a positive integer`);
+  if (!Number.isInteger(value) || value <= 0 || value > max) {
+    throw new Error(
+      `${name} must be a positive integer no greater than ${max}`,
+    );
   }
   return value;
 }
@@ -58,6 +62,40 @@ async function requireReadable(filePath, name) {
   }
 }
 
+export function validateLiveCatalogTargetRequest({
+  mode,
+  requested,
+  liveCatalog,
+}) {
+  const targetCount = requested ?? 0;
+  if (!Number.isInteger(targetCount) || targetCount < 0) {
+    throw new Error('requested live catalog targets must be a non-negative integer');
+  }
+  if (targetCount === 0) return 0;
+  if (!['preflight', 'import'].includes(mode)) {
+    throw new Error('live catalog targets are valid only for preflight or import');
+  }
+  if (!liveCatalog?.enabled) {
+    throw new Error(
+      'Catalog-backed preflight/import requires liveCatalog.enabled=true',
+    );
+  }
+  const ceiling = mode === 'import'
+    ? liveCatalog.maxImportTargetsPerRun
+    : liveCatalog.maxPreflightTargetsPerRun;
+  if (targetCount > ceiling) {
+    throw new Error(
+      `--catalog-targets ${targetCount} exceeds ${mode} ceiling ${ceiling}`,
+    );
+  }
+  if (targetCount > LIVE_CATALOG_HARD_MAX_TARGETS) {
+    throw new Error(
+      `--catalog-targets cannot exceed ${LIVE_CATALOG_HARD_MAX_TARGETS}`,
+    );
+  }
+  return targetCount;
+}
+
 export async function loadRuntimeConfig({
   mode = null,
   operation = 'scan',
@@ -89,6 +127,7 @@ export async function loadRuntimeConfig({
     'scan.description',
   );
   const imports = requireObject(raw.imports ?? {}, 'imports');
+  const liveCatalog = requireObject(raw.liveCatalog ?? {}, 'liveCatalog');
   const jobsApi = requireObject(raw.jobsApi ?? {}, 'jobsApi');
   const careerOps = requireObject(raw.careerOps ?? {}, 'careerOps');
 
@@ -186,6 +225,25 @@ export async function loadRuntimeConfig({
       upstreamRef: requireString(
         careerOps.upstreamRef,
         'careerOps.upstreamRef',
+      ),
+    },
+    liveCatalog: {
+      enabled: booleanValue(
+        liveCatalog.enabled,
+        false,
+        'liveCatalog.enabled',
+      ),
+      maxPreflightTargetsPerRun: positiveInteger(
+        liveCatalog.maxPreflightTargetsPerRun,
+        100,
+        'liveCatalog.maxPreflightTargetsPerRun',
+        { max: LIVE_CATALOG_HARD_MAX_TARGETS },
+      ),
+      maxImportTargetsPerRun: positiveInteger(
+        liveCatalog.maxImportTargetsPerRun,
+        100,
+        'liveCatalog.maxImportTargetsPerRun',
+        { max: LIVE_CATALOG_HARD_MAX_TARGETS },
       ),
     },
     imports: {

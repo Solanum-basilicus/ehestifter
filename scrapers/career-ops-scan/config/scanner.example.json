@@ -31,5 +31,10 @@
   "imports": {
     "enabled": false,
     "maxCreatesPerRun": 5
+  },
+  "liveCatalog": {
+    "enabled": false,
+    "maxPreflightTargetsPerRun": 100,
+    "maxImportTargetsPerRun": 100
   }
 }
