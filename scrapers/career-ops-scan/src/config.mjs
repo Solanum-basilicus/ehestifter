@@ -156,6 +156,12 @@ export async function loadRuntimeConfig({
       data: dataPath,
     },
     catalogs: {
+      directory: catalogsPath,
+      paths: Object.fromEntries(
+        ['ashby', 'greenhouse', 'lever', 'workday']
+          .map((provider) => [provider, path.join(catalogsPath, `${provider}.json`)]),
+      ),
+      // Compatibility alias for existing callers and operator scripts.
       ashbyPath: path.join(catalogsPath, 'ashby.json'),
     },
     state: {

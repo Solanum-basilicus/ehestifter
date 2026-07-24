@@ -110,7 +110,12 @@ test('CLI catalog sync branch writes catalog and does not enter scan orchestrati
     const persisted = JSON.parse(
       await readFile(path.join(dataPath, 'catalogs', 'ashby.json'), 'utf8'),
     );
-    assert.deepEqual(persisted.tenants, ['n8n']);
+    assert.equal(persisted.schemaVersion, 2);
+    assert.equal(persisted.provider, 'ashby');
+    assert.deepEqual(persisted.items, [{
+      tenant: 'n8n',
+      careersUrl: 'https://jobs.ashbyhq.com/n8n',
+    }]);
   });
 });
 

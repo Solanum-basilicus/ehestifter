@@ -1,6 +1,6 @@
 export function usageText() {
   return `Usage:
-  node src/cli.mjs catalog sync ashby
+  node src/cli.mjs catalog sync ashby|greenhouse|lever|workday|all
   node src/cli.mjs scan tracked --offline [--no-progress]
   node src/cli.mjs scan tracked --preflight [--catalog-targets N] [--no-progress]
   node src/cli.mjs scan tracked --import --max-create N [--catalog-targets N] [--no-progress]
@@ -33,19 +33,19 @@ export function parseArgs(argv) {
   if (command === 'catalog') {
     if (
       subject !== 'sync'
-      || providerOrFlag !== 'ashby'
+      || !['ashby', 'greenhouse', 'lever', 'workday', 'all'].includes(providerOrFlag)
       || rest.length > 0
     ) {
-      throw new Error('Only "catalog sync ashby" is implemented');
+      throw new Error('Expected "catalog sync ashby|greenhouse|lever|workday|all"');
     }
     return {
       command: 'catalog-sync',
-      provider: 'ashby',
+      provider: providerOrFlag,
     };
   }
 
   if (command !== 'scan' || subject !== 'tracked') {
-    throw new Error('Expected "scan tracked" or "catalog sync ashby"');
+    throw new Error('Expected "scan tracked" or "catalog sync <provider|all>"');
   }
 
   const flags = [providerOrFlag, ...rest].filter((value) => value != null);

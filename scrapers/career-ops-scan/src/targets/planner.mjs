@@ -3,9 +3,12 @@ import { readFile } from 'node:fs/promises';
 import yaml from 'js-yaml';
 
 import {
-  validateAshbyCatalogEnvelope,
-  validateAshbyTenant,
-} from '../catalogs/ashby-catalog.mjs';
+  CATALOG_PROVIDER_IDS,
+  catalogItemKey,
+  catalogItemToPortalEntry,
+  normalizeCatalogItem,
+  validateProviderCatalogEnvelope,
+} from '../catalogs/provider-catalog.mjs';
 import {
   getProviderPolicy,
   parseDiscoveryPolicy,
@@ -13,6 +16,7 @@ import {
 } from '../policy/discovery-policy.mjs';
 import { resolveProvider } from '../providers/_registry.mjs';
 import { targetHealthIdentity } from '../providers/_variant.mjs';
+import { aggregateCatalogSweeps } from './aggregate-catalog-sweep.mjs';
 import {
   loadTenantState,
   tenantStateKey,
@@ -63,24 +67,24 @@ function normalizeMode(mode) {
   return mode;
 }
 
-function normalizeOverrideTenants(value, name) {
+function normalizeOverrideItems(provider, value, name) {
   if (value == null) return [];
   if (!Array.isArray(value)) throw new Error(`${name} must be an array`);
 
-  const tenants = [];
+  const items = [];
   const seen = new Set();
   for (let index = 0; index < value.length; index += 1) {
-    const result = validateAshbyTenant(value[index]);
+    const result = normalizeCatalogItem(provider, value[index]);
     if (!result.ok) {
       throw new Error(`${name}[${index}] is invalid (${result.reason})`);
     }
-    const key = result.tenant.toLowerCase();
+    const key = catalogItemKey(provider, result.item);
     if (!seen.has(key)) {
       seen.add(key);
-      tenants.push(result.tenant);
+      items.push(result.item);
     }
   }
-  return tenants;
+  return items;
 }
 
 function readOverrides(companyOverrides) {
@@ -93,16 +97,21 @@ function readOverrides(companyOverrides) {
     overrides.disabled ?? {},
     'company overrides.disabled',
   );
-  return {
-    priorityAshby: normalizeOverrideTenants(
-      priority.ashby,
-      'company overrides.priority.ashby',
-    ),
-    disabledAshby: normalizeOverrideTenants(
-      disabled.ashby,
-      'company overrides.disabled.ashby',
-    ),
-  };
+  const priorityByProvider = {};
+  const disabledByProvider = {};
+  for (const provider of CATALOG_PROVIDER_IDS) {
+    priorityByProvider[provider] = normalizeOverrideItems(
+      provider,
+      priority[provider],
+      `company overrides.priority.${provider}`,
+    );
+    disabledByProvider[provider] = normalizeOverrideItems(
+      provider,
+      disabled[provider],
+      `company overrides.disabled.${provider}`,
+    );
+  }
+  return { priorityByProvider, disabledByProvider };
 }
 
 function parseCareersUrl(value, companyName) {
@@ -156,9 +165,9 @@ function targetStateKey(target) {
   return targetKey(target.provider, target.tenant, target.providerVariant);
 }
 
-function hashCatalogTenant(tenant) {
+function hashCatalogTarget(provider, tenant) {
   return createHash('sha256')
-    .update(`ashby\0${tenant.toLowerCase()}`)
+    .update(`${provider}\0${tenant.toLowerCase()}`)
     .digest('hex');
 }
 
@@ -179,8 +188,8 @@ function compareScheduledTargets(left, right) {
     right.state?.lastAttemptAtUtc,
   );
   if (attempt !== 0) return attempt;
-  const leftHash = hashCatalogTenant(left.tenant);
-  const rightHash = hashCatalogTenant(right.tenant);
+  const leftHash = hashCatalogTarget(left.provider, left.tenant);
+  const rightHash = hashCatalogTarget(right.provider, right.tenant);
   if (leftHash < rightHash) return -1;
   if (leftHash > rightHash) return 1;
   return left.tenant.localeCompare(right.tenant);
@@ -414,7 +423,7 @@ function serializableTarget(target) {
     careers_url: target.careers_url,
     targetClass: target.targetClass,
     reason: target.reason,
-    catalogRef: target.catalog ? 'ashby' : null,
+    catalogRef: target.catalog?.provider ?? null,
     health: target.health,
     scheduleBucket: target.scheduleBucket,
     lookbackStartUtc: target.lookbackStartUtc,
@@ -472,10 +481,70 @@ function catalogSweep({ populationByBucket, dueByBucket, maxTargets, targetDays 
   };
 }
 
+function catalogMetadata(provider, catalog) {
+  return {
+    provider,
+    source: catalog.source,
+    rawSha256: catalog.rawSha256,
+    fetchedAtUtc: catalog.fetchedAtUtc,
+    acceptedItemCount: catalog.acceptedItemCount,
+    eligibleItemCount: 0,
+    dueItemCount: 0,
+    plannedTargetCount: 0,
+  };
+}
+
+function catalogTarget(provider, item, metadata, providerPlugin) {
+  const entry = catalogItemToPortalEntry(provider, item);
+  const target = {
+    ...entry,
+    enabled: true,
+    tenant: entry.provider_tenant,
+    targetClass: 'normal',
+    reason: `${provider}_catalog`,
+    healthOnly: false,
+    canary: null,
+    catalog: metadata,
+    _provider: providerPlugin,
+  };
+  Object.assign(target, targetHealthIdentity(target));
+  return target;
+}
+
+function operatorPriorityTarget(provider, item, providerPlugin) {
+  const entry = catalogItemToPortalEntry(provider, item);
+  const target = {
+    ...entry,
+    enabled: true,
+    tenant: entry.provider_tenant,
+    targetClass: 'priority',
+    reason: 'operator_priority',
+    healthOnly: false,
+    canary: null,
+    catalog: null,
+    _provider: providerPlugin,
+  };
+  Object.assign(target, targetHealthIdentity(target));
+  return target;
+}
+
+function emptyBucketCounts() {
+  return Object.fromEntries(BUCKET_ORDER.map((key) => [key, 0]));
+}
+
+function aggregateBucketCounts(perProvider, field) {
+  const result = emptyBucketCounts();
+  for (const value of Object.values(perProvider)) {
+    for (const bucket of BUCKET_ORDER) result[bucket] += value[field][bucket];
+  }
+  return result;
+}
+
 export function buildTargetPlan({
   portalConfig,
   companyOverrides,
   discoveryPolicy,
+  catalogs = null,
   ashbyCatalog = null,
   tenantState,
   providers,
@@ -486,25 +555,28 @@ export function buildTargetPlan({
   requireObject(portalConfig, 'portals config');
   if (!(providers instanceof Map)) throw new Error('providers must be a Map');
   normalizeMode(mode);
-  const requestedCatalogTargetLimit = normalizeCatalogTargetLimit(
-    catalogTargetLimit,
-  );
+  const requestedCatalogTargetLimit = normalizeCatalogTargetLimit(catalogTargetLimit);
   if (mode === 'offline' && requestedCatalogTargetLimit > 0) {
     throw new Error('offline catalog target count must come from discovery policy');
   }
 
   const now = generatedAt instanceof Date ? generatedAt : new Date(generatedAt);
   if (Number.isNaN(now.getTime())) throw new Error('generatedAt must be a valid date');
-
   const policy = discoveryPolicy?.schemaVersion === 1
     ? discoveryPolicy
     : parseDiscoveryPolicy(discoveryPolicy);
-  const ashbyPolicy = getProviderPolicy(policy, 'ashby');
   const overrides = readOverrides(companyOverrides);
   const stateMaps = tenantStateMaps(tenantState);
-  const disabledKeys = new Set(
-    overrides.disabledAshby.map((tenant) => targetKey('ashby', tenant, null)),
-  );
+  const catalogValues = { ...(catalogs ?? {}) };
+  if (ashbyCatalog != null && catalogValues.ashby == null) catalogValues.ashby = ashbyCatalog;
+
+  const disabledKeys = new Set();
+  for (const provider of CATALOG_PROVIDER_IDS) {
+    for (const item of overrides.disabledByProvider[provider]) {
+      const entry = catalogItemToPortalEntry(provider, item);
+      disabledKeys.add(targetKey(provider, entry.provider_tenant, null));
+    }
+  }
 
   const tracked = trackedTargets(portalConfig, providers);
   const rawPriority = [];
@@ -514,7 +586,7 @@ export function buildTargetPlan({
 
   function addPriority(target) {
     const key = targetStateKey(target);
-    if (target.provider === 'ashby' && disabledKeys.has(key)) {
+    if (disabledKeys.has(key)) {
       disabledRemoved += 1;
       return;
     }
@@ -532,33 +604,16 @@ export function buildTargetPlan({
   }
 
   for (const target of tracked.targets) addPriority(target);
-  const ashbyProvider = providers.get('ashby');
-  if (overrides.priorityAshby.length > 0 && !ashbyProvider) {
-    throw new Error('Ashby priority overrides require the ashby provider');
-  }
-  for (const tenant of overrides.priorityAshby) {
-    const target = {
-      name: tenant,
-      careers_url: `https://jobs.ashbyhq.com/${tenant}`,
-      enabled: true,
-      provider: 'ashby',
-      tenant,
-      targetClass: 'priority',
-      reason: 'operator_priority',
-      healthOnly: false,
-      canary: null,
-      catalog: null,
-      _provider: ashbyProvider,
-    };
-    Object.assign(target, targetHealthIdentity(target));
-    addPriority(target);
+  for (const provider of CATALOG_PROVIDER_IDS) {
+    const plugin = providers.get(provider);
+    const priorityItems = overrides.priorityByProvider[provider];
+    if (priorityItems.length > 0 && !plugin) {
+      throw new Error(`${provider} priority overrides require the ${provider} provider`);
+    }
+    for (const item of priorityItems) addPriority(operatorPriorityTarget(provider, item, plugin));
   }
 
-  const skippedCounts = {
-    notDue: 0,
-    providerCooldown: 0,
-    budget: 0,
-  };
+  const skippedCounts = { notDue: 0, providerCooldown: 0, budget: 0 };
   const skippedSamples = [];
   const partitionStats = new Map();
   function partitionStat(target) {
@@ -580,18 +635,9 @@ export function buildTargetPlan({
   }
   function recordSkipped(target, reason, state) {
     const stats = partitionStat(target);
-    if (reason === 'not_due') {
-      skippedCounts.notDue += 1;
-      stats.skippedNotDue += 1;
-    }
-    if (reason === 'provider_cooldown') {
-      skippedCounts.providerCooldown += 1;
-      stats.skippedProviderCooldown += 1;
-    }
-    if (reason === 'normal_budget') {
-      skippedCounts.budget += 1;
-      stats.skippedNormalBudget += 1;
-    }
+    if (reason === 'not_due') { skippedCounts.notDue += 1; stats.skippedNotDue += 1; }
+    if (reason === 'provider_cooldown') { skippedCounts.providerCooldown += 1; stats.skippedProviderCooldown += 1; }
+    if (reason === 'normal_budget') { skippedCounts.budget += 1; stats.skippedNormalBudget += 1; }
     if (skippedSamples.length < MAX_SKIPPED_SAMPLES) {
       skippedSamples.push(skippedSample(target, reason, state));
     }
@@ -622,69 +668,59 @@ export function buildTargetPlan({
     ));
   }
 
-  let catalogMetadata = null;
-  let eligibleNormalCount = 0;
-  const populationByBucket = Object.fromEntries(BUCKET_ORDER.map((key) => [key, 0]));
-  const dueByBucket = Object.fromEntries(BUCKET_ORDER.map((key) => [key, 0]));
-  const selectedNormal = [];
-  const liveCatalogRequested = mode !== 'offline'
-    && requestedCatalogTargetLimit > 0;
-  if (liveCatalogRequested && !ashbyPolicy.catalogEnabled) {
-    throw new Error('Live catalog scanning requires providers.ashby.catalog_enabled=true');
+  const liveCatalogRequested = mode !== 'offline' && requestedCatalogTargetLimit > 0;
+  const enabledCatalogProviders = CATALOG_PROVIDER_IDS.filter(
+    (provider) => getProviderPolicy(policy, provider).catalogEnabled,
+  );
+  const includeCatalogProviders = (mode === 'offline' || liveCatalogRequested)
+    ? enabledCatalogProviders
+    : [];
+  if (liveCatalogRequested && enabledCatalogProviders.length === 0) {
+    throw new Error('Live catalog scanning requires at least one catalog-enabled provider');
   }
-  if (requestedCatalogTargetLimit > ashbyPolicy.maxNormalTargetsPerRun) {
+  const policyCapacity = enabledCatalogProviders.reduce(
+    (total, provider) => total + getProviderPolicy(policy, provider).maxNormalTargetsPerRun,
+    0,
+  );
+  if (requestedCatalogTargetLimit > Math.min(policyCapacity, PHASE3_MAX_NORMAL_TARGETS_PER_RUN)) {
     throw new Error(
-      `Requested ${requestedCatalogTargetLimit} catalog targets exceeds `
-      + `policy maximum ${ashbyPolicy.maxNormalTargetsPerRun}`,
+      `Requested ${requestedCatalogTargetLimit} catalog targets exceeds combined policy capacity `
+      + `${Math.min(policyCapacity, PHASE3_MAX_NORMAL_TARGETS_PER_RUN)}`,
     );
   }
-  const includeCatalog = ashbyPolicy.catalogEnabled
-    && (mode === 'offline' || liveCatalogRequested);
-  const effectiveCatalogTargetLimit = mode === 'offline'
-    ? ashbyPolicy.maxNormalTargetsPerRun
-    : requestedCatalogTargetLimit;
 
-  if (includeCatalog) {
-    if (!ashbyProvider) throw new Error('Ashby catalog scanning requires the ashby provider');
-    if (!ashbyCatalog) {
+  const catalogPlans = {};
+  const catalogMetadataByProvider = Object.fromEntries(
+    CATALOG_PROVIDER_IDS.map((provider) => [provider, null]),
+  );
+  for (const provider of includeCatalogProviders) {
+    const plugin = providers.get(provider);
+    if (!plugin) throw new Error(`${provider} catalog scanning requires the ${provider} provider`);
+    const rawCatalog = catalogValues[provider];
+    if (!rawCatalog) {
       throw new Error(
-        'Ashby catalog is required for catalog-enabled planning. '
-        + 'Run "catalog sync ashby" first.',
+        `${provider} catalog is required for catalog-enabled planning. `
+        + `Run "catalog sync ${provider}" first.`,
       );
     }
-    validateAshbyCatalogEnvelope(ashbyCatalog);
-    catalogMetadata = {
-      source: ashbyCatalog.source,
-      rawSha256: ashbyCatalog.rawSha256,
-      fetchedAtUtc: ashbyCatalog.fetchedAtUtc,
-      acceptedItemCount: ashbyCatalog.acceptedItemCount,
-    };
-
+    const catalog = validateProviderCatalogEnvelope(provider, rawCatalog);
+    const metadata = catalogMetadata(provider, catalog);
+    catalogMetadataByProvider[provider] = metadata;
+    const providerPolicy = getProviderPolicy(policy, provider);
     const buckets = new Map(BUCKET_ORDER.map((bucket) => [bucket, []]));
-    const providerState = stateMaps.providers.get('ashby');
+    const populationByBucket = emptyBucketCounts();
+    const dueByBucket = emptyBucketCounts();
+    const providerState = stateMaps.providers.get(provider);
     const providerBlocked = providerCooldownActive(providerState, now);
 
-    for (const tenant of ashbyCatalog.tenants) {
-      const key = targetKey('ashby', tenant, null);
+    for (const item of catalog.items) {
+      const target = catalogTarget(provider, item, metadata, plugin);
+      const key = targetStateKey(target);
       if (disabledKeys.has(key) || seen.has(key)) {
         if (seen.has(key)) deduplicated += 1;
         continue;
       }
-      eligibleNormalCount += 1;
-      const target = {
-        name: tenant,
-        careers_url: `https://jobs.ashbyhq.com/${tenant}`,
-        enabled: true,
-        provider: 'ashby',
-        tenant,
-        targetClass: 'normal',
-        reason: 'ashby_catalog',
-        healthOnly: false,
-        canary: null,
-        catalog: catalogMetadata,
-        _provider: ashbyProvider,
-      };
-      Object.assign(target, targetHealthIdentity(target));
+      metadata.eligibleItemCount += 1;
       const state = stateMaps.tenants.get(key) ?? null;
       const bucket = scheduleBucket(state);
       populationByBucket[bucket] += 1;
@@ -697,24 +733,64 @@ export function buildTargetPlan({
         continue;
       }
       dueByBucket[bucket] += 1;
+      metadata.dueItemCount += 1;
       buckets.get(bucket).push(targetWithSchedule(
         target,
         state,
-        ashbyPolicy,
+        providerPolicy,
         now,
         bucket,
         true,
       ));
     }
-
+    const queuesByBucket = {};
     for (const bucket of BUCKET_ORDER) {
       buckets.get(bucket).sort(compareScheduledTargets);
-      for (const target of buckets.get(bucket)) {
-        if (selectedNormal.length >= effectiveCatalogTargetLimit) {
-          recordSkipped(target, 'normal_budget', target.state);
-          continue;
-        }
+      queuesByBucket[bucket] = buckets.get(bucket);
+    }
+    catalogPlans[provider] = {
+      provider,
+      policy: providerPolicy,
+      metadata,
+      populationByBucket,
+      dueByBucket,
+      queuesByBucket,
+      budget: providerPolicy.maxNormalTargetsPerRun,
+      selected: [],
+    };
+  }
+
+  const selectedNormal = [];
+  const globalCatalogLimit = mode === 'offline'
+    ? Math.min(
+      PHASE3_MAX_NORMAL_TARGETS_PER_RUN,
+      Object.values(catalogPlans).reduce((total, plan) => total + plan.budget, 0),
+    )
+    : requestedCatalogTargetLimit;
+  const providerOrder = CATALOG_PROVIDER_IDS.filter((provider) => catalogPlans[provider]);
+  // Preserve scheduler priority globally, then round-robin providers within
+  // each bucket so a large catalog cannot starve a smaller provider.
+  for (const bucket of BUCKET_ORDER) {
+    let progress = true;
+    while (selectedNormal.length < globalCatalogLimit && progress) {
+      progress = false;
+      for (const provider of providerOrder) {
+        if (selectedNormal.length >= globalCatalogLimit) break;
+        const plan = catalogPlans[provider];
+        const queue = plan.queuesByBucket[bucket];
+        if (plan.selected.length >= plan.budget || queue.length === 0) continue;
+        const target = queue.shift();
+        plan.selected.push(target);
+        plan.metadata.plannedTargetCount += 1;
         selectedNormal.push(target);
+        progress = true;
+      }
+    }
+  }
+  for (const plan of Object.values(catalogPlans)) {
+    for (const bucket of BUCKET_ORDER) {
+      for (const target of plan.queuesByBucket[bucket]) {
+        recordSkipped(target, 'normal_budget', target.state);
       }
     }
   }
@@ -728,29 +804,46 @@ export function buildTargetPlan({
     if (target.targetClass === 'normal') stats.selectedNormal += 1;
   }
   const healthPartitions = Object.fromEntries(
-    [...partitionStats.entries()]
-      .sort(([left], [right]) => left.localeCompare(right)),
+    [...partitionStats.entries()].sort(([left], [right]) => left.localeCompare(right)),
   );
-  const sweep = catalogSweep({
-    populationByBucket,
-    dueByBucket,
-    maxTargets: includeCatalog ? effectiveCatalogTargetLimit : 0,
-    targetDays: ashbyPolicy.targetFullSweepDays,
+
+  const catalogSweeps = {};
+  for (const [provider, plan] of Object.entries(catalogPlans)) {
+    catalogSweeps[provider] = catalogSweep({
+      populationByBucket: plan.populationByBucket,
+      dueByBucket: plan.dueByBucket,
+      maxTargets: plan.budget,
+      targetDays: plan.policy.targetFullSweepDays,
+    });
+  }
+  const aggregateTargetDays = Object.values(catalogPlans).length === 0
+    ? 3
+    : Math.max(...Object.values(catalogPlans).map((plan) => plan.policy.targetFullSweepDays));
+  const sweep = aggregateCatalogSweeps(catalogSweeps, {
+    globalCatalogLimit,
+    targetDays: aggregateTargetDays,
   });
 
+  const normalTargetsByProvider = Object.fromEntries(
+    CATALOG_PROVIDER_IDS.map((provider) => [provider, catalogPlans[provider]?.selected.length ?? 0]),
+  );
+  const catalogEligible = Object.values(catalogMetadataByProvider)
+    .filter(Boolean)
+    .reduce((total, metadata) => total + metadata.eligibleItemCount, 0);
   const plan = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     generatedAtUtc: now.toISOString(),
     mode,
-    catalogs: { ashby: catalogMetadata },
+    catalogs: catalogMetadataByProvider,
+    catalogSweeps,
     limits: {
-      ashbyNormalTargets: includeCatalog
-        ? effectiveCatalogTargetLimit
-        : 0,
+      normalTargetsByProvider,
       catalogTargetsRequested: requestedCatalogTargetLimit,
       liveCatalogRequested,
       normalTargetsHardMaximum: PHASE3_MAX_NORMAL_TARGETS_PER_RUN,
       phase3HardMaximum: PHASE3_MAX_NORMAL_TARGETS_PER_RUN,
+      // Compatibility field retained for existing dashboards/tests.
+      ashbyNormalTargets: normalTargetsByProvider.ashby,
     },
     sweep,
     healthPartitions,
@@ -765,12 +858,17 @@ export function buildTargetPlan({
       canaryPlanningRejected: tracked.rejections.filter(
         (item) => item.details?.source === 'provider_canaries',
       ).length,
-      catalogEligible: eligibleNormalCount,
+      catalogEligible,
+      catalogEligibleByProvider: Object.fromEntries(
+        CATALOG_PROVIDER_IDS.map((provider) => [
+          provider,
+          catalogMetadataByProvider[provider]?.eligibleItemCount ?? 0,
+        ]),
+      ),
       skippedNotDue: skippedCounts.notDue,
       skippedProviderCooldown: skippedCounts.providerCooldown,
       skippedNormalBudget: skippedCounts.budget,
-      skippedTotal:
-        skippedCounts.notDue + skippedCounts.providerCooldown + skippedCounts.budget,
+      skippedTotal: skippedCounts.notDue + skippedCounts.providerCooldown + skippedCounts.budget,
     },
     skippedSamples,
     targets: runtimeTargets.map(serializableTarget),
@@ -790,7 +888,8 @@ export async function buildTargetPlanFromFiles({
   portalsPath,
   companyOverridesPath,
   discoveryPolicyPath,
-  ashbyCatalogPath,
+  catalogPaths = null,
+  ashbyCatalogPath = null,
   tenantStatePath,
   providers,
   mode,
@@ -803,41 +902,45 @@ export async function buildTargetPlanFromFiles({
     readFile(discoveryPolicyPath, 'utf8'),
     loadTenantState(tenantStatePath, { now: generatedAt }),
   ]);
-
   const portalConfig = parseYaml(portalsText, 'portals config');
   const companyOverrides = parseYaml(overridesText, 'company overrides');
   const rawPolicy = parseYaml(policyText, 'discovery policy');
   const policy = parseDiscoveryPolicy(rawPolicy);
-  const ashbyPolicy = getProviderPolicy(policy, 'ashby');
-
-  let ashbyCatalog = null;
-  const shouldReadCatalog = ashbyPolicy.catalogEnabled
-    && (mode === 'offline' || catalogTargetLimit > 0);
-  if (shouldReadCatalog) {
-    let text;
-    try {
-      text = await readFile(ashbyCatalogPath, 'utf8');
-    } catch (error) {
-      throw new Error(
-        `Ashby catalog is not readable: ${ashbyCatalogPath}. `
-        + 'Run "catalog sync ashby" first.',
-        { cause: error },
-      );
-    }
-    try {
-      ashbyCatalog = JSON.parse(text);
-    } catch (error) {
-      throw new Error(`Ashby catalog is not valid JSON: ${ashbyCatalogPath}`, {
-        cause: error,
-      });
+  const resolvedPaths = {
+    ...(catalogPaths ?? {}),
+    ...(ashbyCatalogPath && !(catalogPaths?.ashby) ? { ashby: ashbyCatalogPath } : {}),
+  };
+  const shouldLoadCatalogs = mode === 'offline' || catalogTargetLimit > 0;
+  const loadedCatalogs = {};
+  if (shouldLoadCatalogs) {
+    for (const provider of CATALOG_PROVIDER_IDS) {
+      if (!getProviderPolicy(policy, provider).catalogEnabled) continue;
+      const catalogPath = resolvedPaths[provider];
+      if (typeof catalogPath !== 'string' || !catalogPath.trim()) {
+        throw new Error(`${provider} catalog path is not configured`);
+      }
+      let text;
+      try {
+        text = await readFile(catalogPath, 'utf8');
+      } catch (error) {
+        throw new Error(
+          `${provider} catalog is not readable: ${catalogPath}. `
+          + `Run "catalog sync ${provider}" first.`,
+          { cause: error },
+        );
+      }
+      try {
+        loadedCatalogs[provider] = JSON.parse(text);
+      } catch (error) {
+        throw new Error(`${provider} catalog is not valid JSON: ${catalogPath}`, { cause: error });
+      }
     }
   }
-
   return buildTargetPlan({
     portalConfig,
     companyOverrides,
     discoveryPolicy: policy,
-    ashbyCatalog,
+    catalogs: loadedCatalogs,
     tenantState,
     providers,
     mode,

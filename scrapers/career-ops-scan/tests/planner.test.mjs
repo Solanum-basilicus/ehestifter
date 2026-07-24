@@ -418,7 +418,7 @@ test('live catalog target request cannot exceed discovery policy maximum', () =>
       catalogTargetLimit: 4,
       discoveryPolicy: rawPolicy({ max: 3 }),
     }),
-    /exceeds policy maximum 3/,
+    /exceeds combined policy capacity 3/,
   );
 });
 

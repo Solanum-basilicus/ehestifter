@@ -227,6 +227,41 @@ export function buildRunSummary({
     plannedHealthPartitions: targetPlan.healthPartitions,
     policy,
   });
+  const catalogProviders = ['ashby', 'greenhouse', 'lever', 'workday'];
+  const catalogMetrics = Object.fromEntries(catalogProviders.map((provider) => {
+    const metadata = targetPlan.catalogs?.[provider] ?? null;
+    const providerEvaluated = catalogEvaluated.filter(
+      (job) => job.sourceProvider === provider,
+    );
+    const providerPreflightOk = count(
+      providerEvaluated,
+      (job) => job.preflight?.status === 'ok',
+    );
+    const providerExisting = count(
+      providerEvaluated,
+      (job) => job.preflight?.status === 'ok' && job.preflight.exists,
+    );
+    return [provider, {
+      itemCount: metadata?.acceptedItemCount ?? null,
+      rawSha256: metadata?.rawSha256 ?? null,
+      eligibleTargets: metadata?.eligibleItemCount ?? 0,
+      dueTargets: metadata?.dueItemCount ?? 0,
+      plannedTargets: metadata?.plannedTargetCount ?? 0,
+      candidates: count(
+        scanResult.candidates,
+        (job) => job.sourceMode === 'catalog' && job.sourceProvider === provider,
+      ),
+      preflightChecked: providerPreflightOk,
+      preflightExisting: providerExisting,
+      preflightMissing: providerPreflightOk - providerExisting,
+      preflightErrors: count(
+        providerEvaluated,
+        (job) => job.preflight?.status === 'error',
+      ),
+      preflightExistingRatio: ratio(providerExisting, providerPreflightOk),
+      sweep: targetPlan.catalogSweeps?.[provider] ?? null,
+    }];
+  }));
 
   return {
     schemaVersion: 3,
@@ -306,6 +341,7 @@ export function buildRunSummary({
       0,
     ),
 
+    catalogs: catalogMetrics,
     catalogAshbyItemCount:
       targetPlan.catalogs.ashby?.acceptedItemCount ?? null,
     catalogAshbySha256:

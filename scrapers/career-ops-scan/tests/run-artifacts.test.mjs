@@ -190,3 +190,57 @@ test('run writer emits provider canary artifact only when canaries were evaluate
     assert.equal(artifact.canaries[0].healthPartition, 'successfactors:csb');
   });
 });
+
+test('Phase 5B summary exposes independent per-catalog metrics', () => {
+  const summary = buildRunSummary({
+    runId: 'run-phase5b',
+    mode: 'preflight',
+    startedAt: new Date('2026-07-24T00:00:00Z'),
+    finishedAt: new Date('2026-07-24T00:00:01Z'),
+    targetPlan: {
+      targets: [],
+      limits: { liveCatalogRequested: true, catalogTargetsRequested: 4 },
+      counts: {
+        priority: 0, canary: 0, normal: 4, disabled: 0, disabledRemoved: 0,
+        planningRejected: 0, canaryPlanningRejected: 0, catalogEligible: 40,
+        skippedNotDue: 0, skippedProviderCooldown: 0, skippedNormalBudget: 36,
+        skippedTotal: 36,
+      },
+      catalogs: {
+        ashby: { acceptedItemCount: 10, rawSha256: 'a'.repeat(64), eligibleItemCount: 10, dueItemCount: 10, plannedTargetCount: 1 },
+        greenhouse: { acceptedItemCount: 20, rawSha256: 'b'.repeat(64), eligibleItemCount: 20, dueItemCount: 20, plannedTargetCount: 1 },
+        lever: { acceptedItemCount: 5, rawSha256: 'c'.repeat(64), eligibleItemCount: 5, dueItemCount: 5, plannedTargetCount: 1 },
+        workday: { acceptedItemCount: 5, rawSha256: 'd'.repeat(64), eligibleItemCount: 5, dueItemCount: 5, plannedTargetCount: 1 },
+      },
+      catalogSweeps: {
+        ashby: { targetFullSweepDays: 3 }, greenhouse: { targetFullSweepDays: 3 },
+        lever: { targetFullSweepDays: 3 }, workday: { targetFullSweepDays: 3 },
+      },
+      healthPartitions: {},
+      sweep: {
+        targetFullSweepDays: 3, estimatedHealthySweepDays: 10,
+        recommendedHealthyTargetsPerRun: 14, recommendedNormalTargetsPerRun: 14,
+        feasibleAtConfiguredBudget: false,
+      },
+    },
+    scanResult: {
+      candidates: [
+        { sourceMode: 'catalog', sourceProvider: 'greenhouse' },
+        { sourceMode: 'catalog', sourceProvider: 'workday' },
+      ],
+      rejected: [], providerIds: ['ashby', 'greenhouse', 'lever', 'workday'],
+      breakerEvents: [], providerResults: [],
+    },
+    evaluated: [
+      { sourceMode: 'catalog', sourceProvider: 'greenhouse', preflight: { status: 'ok', exists: false } },
+      { sourceMode: 'catalog', sourceProvider: 'workday', preflight: { status: 'ok', exists: true } },
+    ],
+  });
+  assert.equal(summary.catalogs.greenhouse.itemCount, 20);
+  assert.equal(summary.catalogs.greenhouse.plannedTargets, 1);
+  assert.equal(summary.catalogs.greenhouse.candidates, 1);
+  assert.equal(summary.catalogs.greenhouse.preflightMissing, 1);
+  assert.equal(summary.catalogs.workday.preflightExisting, 1);
+  assert.equal(summary.catalogs.lever.candidates, 0);
+  assert.equal(summary.catalogAshbyItemCount, 10);
+});

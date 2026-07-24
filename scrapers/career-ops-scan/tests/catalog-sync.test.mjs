@@ -89,7 +89,7 @@ test('successful refresh replaces a previous catalog', async () => {
     });
 
     const persisted = JSON.parse(await readFile(outputPath, 'utf8'));
-    assert.deepEqual(persisted.tenants, ['new-tenant']);
+    assert.deepEqual(persisted.items.map((item) => item.tenant), ['new-tenant']);
     assert.equal(persisted.old, undefined);
   });
 });
@@ -122,7 +122,7 @@ for (const scenario of [
   {
     name: 'all-invalid catalog',
     fetchImpl: async () => responseFor('["bad/name",null]'),
-    pattern: /contains no valid tenants/,
+    pattern: /contains no valid items/,
   },
 ]) {
   test(`${scenario.name} preserves previous catalog bytes exactly`, async () => {

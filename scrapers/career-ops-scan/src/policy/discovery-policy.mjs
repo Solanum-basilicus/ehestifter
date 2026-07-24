@@ -1,4 +1,7 @@
 export const PHASE3_MAX_NORMAL_TARGETS_PER_RUN = 2000;
+export const CATALOG_POLICY_PROVIDERS = Object.freeze([
+  'ashby', 'greenhouse', 'lever', 'workday',
+]);
 
 const DEFAULTS = Object.freeze({
   scheduling: Object.freeze({
@@ -405,23 +408,24 @@ export function parseDiscoveryPolicy(raw) {
       `discovery policy.providers.${providerId}`,
     );
 
-    if (providerId === 'ashby') {
-      const value = optionalObject(rawProvider, 'discovery policy.providers.ashby');
+    if (CATALOG_POLICY_PROVIDERS.includes(providerId)) {
+      const name = `discovery policy.providers.${providerId}`;
+      const value = optionalObject(rawProvider, name);
       merged.catalogEnabled = booleanValue(
         value.catalog_enabled,
-        true,
-        'discovery policy.providers.ashby.catalog_enabled',
+        providerId === 'ashby',
+        `${name}.catalog_enabled`,
       );
       merged.maxNormalTargetsPerRun = integer(
         value.max_normal_targets_per_run,
-        100,
-        'discovery policy.providers.ashby.max_normal_targets_per_run',
+        providerId === 'ashby' ? 100 : 10,
+        `${name}.max_normal_targets_per_run`,
         { min: 1, max: PHASE3_MAX_NORMAL_TARGETS_PER_RUN },
       );
       merged.targetFullSweepDays = integer(
         value.target_full_sweep_days,
         3,
-        'discovery policy.providers.ashby.target_full_sweep_days',
+        `${name}.target_full_sweep_days`,
         { min: 1, max: 30 },
       );
     }

@@ -1,8 +1,20 @@
 schema_version: 1
 
+# Compact catalog identities may be used for Ashby, Greenhouse, and Lever.
+# Workday uses tenant|instance|site so its provider identity stays structured.
 priority:
   ashby: []
+  greenhouse: []
+  lever: []
+  workday: []
+  # Example:
+  # greenhouse:
+  #   - celonis
+  # workday:
+  #   - example|wd3|External
 
 disabled:
   ashby: []
-  
+  greenhouse: []
+  lever: []
+  workday: []

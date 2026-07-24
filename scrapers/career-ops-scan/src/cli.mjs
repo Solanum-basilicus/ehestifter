@@ -3,7 +3,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createRunId, writeRunArtifacts } from './artifacts/run-writer.mjs';
-import { catalogSyncSummary, syncAshbyCatalog } from './catalogs/sync-ashby.mjs';
+import {
+  catalogSyncSummary,
+  syncAllProviderCatalogs,
+  syncProviderCatalog,
+} from './catalogs/sync-provider-catalog.mjs';
 import { parseArgs, usageText } from './cli-args.mjs';
 import {
   loadRuntimeConfig,
@@ -50,13 +54,23 @@ function progressDetail(event) {
     .join(':');
 }
 
-async function runCatalogSync() {
+async function runCatalogSync(provider) {
   const config = await loadRuntimeConfig({ operation: 'catalog-sync' });
-  const catalog = await syncAshbyCatalog({
-    outputPath: config.catalogs.ashbyPath,
+  if (provider === 'all') {
+    const catalogs = await syncAllProviderCatalogs({
+      outputPaths: config.catalogs.paths,
+    });
+    console.log(JSON.stringify({
+      outputPaths: config.catalogs.paths,
+      summaries: catalogs.map(catalogSyncSummary),
+    }, null, 2));
+    return;
+  }
+  const catalog = await syncProviderCatalog(provider, {
+    outputPath: config.catalogs.paths[provider],
   });
   console.log(JSON.stringify({
-    outputPath: config.catalogs.ashbyPath,
+    outputPath: config.catalogs.paths[provider],
     summary: catalogSyncSummary(catalog),
   }, null, 2));
 }
@@ -91,7 +105,7 @@ async function runScan(args) {
       portalsPath: config.paths.portals,
       companyOverridesPath: config.paths.companyOverrides,
       discoveryPolicyPath: config.paths.discoveryPolicy,
-      ashbyCatalogPath: config.catalogs.ashbyPath,
+      catalogPaths: config.catalogs.paths,
       tenantStatePath: config.state.tenantStatePath,
       providers,
       mode: args.mode,
@@ -293,6 +307,15 @@ async function runScan(args) {
         mode: args.mode,
         scannerConfigPath: config.configPath,
         careerOpsUpstreamRef: config.careerOps.upstreamRef,
+        catalogs: Object.fromEntries(
+          Object.entries(planning.plan.catalogs)
+            .filter(([, value]) => value != null)
+            .map(([provider, value]) => [provider, {
+              rawSha256: value.rawSha256,
+              acceptedItemCount: value.acceptedItemCount,
+            }]),
+        ),
+        // Compatibility breadcrumb retained while Phase 5B rolls out.
         catalogAshbySha256: planning.plan.catalogs.ashby?.rawSha256 ?? null,
         catalogTargetsRequested: requestedCatalogTargets,
         maxCreatesRequested: args.maxCreate,
@@ -356,7 +379,7 @@ async function main() {
     return;
   }
   if (args.command === 'catalog-sync') {
-    await runCatalogSync();
+    await runCatalogSync(args.provider);
     return;
   }
   await runScan(args);

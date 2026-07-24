@@ -53,7 +53,7 @@ test('catalog envelope validates, rejects, deduplicates case-insensitively, and 
     fetchedAt: new Date('2026-07-20T10:00:00.000Z'),
   });
 
-  assert.equal(catalog.schemaVersion, 1);
+  assert.equal(catalog.schemaVersion, 2);
   assert.equal(catalog.provider, 'ashby');
   assert.equal(catalog.fetchedAtUtc, '2026-07-20T10:00:00.000Z');
   assert.deepEqual(catalog.source, ASHBY_CATALOG_SOURCE);
@@ -70,7 +70,7 @@ test('catalog envelope validates, rejects, deduplicates case-insensitively, and 
     catalog.rejections.map(({ index, reason }) => ({ index, reason })),
     [
       { index: 3, reason: 'url_delimiter' },
-      { index: 4, reason: 'not_string' },
+      { index: 4, reason: 'not_string_or_object' },
     ],
   );
 });
@@ -102,7 +102,7 @@ test('catalog parser rejects invalid JSON, non-array roots, and all-invalid cata
   );
   assert.throws(
     () => buildAshbyCatalogEnvelope(Buffer.from('["bad/name", null]')),
-    /contains no valid tenants/,
+    /contains no valid items/,
   );
 });
 
@@ -117,7 +117,7 @@ test('catalog parser rejects an invalid fetchedAt clock', () => {
 
 test('persisted catalog envelope validation accepts a generated envelope', () => {
   const catalog = buildAshbyCatalogEnvelope(Buffer.from('["n8n","acme"]'));
-  assert.equal(validateAshbyCatalogEnvelope(catalog), catalog);
+  assert.deepEqual(validateAshbyCatalogEnvelope(catalog), catalog);
 });
 
 test('persisted catalog envelope validation rejects tampering and truncation', () => {
@@ -125,7 +125,7 @@ test('persisted catalog envelope validation rejects tampering and truncation', (
 
   assert.throws(
     () => validateAshbyCatalogEnvelope({ ...catalog, provider: 'lever' }),
-    /provider must be "ashby"/,
+    /provider is invalid/,
   );
   assert.throws(
     () => validateAshbyCatalogEnvelope({ ...catalog, rawSha256: 'bad' }),
@@ -134,6 +134,7 @@ test('persisted catalog envelope validation rejects tampering and truncation', (
   assert.throws(
     () => validateAshbyCatalogEnvelope({
       ...catalog,
+      items: catalog.items.slice(0, 1),
       tenants: ['n8n'],
     }),
     /acceptedItemCount/,
@@ -142,9 +143,10 @@ test('persisted catalog envelope validation rejects tampering and truncation', (
     () => validateAshbyCatalogEnvelope({
       ...catalog,
       acceptedItemCount: 2,
+      items: [catalog.items[0], { ...catalog.items[0] }],
       tenants: ['n8n', 'N8N'],
     }),
-    /duplicate tenants/,
+    /duplicate items/,
   );
   assert.throws(
     () => validateAshbyCatalogEnvelope({

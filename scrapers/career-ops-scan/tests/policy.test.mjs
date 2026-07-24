@@ -187,3 +187,34 @@ test('provider monitoring overrides are validated and preserve default siblings'
     /recent_successful_count_window/,
   );
 });
+
+test('Phase 5B catalog policy is available independently for accepted catalog providers', () => {
+  const policy = parseDiscoveryPolicy({
+    schema_version: 1,
+    providers: {
+      ashby: { catalog_enabled: true, max_normal_targets_per_run: 1 },
+      greenhouse: { catalog_enabled: true, max_normal_targets_per_run: 10 },
+      lever: { catalog_enabled: true, max_normal_targets_per_run: 11 },
+      workday: { catalog_enabled: true, max_normal_targets_per_run: 2 },
+    },
+  });
+  assert.equal(getProviderPolicy(policy, 'greenhouse').catalogEnabled, true);
+  assert.equal(getProviderPolicy(policy, 'lever').maxNormalTargetsPerRun, 11);
+  assert.equal(getProviderPolicy(policy, 'workday').maxNormalTargetsPerRun, 2);
+});
+
+test('new catalog providers default disabled unless operator enables them', () => {
+  const policy = parseDiscoveryPolicy({
+    schema_version: 1,
+    providers: {
+      ashby: {},
+      greenhouse: {},
+      lever: {},
+      workday: {},
+    },
+  });
+  assert.equal(getProviderPolicy(policy, 'ashby').catalogEnabled, true);
+  assert.equal(getProviderPolicy(policy, 'greenhouse').catalogEnabled, false);
+  assert.equal(getProviderPolicy(policy, 'lever').catalogEnabled, false);
+  assert.equal(getProviderPolicy(policy, 'workday').catalogEnabled, false);
+});

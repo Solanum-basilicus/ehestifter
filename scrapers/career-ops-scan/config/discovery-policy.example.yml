@@ -50,15 +50,41 @@ defaults:
 providers:
   ashby:
     catalog_enabled: true
-    # Phase 4 live preflight starts at 10/25/100. Raise toward 1000 only
-    # after offline and live rate evidence, with lower concurrency and more pacing.
-    max_normal_targets_per_run: 100
+    # Keep the current production-safe value if it is lower. Phase 5B does
+    # not overwrite the operator-owned discovery-policy.yml.
+    max_normal_targets_per_run: 1
     target_full_sweep_days: 3
     execution:
       concurrency: 3
       min_request_interval_ms: 150
 
-  # Phase 5 tracked providers. These have no broad tenant catalogs yet;
+  greenhouse:
+    catalog_enabled: true
+    # Initial Phase 5B offline rollout. Raise only after inspecting provider
+    # errors, healthy-empty ratios, latency, candidate yield, and sweep time.
+    max_normal_targets_per_run: 10
+    target_full_sweep_days: 3
+    execution:
+      concurrency: 3
+      min_request_interval_ms: 150
+
+  lever:
+    catalog_enabled: true
+    max_normal_targets_per_run: 10
+    target_full_sweep_days: 3
+    execution:
+      concurrency: 3
+      min_request_interval_ms: 150
+
+  workday:
+    catalog_enabled: true
+    max_normal_targets_per_run: 2
+    target_full_sweep_days: 3
+    execution:
+      concurrency: 1
+      min_request_interval_ms: 750
+
+  # Phase 5 tracked providers without catalogs in this milestone.
   # the limits below control priority/canary targets only.
   personio:
     execution:

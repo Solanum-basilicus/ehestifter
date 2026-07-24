@@ -10,18 +10,19 @@ test('parses catalog sync ashby independently from scan commands', () => {
   });
 });
 
-test('rejects unsupported catalog commands and providers', () => {
-  assert.throws(
-    () => parseArgs(['catalog', 'sync', 'greenhouse']),
-    /Only "catalog sync ashby"/,
-  );
+test('parses all supported catalog providers and rejects unsupported commands', () => {
+  for (const provider of ['greenhouse', 'lever', 'workday', 'all']) {
+    assert.deepEqual(parseArgs(['catalog', 'sync', provider]), {
+      command: 'catalog-sync', provider,
+    });
+  }
   assert.throws(
     () => parseArgs(['catalog', 'refresh', 'ashby']),
-    /Only "catalog sync ashby"/,
+    /Expected "catalog sync ashby\|greenhouse\|lever\|workday\|all"/g,
   );
   assert.throws(
     () => parseArgs(['catalog', 'sync', 'ashby', '--offline']),
-    /Only "catalog sync ashby"/,
+    /Expected "catalog sync ashby\|greenhouse\|lever\|workday\|all"/g,
   );
 });
 
@@ -99,7 +100,7 @@ test('help is recognized without entering scan or sync orchestration', () => {
 test('unknown top-level command fails clearly', () => {
   assert.throws(
     () => parseArgs(['discover', 'ashby']),
-    /Expected "scan tracked" or "catalog sync ashby"/,
+    /Expected "scan tracked" or "catalog sync <provider\|all>"/,
   );
 });
 
