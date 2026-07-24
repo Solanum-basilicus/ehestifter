@@ -90,22 +90,27 @@ export function buildRateObservations({
   if (!Array.isArray(providerResults)) throw new Error('providerResults must be an array');
 
   const breakerByProvider = new Map(
-    breakerEvents.map((event) => [event.provider, event]),
+    breakerEvents.map((event) => [event.healthPartition ?? event.provider, event]),
   );
   const groups = new Map();
   for (const result of providerResults) {
-    if (!groups.has(result.provider)) groups.set(result.provider, []);
-    groups.get(result.provider).push(result);
+    const key = result.healthPartition ?? result.provider;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(result);
   }
 
   const providers = [...groups.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([provider, results]) => {
+    .map(([healthPartition, results]) => {
+      const provider = results[0]?.provider ?? healthPartition.split(':')[0];
+      const providerVariant = results[0]?.providerVariant ?? null;
       const attemptedResults = results.filter((item) => item.status !== 'skipped');
       const durations = attemptedResults.map((item) => item.durationMs);
       const totalDuration = durations.reduce((sum, value) => sum + value, 0);
       const observation = {
         provider,
+        providerVariant,
+        healthPartition,
         targetsPlanned: results.length,
         requestsAttempted: attemptedResults.length,
         skippedByCircuit: results.filter(
@@ -131,8 +136,8 @@ export function buildRateObservations({
           (sum, item) => sum + (item.candidatesDroppedByCap ?? 0),
           0,
         ),
-        breakerActivated: breakerByProvider.has(provider),
-        breakerReason: breakerByProvider.get(provider)?.reason ?? null,
+        breakerActivated: breakerByProvider.has(healthPartition),
+        breakerReason: breakerByProvider.get(healthPartition)?.reason ?? null,
         latencyMs: {
           min: durations.length === 0 ? null : Math.min(...durations),
           average: durations.length === 0 ? null : rounded(totalDuration / durations.length),

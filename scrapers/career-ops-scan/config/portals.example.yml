@@ -62,3 +62,22 @@ tracked_companies:
   - name: n8n
     careers_url: https://jobs.ashbyhq.com/n8n
     enabled: true
+
+# Health-only provider canaries bypass title/location/age filters, never call
+# Jobs, and never enter the import candidate list. In offline mode they use
+# normal tenant state for cadence; interval_hours defaults to 24.
+provider_canaries:
+  - name: W. L. Gore CSB protocol canary
+    careers_url: https://wlgore.jobs.hr.cloud.sap/
+    provider: successfactors
+    sf_variant: csb
+    sf_listing_url: https://wlgore.jobs.hr.cloud.sap/go/All-Jobs/9813400/
+    sf_locales:
+      - de_DE
+      - en_US
+    max_pages: 1
+    minimum_jobs: 1
+    detail_sample_size: 5
+    minimum_detail_successes: 1
+    interval_hours: 24
+    enabled: false

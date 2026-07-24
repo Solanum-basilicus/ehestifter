@@ -29,6 +29,7 @@ export async function writeRunArtifacts({
   providerResults,
   tenantStateChanges,
   rateObservations,
+  canaryResults,
   candidates,
   rejected,
   preflightResults,
@@ -65,6 +66,12 @@ export async function writeRunArtifacts({
       await writeJsonAtomic(
         path.join(stagingPath, 'rate-observations.json'),
         { ...rateObservations, runId },
+      );
+    }
+    if (canaryResults) {
+      await writeJsonAtomic(
+        path.join(stagingPath, 'provider-canary-results.json'),
+        { ...canaryResults, runId },
       );
     }
     await writeJsonAtomic(path.join(stagingPath, 'candidates.json'), {

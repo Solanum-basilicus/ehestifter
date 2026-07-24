@@ -187,6 +187,10 @@ test('cheap filters remain active for planned targets', async () => {
   ] })]);
   assert.equal(result.candidates.length, 1);
   assert.deepEqual(result.rejected.map((item) => item.reason), ['title_filter', 'location_filter']);
+  assert.deepEqual(result.rejected[0].details, {
+    positiveMatches: ['product manager'],
+    negativeMatches: ['junior'],
+  });
 });
 
 test('candidate cap remains global across targets', async () => {

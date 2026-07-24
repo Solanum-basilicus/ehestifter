@@ -34,14 +34,59 @@ defaults:
     high_transient_error_ratio: 0.2
     fast_p95_ms: 5000
     maximum_suggested_concurrency: 8
+  monitoring:
+    # A historically active tenant returning an explicit zero is re-probed
+    # before it is accepted as genuinely empty.
+    suspicious_empty_baseline_minimum_jobs: 10
+    suspicious_empty_reprobe_minutes: 60
+    # A nonzero result that falls by at least this ratio from the rolling
+    # median is also re-probed once before accepting the new volume.
+    suspicious_volume_drop_ratio: 0.9
+    recent_successful_count_window: 8
+    # Variant summaries become degraded only after a meaningful sample.
+    degraded_minimum_attempts: 2
+    degraded_error_ratio: 0.5
 
 providers:
   ashby:
     catalog_enabled: true
-    # Keep 100 for the first stateful canary. Phase 3 validation should raise
-    # this gradually toward the recommendation emitted in target-plan.json.
+    # Phase 4 live preflight starts at 10/25/100. Raise toward 1000 only
+    # after offline and live rate evidence, with lower concurrency and more pacing.
     max_normal_targets_per_run: 100
     target_full_sweep_days: 3
     execution:
       concurrency: 3
       min_request_interval_ms: 150
+
+  # Phase 5 tracked providers. These have no broad tenant catalogs yet;
+  # the limits below control priority/canary targets only.
+  personio:
+    execution:
+      concurrency: 2
+      min_request_interval_ms: 500
+
+  smartrecruiters:
+    execution:
+      concurrency: 2
+      min_request_interval_ms: 500
+
+  softgarden:
+    execution:
+      concurrency: 2
+      min_request_interval_ms: 750
+
+  successfactors:
+    lookback:
+      initial_hours: 168
+      overlap_hours: 24
+      max_hours: 336
+      dead_reprobe_unbounded: true
+    execution:
+      concurrency: 1
+      min_request_interval_ms: 1000
+      breaker:
+        rate_limit_threshold: 2
+        transient_error_threshold: 5
+        transient_error_ratio_threshold: 0.4
+        minimum_requests_for_ratio: 5
+        cooldown_minutes: 1440

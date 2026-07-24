@@ -15,6 +15,7 @@ import { createJobsClient, preflightCandidates } from './ehestifter/jobs-client.
 import { normalizeCandidateLocations } from './locations/normalizer.mjs';
 import { loadProviders } from './providers/_registry.mjs';
 import { buildRunSummary } from './run-summary.mjs';
+import { buildProviderCanaryResults } from './scan/provider-canaries.mjs';
 import { buildRateObservations } from './scan/rate-observations.mjs';
 import { runTrackedScan } from './scan/tracked-source.mjs';
 import {
@@ -121,6 +122,39 @@ async function runScan(args) {
         detail: progressDetail(event),
       }),
     });
+
+    let canaryDetailResults = null;
+    if (scanResult.canaryCandidates.length > 0) {
+      progress.update({
+        stage: 'details',
+        current: 0,
+        total: scanResult.canaryCandidates.length,
+        detail: 'provider canaries',
+      });
+      canaryDetailResults = await enrichCandidateDetails(
+        scanResult.canaryCandidates,
+        {
+          concurrency: config.scan.description.concurrency,
+          maxFetches: scanResult.canaryCandidates.length,
+          timeoutMs: config.scan.description.timeoutMs,
+          onProgress: (event) => progress.update({
+            ...event,
+            detail: 'provider canaries',
+          }),
+        },
+      );
+    }
+    const hasCanaryTargets = planning.runtimeTargets.some(
+      (target) => target.canary != null,
+    );
+    const canaryResults = hasCanaryTargets
+      ? buildProviderCanaryResults({
+        targets: planning.runtimeTargets,
+        providerResults: scanResult.providerResults,
+        detailResults: canaryDetailResults ?? [],
+        generatedAt: new Date(),
+      })
+      : null;
 
     let client = null;
     let preflightResults = null;
@@ -242,6 +276,8 @@ async function runScan(args) {
       tenantStateChanges,
       rateObservations,
       requestedMaxCreates: args.maxCreate,
+      canaryResults,
+      policy: planning.policy,
     });
 
     const rejected = [
@@ -270,6 +306,7 @@ async function runScan(args) {
       providerResults: scanResult.providerResults,
       tenantStateChanges,
       rateObservations,
+      canaryResults,
       candidates: scanResult.candidates,
       rejected,
       preflightResults,
@@ -298,7 +335,13 @@ async function runScan(args) {
       tenantStatePath: nextTenantState ? config.state.tenantStatePath : null,
       summary,
     }, null, 2));
-    if (summary.preflightErrors > 0 || summary.importErrors > 0) {
+    if (
+      summary.preflightErrors > 0
+      || summary.importErrors > 0
+      || summary.canaryPlanningRejected > 0
+      || summary.providerCanariesDegraded > 0
+      || summary.providerHealthWarnings.length > 0
+    ) {
       process.exitCode = 2;
     }
   } finally {

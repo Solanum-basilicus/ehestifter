@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 
 import { writeJsonAtomic } from '../io/atomic-json.mjs';
 import { getProviderPolicy } from '../policy/discovery-policy.mjs';
+import { providerHealthPartition } from '../providers/_variant.mjs';
 
 export const TENANT_HEALTH = Object.freeze([
   'healthy',
@@ -62,8 +63,8 @@ function addMinutes(date, minutes) {
   return addMilliseconds(date, minutes * 60_000);
 }
 
-export function tenantStateKey(provider, tenant) {
-  return `${String(provider).toLowerCase()}::${String(tenant).toLowerCase()}`;
+export function tenantStateKey(provider, tenant, providerVariant = null) {
+  return `${providerHealthPartition(provider, providerVariant)}::${String(tenant).toLowerCase()}`;
 }
 
 export function createEmptyTenantState(now = new Date()) {
@@ -85,8 +86,31 @@ function validateProviderState(item, index) {
   if (!['healthy', 'cooldown'].includes(health)) {
     throw new Error(`tenant state.providers[${index}].health is invalid`);
   }
+  const provider = requireString(
+    item.provider,
+    `tenant state.providers[${index}].provider`,
+  ).toLowerCase();
+  const providerVariant = item.providerVariant == null
+    ? null
+    : requireString(
+      item.providerVariant,
+      `tenant state.providers[${index}].providerVariant`,
+    ).toLowerCase();
+  const healthPartition = item.healthPartition == null
+    ? providerHealthPartition(provider, providerVariant)
+    : requireString(
+      item.healthPartition,
+      `tenant state.providers[${index}].healthPartition`,
+    ).toLowerCase();
+  if (healthPartition !== providerHealthPartition(provider, providerVariant)) {
+    throw new Error(
+      `tenant state.providers[${index}].healthPartition does not match provider identity`,
+    );
+  }
   return {
-    provider: requireString(item.provider, `tenant state.providers[${index}].provider`),
+    provider,
+    providerVariant,
+    healthPartition,
     health,
     cooldownUntilUtc: validDateString(
       item.cooldownUntilUtc,
@@ -129,7 +153,24 @@ function validateTenantEntry(item, index) {
   const provider = requireString(
     item.provider,
     `tenant state.tenants[${index}].provider`,
-  );
+  ).toLowerCase();
+  const providerVariant = item.providerVariant == null
+    ? null
+    : requireString(
+      item.providerVariant,
+      `tenant state.tenants[${index}].providerVariant`,
+    ).toLowerCase();
+  const healthPartition = item.healthPartition == null
+    ? providerHealthPartition(provider, providerVariant)
+    : requireString(
+      item.healthPartition,
+      `tenant state.tenants[${index}].healthPartition`,
+    ).toLowerCase();
+  if (healthPartition !== providerHealthPartition(provider, providerVariant)) {
+    throw new Error(
+      `tenant state.tenants[${index}].healthPartition does not match provider identity`,
+    );
+  }
   const tenant = requireString(
     item.tenant,
     `tenant state.tenants[${index}].tenant`,
@@ -137,6 +178,8 @@ function validateTenantEntry(item, index) {
 
   return {
     provider,
+    providerVariant,
+    healthPartition,
     tenant,
     firstSeenAtUtc: validDateString(
       item.firstSeenAtUtc,
@@ -187,6 +230,36 @@ function validateTenantEntry(item, index) {
       item.consecutiveEmptySuccesses ?? 0,
       `tenant state.tenants[${index}].consecutiveEmptySuccesses`,
     ),
+    consecutiveSuspiciousEmptyResults: nonNegativeInteger(
+      item.consecutiveSuspiciousEmptyResults ?? 0,
+      `tenant state.tenants[${index}].consecutiveSuspiciousEmptyResults`,
+    ),
+    lastNonEmptyAtUtc: validDateString(
+      item.lastNonEmptyAtUtc,
+      `tenant state.tenants[${index}].lastNonEmptyAtUtc`,
+    ),
+    lastNonEmptyCount: nullableNonNegativeInteger(
+      item.lastNonEmptyCount,
+      `tenant state.tenants[${index}].lastNonEmptyCount`,
+    ),
+    recentSuccessfulCounts: (() => {
+      const values = item.recentSuccessfulCounts ?? [];
+      if (!Array.isArray(values) || values.length > 32) {
+        throw new Error(
+          `tenant state.tenants[${index}].recentSuccessfulCounts must be an array of at most 32 integers`,
+        );
+      }
+      return values.map((value, valueIndex) => nonNegativeInteger(
+        value,
+        `tenant state.tenants[${index}].recentSuccessfulCounts[${valueIndex}]`,
+      ));
+    })(),
+    lastListingOutcome: item.lastListingOutcome == null
+      ? null
+      : requireString(
+        item.lastListingOutcome,
+        `tenant state.tenants[${index}].lastListingOutcome`,
+      ),
     health,
     cooldownUntilUtc: validDateString(
       item.cooldownUntilUtc,
@@ -232,21 +305,21 @@ export function validateTenantStateEnvelope(value) {
   const tenants = value.tenants.map(validateTenantEntry);
   const providerKeys = new Set();
   for (const provider of providers) {
-    const key = provider.provider.toLowerCase();
-    if (providerKeys.has(key)) throw new Error(`Duplicate provider state: ${provider.provider}`);
+    const key = provider.healthPartition;
+    if (providerKeys.has(key)) throw new Error(`Duplicate provider state: ${key}`);
     providerKeys.add(key);
   }
   const tenantKeys = new Set();
   for (const tenant of tenants) {
-    const key = tenantStateKey(tenant.provider, tenant.tenant);
+    const key = tenantStateKey(tenant.provider, tenant.tenant, tenant.providerVariant);
     if (tenantKeys.has(key)) throw new Error(`Duplicate tenant state: ${key}`);
     tenantKeys.add(key);
   }
 
-  providers.sort((left, right) => left.provider.localeCompare(right.provider));
+  providers.sort((left, right) => left.healthPartition.localeCompare(right.healthPartition));
   tenants.sort((left, right) => {
-    const provider = left.provider.localeCompare(right.provider);
-    return provider !== 0 ? provider : left.tenant.localeCompare(right.tenant);
+    const partition = left.healthPartition.localeCompare(right.healthPartition);
+    return partition !== 0 ? partition : left.tenant.localeCompare(right.tenant);
   });
 
   return {
@@ -285,10 +358,13 @@ export function tenantStateMaps(state) {
   const validated = validateTenantStateEnvelope(state);
   return {
     providers: new Map(
-      validated.providers.map((item) => [item.provider.toLowerCase(), item]),
+      validated.providers.map((item) => [item.healthPartition, item]),
     ),
     tenants: new Map(
-      validated.tenants.map((item) => [tenantStateKey(item.provider, item.tenant), item]),
+      validated.tenants.map((item) => [
+        tenantStateKey(item.provider, item.tenant, item.providerVariant),
+        item,
+      ]),
     ),
   };
 }
@@ -303,9 +379,23 @@ function isRecent(dateString, now, windowHours) {
   return Date.parse(dateString) >= now.getTime() - windowHours * 3_600_000;
 }
 
+function median(values) {
+  if (!Array.isArray(values) || values.length === 0) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[middle - 1] + sorted[middle]) / 2
+    : sorted[middle];
+}
+
 function transitionTenant(previous, target, result, providerPolicy, finishedAt) {
   const base = previous ?? {
     provider: target.provider,
+    providerVariant: target.providerVariant ?? null,
+    healthPartition: target.healthPartition ?? providerHealthPartition(
+      target.provider,
+      target.providerVariant,
+    ),
     tenant: target.tenant,
     firstSeenAtUtc: finishedAt.toISOString(),
     lastAttemptAtUtc: null,
@@ -319,6 +409,11 @@ function transitionTenant(previous, target, result, providerPolicy, finishedAt) 
     consecutiveDurableFailures: 0,
     consecutiveTransientFailures: 0,
     consecutiveEmptySuccesses: 0,
+    consecutiveSuspiciousEmptyResults: 0,
+    lastNonEmptyAtUtc: null,
+    lastNonEmptyCount: null,
+    recentSuccessfulCounts: [],
+    lastListingOutcome: null,
     health: 'healthy',
     cooldownUntilUtc: null,
     nextEligibleScanAtUtc: null,
@@ -331,6 +426,13 @@ function transitionTenant(previous, target, result, providerPolicy, finishedAt) 
   const scheduling = providerPolicy.scheduling;
   const next = {
     ...base,
+    provider: String(target.provider).toLowerCase(),
+    providerVariant: target.providerVariant ?? null,
+    healthPartition: target.healthPartition ?? providerHealthPartition(
+      target.provider,
+      target.providerVariant,
+    ),
+    tenant: target.tenant,
     lastAttemptAtUtc: finishedAt.toISOString(),
     lastDurationMs: result.durationMs,
     lastJobsReturned: result.jobsReturned,
@@ -338,13 +440,43 @@ function transitionTenant(previous, target, result, providerPolicy, finishedAt) 
     lastCandidatesRetained: result.candidatesRetained,
     lastErrorClass: result.errorClass,
     lastHttpStatus: result.httpStatus,
+    lastListingOutcome: result.listingOutcome ?? null,
   };
 
   if (result.status === 'ok') {
+    const monitoring = providerPolicy.monitoring;
+    const baseline = median(base.recentSuccessfulCounts);
+    const baselineEstablished =
+      baseline >= monitoring.suspiciousEmptyBaselineMinimumJobs;
+    const zeroListing = result.jobsReturned === 0;
+    const volumeDrop = result.jobsReturned > 0
+      && baselineEstablished
+      && result.jobsReturned <= baseline * (1 - monitoring.suspiciousVolumeDropRatio);
+    const suspiciousListingOutcome = baselineEstablished
+      ? zeroListing
+        ? 'listing_empty_anomaly'
+        : volumeDrop
+          ? 'listing_volume_anomaly'
+          : null
+      : null;
+    const confirmedListingDrop = suspiciousListingOutcome != null
+      && base.consecutiveSuspiciousEmptyResults >= 1;
+    if (suspiciousListingOutcome && !confirmedListingDrop) {
+      next.health = 'temporarily_failed';
+      next.consecutiveSuspiciousEmptyResults = 1;
+      next.lastListingOutcome = suspiciousListingOutcome;
+      next.nextEligibleScanAtUtc = addMinutes(
+        finishedAt,
+        monitoring.suspiciousEmptyReprobeMinutes,
+      );
+      return next;
+    }
+
     next.lastSuccessfulAtUtc = finishedAt.toISOString();
     next.consecutiveFailures = 0;
     next.consecutiveDurableFailures = 0;
     next.consecutiveTransientFailures = 0;
+    next.consecutiveSuspiciousEmptyResults = 0;
     next.cooldownUntilUtc = null;
     next.lastErrorClass = null;
     next.lastHttpStatus = null;
@@ -355,8 +487,17 @@ function transitionTenant(previous, target, result, providerPolicy, finishedAt) 
 
     if (result.jobsReturned === 0) {
       next.consecutiveEmptySuccesses = base.consecutiveEmptySuccesses + 1;
+      if (confirmedListingDrop) next.recentSuccessfulCounts = [0];
     } else {
       next.consecutiveEmptySuccesses = 0;
+      next.lastNonEmptyAtUtc = finishedAt.toISOString();
+      next.lastNonEmptyCount = result.jobsReturned;
+      next.recentSuccessfulCounts = confirmedListingDrop
+        ? [result.jobsReturned]
+        : [
+          ...base.recentSuccessfulCounts,
+          result.jobsReturned,
+        ].slice(-providerPolicy.monitoring.recentSuccessfulCountWindow);
     }
 
     const recent = isRecent(
@@ -366,9 +507,14 @@ function transitionTenant(previous, target, result, providerPolicy, finishedAt) 
     );
 
     let intervalHours;
-    if (target.targetClass === 'priority') {
+    if (target.healthOnly && target.canary?.intervalHours) {
+      next.health = 'healthy';
+      intervalHours = target.canary.intervalHours;
+    } else if (target.targetClass === 'priority') {
       next.health = recent ? 'active' : 'healthy';
-      intervalHours = scheduling.priorityIntervalHours;
+      intervalHours = target.canary?.intervalHours
+        ? Math.min(scheduling.priorityIntervalHours, target.canary.intervalHours)
+        : scheduling.priorityIntervalHours;
     } else if (
       next.consecutiveEmptySuccesses >= scheduling.longEmptyAfterEmptyScans
     ) {
@@ -389,9 +535,27 @@ function transitionTenant(previous, target, result, providerPolicy, finishedAt) 
   next.consecutiveFailures = base.consecutiveFailures + 1;
   next.consecutiveEmptySuccesses = base.consecutiveEmptySuccesses;
 
+  if (
+    result.errorClass === 'provider_anomaly'
+    && ['listing_empty_anomaly', 'listing_volume_anomaly'].includes(
+      result.listingOutcome,
+    )
+  ) {
+    next.health = 'temporarily_failed';
+    next.consecutiveSuspiciousEmptyResults =
+      base.consecutiveSuspiciousEmptyResults + 1;
+    next.cooldownUntilUtc = null;
+    next.nextEligibleScanAtUtc = addMinutes(
+      finishedAt,
+      providerPolicy.monitoring.suspiciousEmptyReprobeMinutes,
+    );
+    return next;
+  }
+
   if (isDurableTenantFailure(result)) {
     next.consecutiveDurableFailures = base.consecutiveDurableFailures + 1;
     next.consecutiveTransientFailures = 0;
+    next.consecutiveSuspiciousEmptyResults = 0;
     next.cooldownUntilUtc = null;
 
     if (
@@ -433,9 +597,20 @@ function transitionTenant(previous, target, result, providerPolicy, finishedAt) 
   return next;
 }
 
-function providerTransition(previous, providerId, observation, breakerEvent, policy, finishedAt) {
+function providerTransition(previous, observation, breakerEvent, policy, finishedAt) {
+  const provider = observation?.provider ?? breakerEvent?.provider ?? previous?.provider;
+  const providerVariant = observation?.providerVariant
+    ?? breakerEvent?.providerVariant
+    ?? previous?.providerVariant
+    ?? null;
+  const healthPartition = observation?.healthPartition
+    ?? breakerEvent?.healthPartition
+    ?? previous?.healthPartition
+    ?? providerHealthPartition(provider, providerVariant);
   const base = previous ?? {
-    provider: providerId,
+    provider,
+    providerVariant,
+    healthPartition,
     health: 'healthy',
     cooldownUntilUtc: null,
     lastBreakerAtUtc: null,
@@ -446,7 +621,9 @@ function providerTransition(previous, providerId, observation, breakerEvent, pol
   };
   const next = {
     ...base,
-    provider: providerId,
+    provider,
+    providerVariant,
+    healthPartition,
   };
   if (observation) {
     next.lastRunAtUtc = finishedAt.toISOString();
@@ -475,6 +652,8 @@ function providerTransition(previous, providerId, observation, breakerEvent, pol
 function compactChange(previous, next) {
   return {
     provider: next.provider,
+    providerVariant: next.providerVariant ?? null,
+    healthPartition: next.healthPartition,
     tenant: next.tenant,
     previousHealth: previous?.health ?? null,
     health: next.health,
@@ -484,6 +663,9 @@ function compactChange(previous, next) {
     consecutiveDurableFailures: next.consecutiveDurableFailures,
     consecutiveTransientFailures: next.consecutiveTransientFailures,
     consecutiveEmptySuccesses: next.consecutiveEmptySuccesses,
+    consecutiveSuspiciousEmptyResults: next.consecutiveSuspiciousEmptyResults,
+    listingOutcome: next.lastListingOutcome,
+    lastNonEmptyCount: next.lastNonEmptyCount,
     lastErrorClass: next.lastErrorClass,
     lastHttpStatus: next.lastHttpStatus,
   };
@@ -513,8 +695,18 @@ export function buildNextTenantState({
     if (result.status === 'skipped') continue;
     const target = targetBySequence.get(result.sequence);
     if (!target) throw new Error(`Provider result has no target: sequence ${result.sequence}`);
-    const key = tenantStateKey(target.provider, target.tenant);
-    const before = previous.tenants.get(key) ?? null;
+    const key = tenantStateKey(
+      target.provider,
+      target.tenant,
+      target.providerVariant,
+    );
+    const legacyKey = target.providerVariant == null
+      ? null
+      : tenantStateKey(target.provider, target.tenant, null);
+    const before = previous.tenants.get(key)
+      ?? (legacyKey == null ? null : previous.tenants.get(legacyKey))
+      ?? null;
+    if (legacyKey != null && legacyKey !== key) nextTenants.delete(legacyKey);
     const after = transitionTenant(
       before,
       target,
@@ -527,25 +719,43 @@ export function buildNextTenantState({
   }
 
   const observationByProvider = new Map(
-    (rateObservations?.providers ?? []).map((item) => [item.provider, item]),
+    (rateObservations?.providers ?? []).map((item) => [
+      item.healthPartition ?? providerHealthPartition(item.provider, item.providerVariant),
+      item,
+    ]),
   );
   const breakerByProvider = new Map(
-    breakerEvents.map((item) => [item.provider, item]),
+    breakerEvents.map((item) => [
+      item.healthPartition ?? providerHealthPartition(item.provider, item.providerVariant),
+      item,
+    ]),
   );
+  const variantFamiliesObserved = new Set([
+    ...(rateObservations?.providers ?? []),
+    ...breakerEvents,
+  ].filter((item) => item.providerVariant != null).map((item) => item.provider));
+  const retainedPreviousProviderKeys = [...previous.providers.entries()]
+    .filter(([, item]) => (
+      item.providerVariant != null
+      || !variantFamiliesObserved.has(item.provider)
+    ))
+    .map(([key]) => key);
   const providerIds = new Set([
-    ...previous.providers.keys(),
+    ...retainedPreviousProviderKeys,
     ...observationByProvider.keys(),
     ...breakerByProvider.keys(),
   ]);
   const nextProviders = [];
   const providerChanges = [];
-  for (const providerId of [...providerIds].sort()) {
-    const before = previous.providers.get(providerId) ?? null;
+  for (const healthPartition of [...providerIds].sort()) {
+    const before = previous.providers.get(healthPartition) ?? null;
+    const observation = observationByProvider.get(healthPartition) ?? null;
+    const breakerEvent = breakerByProvider.get(healthPartition) ?? null;
+    const providerId = observation?.provider ?? breakerEvent?.provider ?? before?.provider;
     const after = providerTransition(
       before,
-      providerId,
-      observationByProvider.get(providerId),
-      breakerByProvider.get(providerId),
+      observation,
+      breakerEvent,
       getProviderPolicy(policy, providerId),
       now,
     );
@@ -553,10 +763,12 @@ export function buildNextTenantState({
     if (
       before?.health !== after.health
       || before?.cooldownUntilUtc !== after.cooldownUntilUtc
-      || breakerByProvider.has(providerId)
+      || breakerByProvider.has(healthPartition)
     ) {
       providerChanges.push({
-        provider: providerId,
+        provider: after.provider,
+        providerVariant: after.providerVariant,
+        healthPartition: after.healthPartition,
         previousHealth: before?.health ?? null,
         health: after.health,
         cooldownUntilUtc: after.cooldownUntilUtc,

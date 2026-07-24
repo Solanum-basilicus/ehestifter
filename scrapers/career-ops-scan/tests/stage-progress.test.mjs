@@ -88,6 +88,8 @@ test('detail progress counts only actual selected detail fetches', async () => {
   const events = [];
   const result = await enrichCandidateDetails([
     candidate({
+      sourceProvider: 'unsupported-test',
+      sourceTenant: 'acme',
       canonicalIdentity: {
         provider: 'lever',
         providerTenant: 'acme',

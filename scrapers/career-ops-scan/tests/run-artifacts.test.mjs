@@ -150,3 +150,43 @@ test('Phase 4 summary quantifies catalog preflight ratio and scope rejections', 
   assert.equal(summary.priorityCandidates, 1);
   assert.equal(summary.catalogCandidates, 2);
 });
+
+test('run writer emits provider canary artifact only when canaries were evaluated', async () => {
+  await withTempDir(async (directory) => {
+    const canaryResults = {
+      schemaVersion: 1,
+      generatedAtUtc: '2026-07-22T00:00:00.000Z',
+      canaries: [{
+        provider: 'successfactors',
+        providerVariant: 'csb',
+        healthPartition: 'successfactors:csb',
+        tenant: 'wlgore.jobs.hr.cloud.sap',
+        status: 'healthy',
+      }],
+      jobs: [],
+    };
+    const runPath = await writeRunArtifacts({
+      dataPath: directory,
+      runId: 'run-canary',
+      metadata: {},
+      targetPlan: {},
+      providerResults: [],
+      tenantStateChanges: null,
+      rateObservations: null,
+      canaryResults,
+      candidates: [],
+      rejected: [],
+      preflightResults: null,
+      detailResults: null,
+      locationResults: null,
+      importResults: null,
+      summary: {},
+    });
+    const artifact = JSON.parse(await readFile(
+      path.join(runPath, 'provider-canary-results.json'),
+      'utf8',
+    ));
+    assert.equal(artifact.runId, 'run-canary');
+    assert.equal(artifact.canaries[0].healthPartition, 'successfactors:csb');
+  });
+});

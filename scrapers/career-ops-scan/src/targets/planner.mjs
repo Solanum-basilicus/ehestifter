@@ -12,6 +12,7 @@ import {
   PHASE3_MAX_NORMAL_TARGETS_PER_RUN,
 } from '../policy/discovery-policy.mjs';
 import { resolveProvider } from '../providers/_registry.mjs';
+import { targetHealthIdentity } from '../providers/_variant.mjs';
 import {
   loadTenantState,
   tenantStateKey,
@@ -123,13 +124,22 @@ function parseCareersUrl(value, companyName) {
   return parsed;
 }
 
-function deriveTrackedTenant(entry, providerId) {
+function deriveTrackedTenant(entry, provider) {
   if (typeof entry.provider_tenant === 'string' && entry.provider_tenant.trim()) {
     return entry.provider_tenant.trim();
   }
+  if (typeof provider?.tenant === 'function') {
+    const tenant = provider.tenant(entry);
+    if (typeof tenant !== 'string' || tenant.trim() === '') {
+      throw new Error(
+        `Provider ${provider.id} could not derive a tenant for ${entry.name}`,
+      );
+    }
+    return tenant.trim();
+  }
   const parsed = parseCareersUrl(entry.careers_url, entry.name);
   const segments = parsed.pathname.split('/').filter(Boolean);
-  if (['greenhouse', 'lever', 'ashby'].includes(providerId)) {
+  if (['greenhouse', 'lever', 'ashby'].includes(provider?.id)) {
     if (!segments[0]) {
       throw new Error(`Tracked company ${entry.name} URL has no provider tenant`);
     }
@@ -138,8 +148,12 @@ function deriveTrackedTenant(entry, providerId) {
   return `${parsed.hostname.toLowerCase()}${parsed.pathname.replace(/\/$/, '')}`;
 }
 
-function targetKey(provider, tenant) {
-  return tenantStateKey(provider, tenant);
+function targetKey(provider, tenant, providerVariant = null) {
+  return tenantStateKey(provider, tenant, providerVariant);
+}
+
+function targetStateKey(target) {
+  return targetKey(target.provider, target.tenant, target.providerVariant);
 }
 
 function hashCatalogTenant(tenant) {
@@ -172,20 +186,77 @@ function compareScheduledTargets(left, right) {
   return left.tenant.localeCompare(right.tenant);
 }
 
+function boundedInteger(value, fallback, name, { min = 0, max = 100000 } = {}) {
+  const result = value == null ? fallback : value;
+  if (!Number.isInteger(result) || result < min || result > max) {
+    throw new Error(`${name} must be an integer from ${min} to ${max}`);
+  }
+  return result;
+}
+
+function canarySettings(entry, index) {
+  const detailSampleSize = boundedInteger(
+    entry.detail_sample_size ?? entry.detailSampleSize,
+    3,
+    `provider_canaries[${index}].detail_sample_size`,
+    { min: 0, max: 10 },
+  );
+  const minimumDetailSuccesses = boundedInteger(
+    entry.minimum_detail_successes ?? entry.minimumDetailSuccesses,
+    detailSampleSize > 0 ? 1 : 0,
+    `provider_canaries[${index}].minimum_detail_successes`,
+    { min: 0, max: detailSampleSize },
+  );
+  return {
+    minimumJobs: boundedInteger(
+      entry.minimum_jobs ?? entry.minimumJobs,
+      1,
+      `provider_canaries[${index}].minimum_jobs`,
+      { min: 1, max: 100000 },
+    ),
+    detailSampleSize,
+    minimumDetailSuccesses,
+    intervalHours: boundedInteger(
+      entry.interval_hours ?? entry.intervalHours,
+      24,
+      `provider_canaries[${index}].interval_hours`,
+      { min: 1, max: 24 * 30 },
+    ),
+  };
+}
+
 function trackedTargets(portalConfig, providers) {
   const targets = [];
   const rejections = [];
-  const entries = Array.isArray(portalConfig.tracked_companies)
-    ? portalConfig.tracked_companies
+  const trackedEntries = Array.isArray(portalConfig.tracked_companies)
+    ? portalConfig.tracked_companies.map((entry, index) => ({
+      entry,
+      index,
+      source: 'tracked_companies',
+      healthOnly: false,
+    }))
+    : [];
+  const canaryEntries = Array.isArray(portalConfig.provider_canaries)
+    ? portalConfig.provider_canaries.map((entry, index) => ({
+      entry,
+      index,
+      source: 'provider_canaries',
+      healthOnly: true,
+    }))
     : [];
 
-  for (let index = 0; index < entries.length; index += 1) {
-    const entry = entries[index];
+  for (const descriptor of [...trackedEntries, ...canaryEntries]) {
+    const {
+      entry,
+      index,
+      source,
+      healthOnly,
+    } = descriptor;
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
       rejections.push({
         reason: 'invalid_portal_entry',
         candidate: null,
-        details: { index, entry },
+        details: { source, index, entry },
       });
       continue;
     }
@@ -194,7 +265,7 @@ function trackedTargets(portalConfig, providers) {
       rejections.push({
         reason: 'invalid_portal_entry',
         candidate: null,
-        details: { index, entry },
+        details: { source, index, entry },
       });
       continue;
     }
@@ -204,7 +275,7 @@ function trackedTargets(portalConfig, providers) {
       rejections.push({
         reason: 'provider_not_resolved',
         candidate: null,
-        details: { index, company: entry.name },
+        details: { source, index, company: entry.name },
       });
       continue;
     }
@@ -212,28 +283,41 @@ function trackedTargets(portalConfig, providers) {
       rejections.push({
         reason: 'provider_resolution_error',
         candidate: null,
-        details: { index, company: entry.name, error: resolved.error },
+        details: {
+          source,
+          index,
+          company: entry.name,
+          error: resolved.error,
+        },
       });
       continue;
     }
 
     try {
-      targets.push({
+      const target = {
         ...entry,
         name: entry.name.trim(),
         careers_url: entry.careers_url.trim(),
         provider: resolved.provider.id,
-        tenant: deriveTrackedTenant(entry, resolved.provider.id),
+        tenant: deriveTrackedTenant(entry, resolved.provider),
+        sourceOrigin: typeof resolved.provider.sourceOrigin === 'function'
+          ? resolved.provider.sourceOrigin(entry)
+          : null,
         targetClass: 'priority',
-        reason: 'tracked_company',
+        reason: healthOnly ? 'provider_canary' : 'tracked_company',
+        healthOnly,
+        canary: healthOnly ? canarySettings(entry, index) : null,
         catalog: null,
         _provider: resolved.provider,
-      });
+      };
+      Object.assign(target, targetHealthIdentity(target));
+      targets.push(target);
     } catch (error) {
       rejections.push({
         reason: 'invalid_portal_entry',
         candidate: null,
         details: {
+          source,
           index,
           company: entry.name,
           error: error instanceof Error ? error.message : String(error),
@@ -323,6 +407,8 @@ function serializableTarget(target) {
   return {
     sequence: target.sequence,
     provider: target.provider,
+    providerVariant: target.providerVariant ?? null,
+    healthPartition: target.healthPartition ?? target.provider,
     tenant: target.tenant,
     name: target.name,
     careers_url: target.careers_url,
@@ -333,12 +419,17 @@ function serializableTarget(target) {
     scheduleBucket: target.scheduleBucket,
     lookbackStartUtc: target.lookbackStartUtc,
     lookbackUnbounded: target.lookbackUnbounded,
+    healthOnly: target.healthOnly === true,
+    canary: target.canary ?? null,
+    canaryAttached: target.canaryAttached === true,
   };
 }
 
 function skippedSample(target, reason, state) {
   return {
     provider: target.provider,
+    providerVariant: target.providerVariant ?? null,
+    healthPartition: target.healthPartition ?? target.provider,
     tenant: target.tenant,
     targetClass: target.targetClass,
     reason,
@@ -412,26 +503,31 @@ export function buildTargetPlan({
   const overrides = readOverrides(companyOverrides);
   const stateMaps = tenantStateMaps(tenantState);
   const disabledKeys = new Set(
-    overrides.disabledAshby.map((tenant) => targetKey('ashby', tenant)),
+    overrides.disabledAshby.map((tenant) => targetKey('ashby', tenant, null)),
   );
 
   const tracked = trackedTargets(portalConfig, providers);
   const rawPriority = [];
-  const seen = new Set();
+  const seen = new Map();
   let deduplicated = 0;
   let disabledRemoved = 0;
 
   function addPriority(target) {
-    const key = targetKey(target.provider, target.tenant);
+    const key = targetStateKey(target);
     if (target.provider === 'ashby' && disabledKeys.has(key)) {
       disabledRemoved += 1;
       return;
     }
     if (seen.has(key)) {
       deduplicated += 1;
+      const existing = seen.get(key);
+      if (existing.canary == null && target.canary != null) {
+        existing.canary = target.canary;
+        existing.canaryAttached = true;
+      }
       return;
     }
-    seen.add(key);
+    seen.set(key, target);
     rawPriority.push(target);
   }
 
@@ -441,7 +537,7 @@ export function buildTargetPlan({
     throw new Error('Ashby priority overrides require the ashby provider');
   }
   for (const tenant of overrides.priorityAshby) {
-    addPriority({
+    const target = {
       name: tenant,
       careers_url: `https://jobs.ashbyhq.com/${tenant}`,
       enabled: true,
@@ -449,9 +545,13 @@ export function buildTargetPlan({
       tenant,
       targetClass: 'priority',
       reason: 'operator_priority',
+      healthOnly: false,
+      canary: null,
       catalog: null,
       _provider: ashbyProvider,
-    });
+    };
+    Object.assign(target, targetHealthIdentity(target));
+    addPriority(target);
   }
 
   const skippedCounts = {
@@ -460,10 +560,38 @@ export function buildTargetPlan({
     budget: 0,
   };
   const skippedSamples = [];
+  const partitionStats = new Map();
+  function partitionStat(target) {
+    const identity = targetHealthIdentity(target);
+    if (!partitionStats.has(identity.healthPartition)) {
+      partitionStats.set(identity.healthPartition, {
+        provider: identity.provider,
+        providerVariant: identity.providerVariant,
+        healthPartition: identity.healthPartition,
+        selectedTargets: 0,
+        selectedCanaries: 0,
+        selectedNormal: 0,
+        skippedNotDue: 0,
+        skippedProviderCooldown: 0,
+        skippedNormalBudget: 0,
+      });
+    }
+    return partitionStats.get(identity.healthPartition);
+  }
   function recordSkipped(target, reason, state) {
-    if (reason === 'not_due') skippedCounts.notDue += 1;
-    if (reason === 'provider_cooldown') skippedCounts.providerCooldown += 1;
-    if (reason === 'normal_budget') skippedCounts.budget += 1;
+    const stats = partitionStat(target);
+    if (reason === 'not_due') {
+      skippedCounts.notDue += 1;
+      stats.skippedNotDue += 1;
+    }
+    if (reason === 'provider_cooldown') {
+      skippedCounts.providerCooldown += 1;
+      stats.skippedProviderCooldown += 1;
+    }
+    if (reason === 'normal_budget') {
+      skippedCounts.budget += 1;
+      stats.skippedNormalBudget += 1;
+    }
     if (skippedSamples.length < MAX_SKIPPED_SAMPLES) {
       skippedSamples.push(skippedSample(target, reason, state));
     }
@@ -472,9 +600,9 @@ export function buildTargetPlan({
   const selectedPriority = [];
   for (const target of rawPriority) {
     const providerPolicy = getProviderPolicy(policy, target.provider);
-    const state = stateMaps.tenants.get(targetKey(target.provider, target.tenant)) ?? null;
+    const state = stateMaps.tenants.get(targetStateKey(target)) ?? null;
     if (mode === 'offline') {
-      const providerState = stateMaps.providers.get(target.provider.toLowerCase());
+      const providerState = stateMaps.providers.get(target.healthPartition);
       if (providerCooldownActive(providerState, now)) {
         recordSkipped(target, 'provider_cooldown', state);
         continue;
@@ -537,7 +665,7 @@ export function buildTargetPlan({
     const providerBlocked = providerCooldownActive(providerState, now);
 
     for (const tenant of ashbyCatalog.tenants) {
-      const key = targetKey('ashby', tenant);
+      const key = targetKey('ashby', tenant, null);
       if (disabledKeys.has(key) || seen.has(key)) {
         if (seen.has(key)) deduplicated += 1;
         continue;
@@ -551,9 +679,12 @@ export function buildTargetPlan({
         tenant,
         targetClass: 'normal',
         reason: 'ashby_catalog',
+        healthOnly: false,
+        canary: null,
         catalog: catalogMetadata,
         _provider: ashbyProvider,
       };
+      Object.assign(target, targetHealthIdentity(target));
       const state = stateMaps.tenants.get(key) ?? null;
       const bucket = scheduleBucket(state);
       populationByBucket[bucket] += 1;
@@ -590,6 +721,16 @@ export function buildTargetPlan({
 
   const runtimeTargets = [...selectedPriority, ...selectedNormal]
     .map((target, sequence) => ({ ...target, sequence }));
+  for (const target of runtimeTargets) {
+    const stats = partitionStat(target);
+    stats.selectedTargets += 1;
+    if (target.canary != null) stats.selectedCanaries += 1;
+    if (target.targetClass === 'normal') stats.selectedNormal += 1;
+  }
+  const healthPartitions = Object.fromEntries(
+    [...partitionStats.entries()]
+      .sort(([left], [right]) => left.localeCompare(right)),
+  );
   const sweep = catalogSweep({
     populationByBucket,
     dueByBucket,
@@ -612,13 +753,18 @@ export function buildTargetPlan({
       phase3HardMaximum: PHASE3_MAX_NORMAL_TARGETS_PER_RUN,
     },
     sweep,
+    healthPartitions,
     counts: {
       priority: selectedPriority.length,
+      canary: selectedPriority.filter((target) => target.canary != null).length,
       normal: selectedNormal.length,
       disabled: disabledKeys.size,
       disabledRemoved,
       deduplicated,
       planningRejected: tracked.rejections.length,
+      canaryPlanningRejected: tracked.rejections.filter(
+        (item) => item.details?.source === 'provider_canaries',
+      ).length,
       catalogEligible: eligibleNormalCount,
       skippedNotDue: skippedCounts.notDue,
       skippedProviderCooldown: skippedCounts.providerCooldown,

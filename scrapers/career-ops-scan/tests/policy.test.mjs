@@ -143,3 +143,47 @@ test('operator recommendation limits are validated', () => {
     /healthy_success_ratio/,
   );
 });
+
+test('monitoring defaults protect historically active providers from silent empty results', () => {
+  const parsed = parseDiscoveryPolicy(raw());
+  const ashby = getProviderPolicy(parsed, 'ashby');
+  assert.deepEqual(ashby.monitoring, {
+    suspiciousEmptyBaselineMinimumJobs: 10,
+    suspiciousEmptyReprobeMinutes: 60,
+    suspiciousVolumeDropRatio: 0.9,
+    recentSuccessfulCountWindow: 8,
+    degradedMinimumAttempts: 2,
+    degradedErrorRatio: 0.5,
+  });
+});
+
+test('provider monitoring overrides are validated and preserve default siblings', () => {
+  const parsed = parseDiscoveryPolicy(raw({
+    providers: {
+      ashby: {
+        catalog_enabled: true,
+        max_normal_targets_per_run: 100,
+        target_full_sweep_days: 3,
+      },
+      successfactors: {
+        monitoring: {
+          suspicious_empty_reprobe_minutes: 30,
+          suspicious_volume_drop_ratio: 0.8,
+          degraded_error_ratio: 0.25,
+        },
+      },
+    },
+  }));
+  const successfactors = getProviderPolicy(parsed, 'successfactors');
+  assert.equal(successfactors.monitoring.suspiciousEmptyReprobeMinutes, 30);
+  assert.equal(successfactors.monitoring.degradedErrorRatio, 0.25);
+  assert.equal(successfactors.monitoring.suspiciousVolumeDropRatio, 0.8);
+  assert.equal(successfactors.monitoring.recentSuccessfulCountWindow, 8);
+  assert.throws(
+    () => parseDiscoveryPolicy(raw({
+      defaults: { monitoring: { recent_successful_count_window: 1 } },
+      providers: { ashby: {} },
+    })),
+    /recent_successful_count_window/,
+  );
+});

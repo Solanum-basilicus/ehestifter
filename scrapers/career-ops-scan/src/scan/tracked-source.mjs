@@ -4,7 +4,7 @@ import {
   buildLocationFilter,
   buildPostingAgeFilter,
   buildSalaryFilter,
-  buildTitleFilter,
+  buildTitleEvaluator,
   matchedTitleKeywords,
 } from './filters.mjs';
 import { executeProviderTargets } from './provider-executor.mjs';
@@ -45,6 +45,25 @@ function normalizePostedAt(value) {
   return null;
 }
 
+function sourceOrigin(value) {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
+}
+
+function providerImplementationRef(provider) {
+  const source = provider?.source;
+  if (!source || typeof source !== 'object') return null;
+  return {
+    repository: source.repository ?? null,
+    file: source.file ?? null,
+    ref: source.ref ?? null,
+    license: source.license ?? null,
+  };
+}
+
 export function candidateFromJob(job, target, upstreamRef) {
   const postedAtUtc = normalizePostedAt(job.postedAt);
   const description = typeof job.description === 'string'
@@ -55,6 +74,8 @@ export function candidateFromJob(job, target, upstreamRef) {
     schemaVersion: 1,
     sourceMode: target.targetClass === 'normal' ? 'catalog' : 'priority',
     sourceProvider: target.provider,
+    sourceProviderVariant: target.providerVariant ?? null,
+    sourceTenant: target.tenant,
     sourceCompany: target.name,
     url: String(job.url ?? '').trim(),
     applyUrl: String(job.url ?? '').trim(),
@@ -76,6 +97,13 @@ export function candidateFromJob(job, target, upstreamRef) {
       derivedFrom: 'santifer/career-ops',
       upstreamRef,
       providerNativeId: job.id != null ? String(job.id) : null,
+      sourceOrigin: target.sourceOrigin || sourceOrigin(target.careers_url),
+      providerImplementation: providerImplementationRef(target._provider),
+      acquisitionMode: typeof job.acquisitionMode === 'string'
+        ? job.acquisitionMode
+        : null,
+      healthPartition: target.healthPartition ?? target.provider,
+      targetSequence: target.sequence,
       targetReason: target.reason,
       catalog: target.catalog ?? null,
       lookbackStartUtc: target.lookbackStartUtc ?? null,
@@ -125,7 +153,7 @@ export async function runTrackedScan({
     throw new Error('maxCandidates must be a positive integer');
   }
 
-  const titleFilter = buildTitleFilter(portalConfig.title_filter);
+  const titleEvaluator = buildTitleEvaluator(portalConfig.title_filter);
   const locationFilter = buildLocationFilter(portalConfig.location_filter);
   const locationScopeFilter = buildLocationScopeFilter(
     portalConfig.location_scope_filter,
@@ -146,8 +174,24 @@ export async function runTrackedScan({
     onProgress,
     fetchTarget: async (target) => {
       const sinceMs = targetSinceMs(target, portalConfig, nowMs);
-      const httpContext = { ...httpContextFactory(), sinceMs };
-      return target._provider.fetch(target, httpContext);
+      let telemetry = {};
+      const httpContext = {
+        ...httpContextFactory(),
+        sinceMs,
+        reportProviderTelemetry(value) {
+          if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+          telemetry = { ...telemetry, ...value };
+        },
+      };
+      try {
+        const jobs = await target._provider.fetch(target, httpContext);
+        return { jobs, providerTelemetry: telemetry };
+      } catch (error) {
+        if (error && typeof error === 'object') {
+          error.providerTelemetry = { ...telemetry, ...(error.providerTelemetry ?? {}) };
+        }
+        throw error;
+      }
     },
   });
 
@@ -156,15 +200,54 @@ export async function runTrackedScan({
     providerResults.map((result) => [result.sequence, result]),
   );
   const candidates = [];
+  const canaryCandidates = [];
   const rejected = [];
   const seenUrls = new Set();
 
   for (const batch of execution.batches) {
     if (batch.providerResult.status === 'skipped') continue;
-    if (batch.error) {
+
+    if (batch.target.canary != null && batch.jobs.length > 0) {
+      const sampleSize = batch.target.canary.detailSampleSize ?? 0;
+      for (const job of batch.jobs.slice(0, sampleSize)) {
+        const candidate = candidateFromJob(job, batch.target, upstreamRef);
+        if (!candidate.title || !candidate.hiringCompanyName || !validHttpUrl(candidate.url)) {
+          continue;
+        }
+        canaryCandidates.push({
+          ...candidate,
+          preflight: { status: 'ok', exists: false, source: 'provider_canary' },
+          canary: {
+            minimumJobs: batch.target.canary.minimumJobs ?? 1,
+            minimumDetailSuccesses:
+              batch.target.canary.minimumDetailSuccesses ?? 0,
+          },
+        });
+      }
+    }
+
+    if (batch.target.healthOnly) {
+      if (batch.error && batch.jobs.length === 0) {
+        rejected.push(reject('provider_fetch_failed', null, {
+          company: batch.target.name,
+          provider: batch.target.provider,
+          providerVariant: batch.target.providerVariant ?? null,
+          healthPartition: batch.target.healthPartition ?? batch.target.provider,
+          tenant: batch.target.tenant,
+          errorClass: batch.providerResult.errorClass,
+          httpStatus: batch.providerResult.httpStatus,
+          error: providerErrorMessage(batch.error),
+        }));
+      }
+      continue;
+    }
+
+    if (batch.error && batch.jobs.length === 0) {
       rejected.push(reject('provider_fetch_failed', null, {
         company: batch.target.name,
         provider: batch.target.provider,
+        providerVariant: batch.target.providerVariant ?? null,
+        healthPartition: batch.target.healthPartition ?? batch.target.provider,
         tenant: batch.target.tenant,
         errorClass: batch.providerResult.errorClass,
         httpStatus: batch.providerResult.httpStatus,
@@ -192,8 +275,12 @@ export async function runTrackedScan({
         continue;
       }
       seenUrls.add(candidate.url);
-      if (!titleFilter(candidate.title)) {
-        rejected.push(reject('title_filter', candidate));
+      const titleEvaluation = titleEvaluator(candidate.title);
+      if (!titleEvaluation.allowed) {
+        rejected.push(reject('title_filter', candidate, {
+          positiveMatches: titleEvaluation.positiveMatches,
+          negativeMatches: titleEvaluation.negativeMatches,
+        }));
         continue;
       }
       const locationScope = locationScopeFilter(candidate.rawLocation);
@@ -248,6 +335,7 @@ export async function runTrackedScan({
 
   return {
     candidates,
+    canaryCandidates,
     rejected,
     targetCount: targets.length,
     providerIds: [...providers.keys()].sort(),

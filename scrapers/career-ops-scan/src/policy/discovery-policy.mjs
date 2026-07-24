@@ -39,6 +39,14 @@ const DEFAULTS = Object.freeze({
     fastP95Ms: 5000,
     maximumSuggestedConcurrency: 8,
   }),
+  monitoring: Object.freeze({
+    suspiciousEmptyBaselineMinimumJobs: 10,
+    suspiciousEmptyReprobeMinutes: 60,
+    suspiciousVolumeDropRatio: 0.9,
+    recentSuccessfulCountWindow: 8,
+    degradedMinimumAttempts: 2,
+    degradedErrorRatio: 0.5,
+  }),
 });
 
 function requireObject(value, name) {
@@ -298,8 +306,57 @@ function mergeProviderDefaults(defaults, raw, name) {
       defaults.recommendations,
       `${name}.recommendations`,
     ),
+    monitoring: parseMonitoring(
+      value.monitoring,
+      defaults.monitoring,
+      `${name}.monitoring`,
+    ),
   };
 }
+
+
+function parseMonitoring(raw, base, name) {
+  const value = optionalObject(raw, name);
+  return {
+    suspiciousEmptyBaselineMinimumJobs: integer(
+      value.suspicious_empty_baseline_minimum_jobs,
+      base.suspiciousEmptyBaselineMinimumJobs,
+      `${name}.suspicious_empty_baseline_minimum_jobs`,
+      { min: 1, max: 100000 },
+    ),
+    suspiciousEmptyReprobeMinutes: finiteNumber(
+      value.suspicious_empty_reprobe_minutes,
+      base.suspiciousEmptyReprobeMinutes,
+      `${name}.suspicious_empty_reprobe_minutes`,
+      { min: 1, max: 60 * 24 },
+    ),
+    suspiciousVolumeDropRatio: finiteNumber(
+      value.suspicious_volume_drop_ratio,
+      base.suspiciousVolumeDropRatio,
+      `${name}.suspicious_volume_drop_ratio`,
+      { min: 0.5, max: 1 },
+    ),
+    recentSuccessfulCountWindow: integer(
+      value.recent_successful_count_window,
+      base.recentSuccessfulCountWindow,
+      `${name}.recent_successful_count_window`,
+      { min: 2, max: 32 },
+    ),
+    degradedMinimumAttempts: integer(
+      value.degraded_minimum_attempts,
+      base.degradedMinimumAttempts,
+      `${name}.degraded_minimum_attempts`,
+      { min: 1, max: 1000 },
+    ),
+    degradedErrorRatio: finiteNumber(
+      value.degraded_error_ratio,
+      base.degradedErrorRatio,
+      `${name}.degraded_error_ratio`,
+      { min: 0.01, max: 1 },
+    ),
+  };
+}
+
 
 export function parseDiscoveryPolicy(raw) {
   const root = requireObject(raw, 'discovery policy');
@@ -328,6 +385,11 @@ export function parseDiscoveryPolicy(raw) {
       rawDefaults.recommendations,
       DEFAULTS.recommendations,
       'discovery policy.defaults.recommendations',
+    ),
+    monitoring: parseMonitoring(
+      rawDefaults.monitoring,
+      DEFAULTS.monitoring,
+      'discovery policy.defaults.monitoring',
     ),
   };
 
@@ -386,6 +448,7 @@ export function getProviderPolicy(policy, providerId) {
     lookback: policy.defaults.lookback,
     execution: policy.defaults.execution,
     recommendations: policy.defaults.recommendations,
+    monitoring: policy.defaults.monitoring,
     catalogEnabled: false,
     maxNormalTargetsPerRun: 0,
     targetFullSweepDays: 3,

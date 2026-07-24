@@ -28,6 +28,12 @@ export function classifyProviderError(error) {
     .map((item) => item.code)
     .filter((value) => typeof value === 'string');
   if (codes.includes('ETIMEDOUT')) return 'timeout';
+  if (codes.includes('PROVIDER_CANARY_MINIMUM_JOBS')) return 'provider_anomaly';
+  if (codes.includes('CSB_LISTING_SCHEMA_MISMATCH')) return 'provider_schema';
+  if (codes.some((code) => [
+    'CSB_SESSION_REJECTED',
+    'CSB_BOOTSTRAP_TOKEN_MISSING',
+  ].includes(code))) return 'provider_auth';
 
   const status = providerHttpStatus(error);
   if (status === 429) return 'rate_limited';
@@ -74,5 +80,8 @@ export function isTransientProviderResult(result) {
     'http_5xx',
     'network',
     'provider_error',
+    'provider_anomaly',
+    'provider_schema',
+    'provider_auth',
   ].includes(result.errorClass);
 }

@@ -1,6 +1,7 @@
 import { performance } from 'node:perf_hooks';
 
 import { getProviderPolicy } from '../policy/discovery-policy.mjs';
+import { targetHealthIdentity } from '../providers/_variant.mjs';
 import {
   classifyProviderError,
   isTransientProviderResult,
@@ -31,9 +32,67 @@ class Semaphore {
   }
 }
 
+function cleanTelemetry(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return {
+    acquisitionMode: typeof value.acquisitionMode === 'string'
+      ? value.acquisitionMode.slice(0, 100)
+      : null,
+    listingOutcome: typeof value.listingOutcome === 'string'
+      ? value.listingOutcome.slice(0, 100)
+      : null,
+    explicitTotal: Number.isInteger(value.explicitTotal) && value.explicitTotal >= 0
+      ? value.explicitTotal
+      : null,
+  };
+}
+
+function normalizedFetchValue(value) {
+  if (Array.isArray(value)) return { jobs: value, telemetry: {} };
+  if (
+    value
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && Array.isArray(value.jobs)
+    && Object.hasOwn(value, 'providerTelemetry')
+  ) {
+    return {
+      jobs: value.jobs,
+      telemetry: cleanTelemetry(value.providerTelemetry),
+    };
+  }
+  const error = new Error('Provider returned a non-array job list');
+  error.code = 'INVALID_PROVIDER_RESULT';
+  throw error;
+}
+
+function resultIdentity(target) {
+  const identity = target.healthPartition
+    ? {
+      provider: target.provider,
+      providerVariant: target.providerVariant ?? null,
+      healthPartition: target.healthPartition,
+    }
+    : targetHealthIdentity(target);
+  return identity;
+}
+
+function baseProviderResult(target) {
+  const identity = resultIdentity(target);
+  return {
+    sequence: target.sequence,
+    provider: identity.provider,
+    providerVariant: identity.providerVariant,
+    healthPartition: identity.healthPartition,
+    tenant: target.tenant,
+    targetClass: target.targetClass,
+    healthOnly: target.healthOnly === true,
+  };
+}
+
 class ProviderGuard {
-  constructor({ provider, policy, monotonicNow, sleep }) {
-    this.provider = provider;
+  constructor({ identity, policy, monotonicNow, sleep }) {
+    this.identity = identity;
     this.policy = policy;
     this.monotonicNow = monotonicNow;
     this.sleep = sleep;
@@ -87,7 +146,7 @@ class ProviderGuard {
     if (reason && !this.open) {
       this.open = true;
       this.breakerEvent = {
-        provider: this.provider,
+        ...this.identity,
         reason,
         requestsAttempted: this.requestsAttempted,
         rateLimited: this.rateLimited,
@@ -108,43 +167,73 @@ class ProviderGuard {
       const started = this.monotonicNow();
       let result;
       try {
-        const jobs = await fetchTarget(target);
-        if (!Array.isArray(jobs)) {
-          const error = new Error('Provider returned a non-array job list');
-          error.code = 'INVALID_PROVIDER_RESULT';
-          throw error;
-        }
-        result = {
+        const fetched = normalizedFetchValue(await fetchTarget(target));
+        const telemetry = cleanTelemetry(fetched.telemetry);
+        const inferredOutcome = fetched.jobs.length > 0
+          ? 'listing_success_nonempty'
+          : 'listing_success_empty_unverified';
+        const canaryMinimum = target.canary != null
+          ? target.canary.minimumJobs ?? 1
+          : null;
+        if (canaryMinimum != null && fetched.jobs.length < canaryMinimum) {
+          const error = new Error(
+            `Provider canary expected at least ${canaryMinimum} jobs, received ${fetched.jobs.length}`,
+          );
+          error.code = 'PROVIDER_CANARY_MINIMUM_JOBS';
+          const anomalyTelemetry = cleanTelemetry({
+            ...telemetry,
+            listingOutcome: 'listing_volume_anomaly',
+          });
+          result = {
+            target,
+            jobs: fetched.jobs,
+            error,
+            providerResult: {
+              ...baseProviderResult(target),
+              status: 'error',
+              skipReason: null,
+              errorClass: classifyProviderError(error),
+              errorMessage: providerErrorMessage(error),
+              httpStatus: null,
+              jobsReturned: fetched.jobs.length,
+              candidatesMatched: 0,
+              candidatesRetained: 0,
+              candidatesDroppedByCap: 0,
+              durationMs: Math.max(0, Math.round(this.monotonicNow() - started)),
+              acquisitionMode: anomalyTelemetry.acquisitionMode,
+              listingOutcome: anomalyTelemetry.listingOutcome,
+              explicitTotal: anomalyTelemetry.explicitTotal,
+            },
+          };
+        } else result = {
           target,
-          jobs,
+          jobs: fetched.jobs,
           error: null,
           providerResult: {
-            sequence: target.sequence,
-            provider: target.provider,
-            tenant: target.tenant,
-            targetClass: target.targetClass,
+            ...baseProviderResult(target),
             status: 'ok',
             skipReason: null,
             errorClass: null,
             errorMessage: null,
             httpStatus: null,
-            jobsReturned: jobs.length,
+            jobsReturned: fetched.jobs.length,
             candidatesMatched: 0,
             candidatesRetained: 0,
             candidatesDroppedByCap: 0,
             durationMs: Math.max(0, Math.round(this.monotonicNow() - started)),
+            acquisitionMode: telemetry.acquisitionMode,
+            listingOutcome: telemetry.listingOutcome ?? inferredOutcome,
+            explicitTotal: telemetry.explicitTotal,
           },
         };
       } catch (error) {
+        const telemetry = cleanTelemetry(error?.providerTelemetry);
         result = {
           target,
           jobs: [],
           error,
           providerResult: {
-            sequence: target.sequence,
-            provider: target.provider,
-            tenant: target.tenant,
-            targetClass: target.targetClass,
+            ...baseProviderResult(target),
             status: 'error',
             skipReason: null,
             errorClass: classifyProviderError(error),
@@ -155,6 +244,9 @@ class ProviderGuard {
             candidatesRetained: 0,
             candidatesDroppedByCap: 0,
             durationMs: Math.max(0, Math.round(this.monotonicNow() - started)),
+            acquisitionMode: telemetry.acquisitionMode,
+            listingOutcome: telemetry.listingOutcome ?? 'listing_error',
+            explicitTotal: telemetry.explicitTotal,
           },
         };
       }
@@ -172,10 +264,7 @@ function skippedResult(target, reason) {
     jobs: [],
     error: null,
     providerResult: {
-      sequence: target.sequence,
-      provider: target.provider,
-      tenant: target.tenant,
-      targetClass: target.targetClass,
+      ...baseProviderResult(target),
       status: 'skipped',
       skipReason: reason,
       errorClass: null,
@@ -186,6 +275,9 @@ function skippedResult(target, reason) {
       candidatesRetained: 0,
       candidatesDroppedByCap: 0,
       durationMs: 0,
+      acquisitionMode: null,
+      listingOutcome: 'listing_skipped',
+      explicitTotal: null,
     },
   };
 }
@@ -235,6 +327,7 @@ export async function executeProviderTargets({
         current: completed,
         total: targets.length,
         provider: result.providerResult.provider,
+        providerVariant: result.providerResult.providerVariant,
         tenant: result.providerResult.tenant,
         status: result.providerResult.status,
       });
@@ -244,21 +337,22 @@ export async function executeProviderTargets({
   }
 
   const guards = new Map();
-  function guardFor(provider) {
-    if (!guards.has(provider)) {
-      guards.set(provider, new ProviderGuard({
-        provider,
-        policy: getProviderPolicy(policy, provider),
+  function guardFor(target) {
+    const identity = resultIdentity(target);
+    if (!guards.has(identity.healthPartition)) {
+      guards.set(identity.healthPartition, new ProviderGuard({
+        identity,
+        policy: getProviderPolicy(policy, identity.provider),
         monotonicNow,
         sleep,
       }));
     }
-    return guards.get(provider);
+    return guards.get(identity.healthPartition);
   }
 
   async function executeGroup(group) {
     return mapLimit(group, globalConcurrency, async (target) => {
-      const result = await guardFor(target.provider).execute(target, fetchTarget);
+      const result = await guardFor(target).execute(target, fetchTarget);
       report(result);
       return result;
     });
@@ -273,7 +367,7 @@ export async function executeProviderTargets({
   const breakerEvents = [...guards.values()]
     .map((guard) => guard.breakerEvent)
     .filter(Boolean)
-    .sort((left, right) => left.provider.localeCompare(right.provider));
+    .sort((left, right) => left.healthPartition.localeCompare(right.healthPartition));
 
   return { batches, breakerEvents };
 }

@@ -1,10 +1,11 @@
 # Milestone Design: ATS Discovery for Ehestifter
 
-**Status:** active milestone, reframed after the local scanner spike
-**Previous framing:** Career-Ops powered job discovery
-**Primary implementation location today:** `scrapers/career-ops-scan`
-**Planned final name before merge:** `scrapers/ats-discovery`
-**Planned creation provenance:** `foundOn = "ats-discovery"`
+**Status:** active milestone; Phases 0–5 completed, Phase 5B next  
+**Previous framing:** Career-Ops powered job discovery  
+**Primary implementation location today:** `scrapers/career-ops-scan`  
+**Planned final name before merge:** `scrapers/ats-discovery`  
+**Planned creation provenance:** `foundOn = "ats-discovery"`  
+**Current validated test baseline:** 297 tests passing as of 2026-07-24  
 **Audience:** coding agents and human operators continuing implementation
 
 ---
@@ -30,6 +31,7 @@ The target end-state is:
 7. Missing shared jobs are imported through Jobs API.
 8. Compatibility is requested only for users whose profiles matched the candidate.
 9. Users retain manual control over application status.
+10. Materially different protocols within one ATS family have independent operational health, cooldowns, circuit breakers, and canaries.
 
 This milestone preserves the vendor-agnostic boundary already established in Ehestifter:
 
@@ -63,12 +65,14 @@ Ehestifter owns:
 - tenant target planning;
 - priority and disabled overrides;
 - provider-specific request policy;
+- provider-variant health partitions where one provider family contains materially different protocols;
 - date lookback and overlap policy;
 - runtime tenant health;
 - cheap filtering;
 - Jobs API preflight and create behavior;
 - detail fetching;
 - location normalization;
+- health-only provider canaries;
 - run artifacts and diagnostics;
 - future multi-user matching and compatibility requests.
 
@@ -87,7 +91,7 @@ The desired maintenance model is:
 3. Record meaningful Ehestifter modifications.
 4. Periodically inspect upstream changes.
 5. Cherry-pick or manually port improvements that are relevant.
-6. Validate the resulting provider with Ehestifter-owned tests and fixtures.
+6. Validate the resulting provider with Ehestifter-owned tests, fixtures, and live canaries where appropriate.
 
 Career-Ops remains a useful upstream because its provider layer continues to receive provider additions and operational fixes. job-board-aggregator remains a useful influence because its scraper contains practical rate-limit, retry, pagination, anomaly, and dead-tenant handling developed from broad runs.
 
@@ -137,6 +141,8 @@ machine-managed tenant catalogs
 
 Machine-managed catalogs and human-owned policy have different lifecycles and should not create giant diffs or overwrite one another.
 
+Ashby catalog synchronization and planning are implemented. Phase 5B generalizes that machinery for Greenhouse, Lever, and Workday.
+
 ### 2.6 Priority policy and runtime health are independent
 
 Operator policy:
@@ -163,7 +169,30 @@ Transient failures such as timeouts, `429`, `500`, `502`, `503`, malformed respo
 
 Durable failures such as repeated `404` or `410` responses may move a tenant toward confirmed-dead state, but dead tenants should still be re-probed on a long interval because companies can change ATS configuration.
 
-### 2.7 Use provider-side date constraints when available
+### 2.7 Provider family and health partition are distinct
+
+A provider family may contain protocols with different failure modes. SuccessFactors currently has two operational partitions:
+
+```text
+provider family:  successfactors
+health partition: successfactors:rmk
+health partition: successfactors:csb
+```
+
+RMK uses server-rendered search pages. CSB uses a bootstrapped session, an embedded CSRF token, and a JSON listing API. A CSB authentication or schema failure must not open the RMK breaker or suppress RMK targets.
+
+Health-partition identity is used for:
+
+- provider circuit breakers;
+- provider cooldowns;
+- provider rate observations;
+- tenant-state keys;
+- planning and skip counters;
+- provider-variant summaries and warnings.
+
+Tenant-specific durable failures do not degrade the whole partition. Job-level outcomes such as an explicitly withdrawn detail page do not count as provider health errors.
+
+### 2.8 Use provider-side date constraints when available
 
 “New jobs since last run” is fuzzy because ATS APIs differ and some do not support an authoritative update cursor.
 
@@ -181,7 +210,7 @@ If a provider cannot filter by date, fetch the listing and apply the posting-age
 
 The project explicitly accepts a bounded risk that a job can fall through provider or timestamp cracks. The alternative—unbounded historical scanning every day—raises rate-limit and operational risk.
 
-### 2.8 Scan tenants once, then match all users
+### 2.9 Scan tenants once, then match all users
 
 Do not perform one ATS request per user.
 
@@ -227,9 +256,9 @@ career-ops-v1.20.0
 Current uses:
 
 - initial Greenhouse, Lever, Ashby, and Workday provider implementations;
+- Personio, SmartRecruiters, Softgarden, and SuccessFactors provider implementations selectively adapted during Phase 5;
 - scanner/provider contract ideas;
 - title, location, and posting-age filter behavior;
-- reference for additional providers such as SuccessFactors, Personio, SmartRecruiters, Softgarden, Workable, Teamtailor, Recruitee, Avature, and Phenom;
 - reference for liveness, retry, provider health, and scanner diagnostics improvements.
 
 Not used for:
@@ -247,14 +276,15 @@ Reference: [Feashliaa/job-board-aggregator](https://github.com/Feashliaa/job-boa
 
 Current uses:
 
-- curated tenant catalogs under CC BY-NC 4.0;
+- Ashby tenant catalog under CC BY-NC 4.0;
+- planned Phase 5B source catalogs for Greenhouse, Lever, and Workday;
 - reference for provider-specific concurrency;
 - retry and backoff behavior;
 - rate-limit handling;
 - pagination safeguards;
 - durable versus transient tenant failure handling;
 - broad-run anomaly and volume monitoring;
-- reference implementations for ATSs not yet supported locally.
+- reference implementations for ATSs not supported locally.
 
 Not adopted wholesale because its Python scraper is a broad publishing ETL that combines concerns not required by Ehestifter, including public dataset generation, chunking, geolocation, classification, frontend data preparation, and repository publishing.
 
@@ -287,15 +317,19 @@ No commercial use is expected. If that assumption changes, the tenant-catalog li
 ### 4.1 In scope
 
 - local Docker-based ATS scanner;
-- Greenhouse, Lever, Ashby, and Workday providers already validated in the scanner;
-- selective adoption of additional ATS providers;
-- external tenant catalog synchronization;
+- Greenhouse, Lever, Ashby, and Workday providers;
+- Personio, SmartRecruiters, Softgarden, and SuccessFactors RMK/CSB providers;
+- external Ashby tenant catalog synchronization;
+- Phase 5B catalog synchronization for Greenhouse, Lever, and Workday;
 - operator priority and disabled overrides;
 - ordered scan planning;
 - rotating tenant shards;
 - provider-specific concurrency and request pacing;
+- provider-variant health partitions where required;
 - bounded date lookback and overlap;
 - transient-failure cooldown and dead-tenant re-probe;
+- filter-independent provider canaries for high-risk protocols;
+- silent-empty and volume-collapse detection;
 - offline scan mode;
 - Jobs API preflight mode;
 - detail enrichment for missing jobs;
@@ -308,7 +342,7 @@ No commercial use is expected. If that assumption changes, the tenant-catalog li
 - local scheduled execution;
 - optional GCP Cloud Run Job deployment after local behavior is understood.
 
-### 4.2 Out of scope
+### 4.2 Explicitly out of scope for this milestone
 
 - consuming the generated job-board-data chunk feed;
 - deploying the complete Career-Ops application;
@@ -321,7 +355,19 @@ No commercial use is expected. If that assumption changes, the tenant-catalog li
 - unrestricted full-catalog import in one run;
 - self-adjusting rate algorithms before basic metrics exist;
 - commercial use of CC BY-NC tenant catalogs;
-- SuccessFactors implementation before the core catalog planner and scheduler are stable.
+- adding BambooHR, iCIMS, or Paylocity provider ingestion;
+- building tenant catalogs for Personio, SmartRecruiters, Softgarden, or SuccessFactors;
+- catalog ingestion for unsupported providers;
+- automatic catalog refresh before Phase 7 scheduling exists.
+
+The unsupported-provider ingestion and missing-catalog limitations are tracked in project issues [#3](https://github.com/Solanum-basilicus/ehestifter/issues/3) and [#4](https://github.com/Solanum-basilicus/ehestifter/issues/4).
+
+### 4.3 Deferred cross-domain and data-quality issues
+
+- [Issue #1](https://github.com/Solanum-basilicus/ehestifter/issues/1): richer location normalization and location evidence available only after detail enrichment.
+- [Issue #2](https://github.com/Solanum-basilicus/ehestifter/issues/2): Jobs canonical identity parsing for SuccessFactors CSB URLs.
+
+Issue #2 remains owned by Jobs. ATS Discovery preserves the provider-native requisition ID in provenance and does not manufacture canonical identity. Existing slug-derived identities may differ from corrected numeric identities after the Jobs fix; that mismatch is expected and accepted. A migration is not required for this hobby project unless real data demonstrates material impact.
 
 ---
 
@@ -337,6 +383,7 @@ Preserve these invariants:
 - Provider identity is required for imported jobs.
 - The job is global; compatibility and status are per user.
 - `foundOn` records the creation channel, not every later observation source.
+- Provider-native identity and acquisition provenance remain scanner evidence even when Jobs returns a different canonical provider representation.
 
 For current Jobs integration, URL preflight remains authoritative:
 
@@ -363,38 +410,26 @@ with system actor headers and scanner provenance.
 
 ---
 
-## 6. Current implementation baseline — completed
+## 6. Current implementation baseline — completed through Phase 5
 
-The completed work remains valid under the new framing.
-
-### 6.1 Approach-validation spike completed
+### 6.1 Phase 0 and Phase 1 baseline
 
 The Career-Ops scanner was inspected and Option C—an Ehestifter-owned runner using extracted provider/filter code—was selected.
 
-Reasons confirmed by the spike:
-
-- `scan.mjs` was coupled to Career-Ops tracker, pipeline, history, and plugin concerns;
-- direct wrapper output was not the cleanest contract for Ehestifter;
-- provider modules returned enough data to form useful candidates;
-- Jobs URL identity could canonicalize Greenhouse and Ashby candidates;
-- descriptions could be fetched through provider detail endpoints.
-
-### 6.2 Scanner skeleton completed
-
-Current location:
-
-```text
-scrapers/career-ops-scan
-```
-
-Implemented components include:
+The completed controlled scanner includes:
 
 - Docker image and Compose service;
-- JSON runtime configuration;
-- small `portals.yml` source list;
+- JSON and YAML runtime configuration;
 - CLI modes for offline, preflight, and guarded import;
+- Greenhouse, Lever, Ashby, and Workday providers;
 - local run artifacts under `/data/runs`;
 - Jobs API secret mounted as a file;
+- Jobs URL identity preflight;
+- bounded detail enrichment;
+- conservative location normalization;
+- guarded, capped, replay-safe import;
+- ambiguous create reconciliation;
+- idempotent live import canaries;
 - no requirement for Node/npm on the host.
 
 Canonical Docker test command:
@@ -409,167 +444,145 @@ docker compose run --rm \
   --test
 ```
 
-### 6.3 Initial provider set completed
-
-The scanner currently loads:
-
-- Greenhouse;
-- Lever;
-- Ashby;
-- Workday.
-
-Initial live tracked targets:
-
-- Celonis through Greenhouse;
-- n8n through Ashby;
-- one additional configured target used by the scan plan.
-
-### 6.4 Offline scanning completed
-
-Observed controlled runs produced three relevant candidates after title, location, and posting-age filtering:
-
-- two Celonis “Application Product Manager - AI System Transformations” postings;
-- one n8n “AI Product Manager” posting.
-
-Rejected counts varied slightly between runs because upstream boards changed, but filtering behavior remained consistent.
-
-### 6.5 Jobs identity preflight completed
-
-Jobs API returned canonical identities:
-
-```text
-greenhouse / celonis / 7798592003
-greenhouse / celonis / 7788415003
-ashby / n8n / 42e72645-d99a-4545-97b7-53ba3a699893
-```
-
-The scanner keeps Jobs canonical identity separate from URL-derived company/provenance hints.
-
-Candidate provenance remains scanner-owned and is not overwritten by the Jobs inference response.
-
-### 6.6 Detail enrichment completed
+### 6.2 Phase 2 — Ashby catalog and target planner — completed
 
 Implemented:
 
-- conservative HTML-to-plain-text conversion;
-- Greenhouse detail endpoint fetching;
-- Ashby board endpoint fetching;
-- one-request Ashby board cache;
-- fetch-only-for-missing behavior;
-- skip details for jobs already present in Ehestifter;
-- bounded detail concurrency and per-run fetch cap;
-- `detail-results.json` artifacts.
+- machine-managed `/data/catalogs/ashby.json`;
+- atomic catalog synchronization and metadata/hash validation;
+- operator-owned priority and disabled overrides;
+- provider discovery policy;
+- ordered target planning;
+- priority targets before catalog targets;
+- bounded Ashby catalog shards;
+- `target-plan.json` and `provider-results.json`;
+- offline-only catalog execution during initial rollout;
+- protection against catalog refresh overwriting operator policy.
 
-Validated descriptions were approximately 9 KB of readable text for all three canaries.
-
-Ashby enrichment also supplied:
-
-- application URL;
-- remote type;
-- structured Berlin/Germany location.
-
-### 6.7 Guarded import completed
+### 6.3 Phase 3 — provider-aware scheduling and health — completed
 
 Implemented:
 
-- explicit config gate `imports.enabled`;
-- required CLI cap `--max-create N`;
-- config ceiling `imports.maxCreatesPerRun`;
-- system actor/source headers;
-- create payload validation;
-- conservative location deduplication;
-- sequential create attempts;
-- retry only for ambiguous/retryable failures;
-- reconciliation through `GET /jobs/exists` after ambiguous POST outcomes;
-- detailed import dispositions and `import-results.json`.
+- persistent `/data/state/tenant-state.json`;
+- priority cadence and rotating healthy shards;
+- relevant-activity promotion;
+- empty-board demotion;
+- transient cooldowns;
+- repeated `404`/`410` progression to suspected and confirmed dead;
+- monthly dead-board re-probe;
+- bounded per-target lookback with overlap;
+- provider concurrency and request-start pacing;
+- provider circuit breakers for rate limits and transient failures;
+- rate and latency observations;
+- operator-reviewed rate recommendations;
+- sweep-budget diagnostics;
+- `tenant-state-changes.json` and `rate-observations.json`.
 
-The first live canary imported one job and displayed correctly in Ehestifter with:
+Manual preflight and import remain priority-only and bypass stateful cadence. Stateful scheduling applies to offline runs.
+
+### 6.4 Phase 4 — bounded catalog-backed preflight and import — completed
+
+Implemented:
+
+- explicit `--catalog-targets N` gate;
+- mode-specific live-catalog configuration ceilings;
+- hard code ceiling on live catalog targets;
+- catalog-only preflight and import metrics;
+- details fetched only for Jobs-missing candidates;
+- small explicit import caps;
+- replay-safe reconciliation;
+- location-scope rejection before Jobs traffic;
+- TTY-only progress display with `--no-progress` override.
+
+Catalog-backed Jobs traffic remains opt-in and bounded.
+
+### 6.5 Phase 5 — DACH-relevant provider expansion — completed
+
+Accepted providers and live evidence:
+
+| Provider path | Listing | Detail | Notes |
+|---|---|---|---|
+| Personio | Passed | Passed from listing data | XML listing feed supplies descriptions |
+| SmartRecruiters | Passed | Passed through posting detail API | Live preflight produced detail-ready missing candidates |
+| Softgarden | Passed | Passed through `JobPosting` JSON-LD | NECT returned 13 jobs; retained candidates received descriptions and structured Hamburg/Deutschland locations |
+| SuccessFactors RMK | Passed | Passed through bounded HTML fallback | EY returned 25 jobs; retained candidates received 4–5.5 KB descriptions |
+| SuccessFactors CSB | Passed | Route and safe failure classification validated | Gore listing returned 57–61 jobs through session/CSRF API; selected detail rows were explicitly withdrawn |
+
+Phase 5 additionally implemented:
+
+- provider-specific URL detection and tenant identity;
+- provider-specific pagination and request bounds;
+- pinned source provenance per provider;
+- same-origin detail protections;
+- boundary-safe Unicode title/location keyword matching;
+- Softgarden current vacancies parsing with fallback behavior;
+- SuccessFactors RMK HTML detail extraction when JSON-LD is absent;
+- SuccessFactors CSB bootstrap using `JSESSIONID` and the CSRF token embedded in `$.ajaxSetup`;
+- CSB API request payload and one-refresh retry;
+- CSB public-listing fallback and explicit acquisition modes;
+- target-local and detail-stage session handling;
+- explicit withdrawn-job classification.
+
+### 6.6 SuccessFactors variant-health hardening — completed
+
+SuccessFactors operational health is partitioned into:
 
 ```text
-title: correct
-company: correct
-description: present
-foundOn: career-ops-scan
+successfactors:rmk
+successfactors:csb
 ```
 
-Three bounded runs imported all three candidates. A fourth run found all three as existing and created no duplicates.
+Implemented:
 
-Final observed shared job IDs:
+- partition-specific execution guards, circuit breakers, cooldowns, rate observations, state, and summaries;
+- first-run migration of legacy shared SuccessFactors tenant state into the detected variant;
+- intentional retirement of the ambiguous shared SuccessFactors cooldown;
+- filter-independent provider canaries that never call Jobs and never enter import candidates;
+- shared provider fetch when a tracked target and canary resolve to the same tenant/variant;
+- CSB explicit-empty, schema, authentication, and nonempty outcome telemetry;
+- rolling per-tenant listing-volume baselines;
+- one-hour re-probe after a suspicious zero or at least 90% volume collapse;
+- confirmation of a new lower baseline after two fresh matching results;
+- separate listing and detail canary outcomes;
+- withdrawn-only detail samples classified as `inconclusive`, visible but non-degrading;
+- provider-variant warnings and notices in `summary.json`;
+- nonzero exit status for degraded health or invalid enabled canary configuration.
+
+A stateful validation run showed:
 
 ```text
-8954057d-e68c-4740-b798-a6a3cba50614
-08647249-8be0-4a31-abd6-d651ae1ef1bc
-f61c3482-b61c-4792-abe2-72359da312c7
+successfactors:csb: healthy
+jobsReturned: 61
+listingOutcome: listing_success_nonempty
+providerHealthWarnings: []
 ```
 
-### 6.8 Jobs create hardening completed
+RMK remains independently schedulable if CSB degrades.
 
-The Jobs service was hardened before live import:
+### 6.7 Current test baseline
 
-- duplicate-key handling was narrowed to relevant uniqueness failures;
-- location request rows were normalized and deduplicated;
-- location inserts became idempotent against both city and no-city unique indexes.
-
-This prevents scanner retries or duplicate location entries from failing a valid job create path.
-
-### 6.9 Conservative location normalization completed
-
-Implemented after detail enrichment:
-
-- preserve provider-native structured locations;
-- parse exact `City, Country` values for explicitly supported countries;
-- parse exact country-only and `Remote, Country` scope;
-- reject ambiguous multi-location strings;
-- never infer a country from a city alone;
-- write `location-results.json` and summary metrics.
-
-Validated preflight result:
+The current repository-wide scanner suite passes:
 
 ```text
-Munich, Germany
-→ Germany / DE / Munich
+297 tests
+297 pass
+0 fail
 ```
 
-The n8n raw multi-country value remained unparsed rather than generating guessed locations.
-
-### 6.10 Metrics clarification completed
-
-The misleading `missingDescriptions` metric was split into:
-
-```text
-candidateDescriptionsMissing
-missingDescriptionsForImport
-```
-
-Existing jobs can legitimately have no description in the current run object because detail fetching is skipped. That must not be reported as an import blocker.
-
-### 6.11 Confirmed test evidence
-
-The last explicitly recorded test run before location-normalizer additions passed 11 of 11 tests, including:
-
-- HTML conversion;
-- Greenhouse and Ashby detail behavior;
-- title/location/posting-age filters;
-- payload construction;
-- ambiguous create reconciliation;
-- import cap enforcement;
-- Jobs identity mapping;
-- preflight provenance preservation.
-
-Location normalization was subsequently validated through live preflight artifacts. The exact post-location total test count should be re-recorded in the next session rather than inferred.
+This is the baseline before Phase 5B.
 
 ---
 
 ## 7. Target component model
 
 ```text
-catalog synchronizer
+catalog synchronizers
         ↓
 machine-managed provider catalogs
         ↓
-target planner ← operator overrides
+target planner ← operator overrides and provider canaries
         ↓
-provider-aware scheduler and tenant state
+provider-aware scheduler, health partitions, and tenant state
         ↓
 provider adapters
         ↓
@@ -586,165 +599,109 @@ guarded import
 future per-user compatibility requests
 ```
 
-### 7.1 Catalog synchronizer
+### 7.1 Catalog synchronizers
 
-Responsibilities:
+Current implementation:
 
-- download selected tenant lists from job-board-aggregator;
-- validate schema and tenant identifiers;
-- record source, license, timestamp, item count, and SHA-256;
-- write atomically;
-- retain the previous valid catalog if refresh fails;
-- run independently of the scanner;
-- initially run manually, later on a thin weekly timer.
+- Ashby catalog synchronization;
+- atomic writes;
+- source metadata, item count, and SHA-256;
+- previous valid catalog retained when refresh fails;
+- independent manual command.
 
-Suggested storage:
+Phase 5B extends the same contract to:
 
 ```text
 data/catalogs/greenhouse.json
 data/catalogs/lever.json
-data/catalogs/ashby.json
 data/catalogs/workday.json
-data/catalog-state.json
 ```
 
 Catalogs are machine-managed. Operators should not hand-edit them.
 
+Provider-specific validation is required. Workday catalog entries must preserve the structured host, tenant, and career-site identity needed by the adapter rather than being flattened into an ambiguous string.
+
 ### 7.2 Operator policy
 
-Suggested committed file:
+Operator-owned inputs currently include:
 
 ```text
+config/portals.yml
 config/company-overrides.yml
-```
-
-Example:
-
-```yaml
-schema_version: 1
-
-priority:
-  greenhouse:
-    - celonis
-  ashby:
-    - n8n
-
-disabled:
-  greenhouse:
-    - noisy-company
-  workday:
-    - broken-tenant|wd5|External
-
-overrides:
-  workday:
-    special-company|wd3|Careers:
-      display_name: Special Company
-      max_pages: 10
-```
-
-Priority entries may refer to catalog tenants or define a tenant not yet present in the catalog.
-
-Disabled entries always win.
-
-### 7.3 Discovery policy
-
-Suggested committed file:
-
-```text
 config/discovery-policy.yml
 ```
 
-Example starting point:
+Policy responsibilities:
 
-```yaml
-schema_version: 1
+- tracked companies and cheap filters;
+- priority and disabled tenants;
+- provider-specific target patches;
+- provider budgets and request limits;
+- canary definitions and thresholds.
 
-providers:
-  greenhouse:
-    enabled: true
-    concurrency: 12
-    requests_per_second: 5
-    lookback_hours: 48
-    overlap_hours: 12
+Priority entries may refer to catalog tenants or define a tenant not yet present in a catalog. Disabled entries always win.
 
-  lever:
-    enabled: true
-    concurrency: 10
-    requests_per_second: 4
-    lookback_hours: 48
-    overlap_hours: 12
+### 7.3 Discovery policy
 
-  ashby:
-    enabled: true
-    concurrency: 3
-    requests_per_second: 1
-    lookback_hours: 48
-    overlap_hours: 12
+Provider policy contains independent controls for:
 
-  workday:
-    enabled: true
-    concurrency: 5
-    requests_per_second: 2
-    max_pages_per_tenant: 50
-    lookback_hours: 72
-    overlap_hours: 24
-```
+- enablement;
+- normal-target budget;
+- cadence;
+- concurrency;
+- minimum request interval;
+- page caps;
+- lookback and overlap;
+- breaker thresholds;
+- silent-empty monitoring defaults.
 
-These values are initial safety limits, not claimed optimums.
+Do not use one shared normal-target budget as the only control once multiple provider catalogs exist. Greenhouse, Lever, Ashby, and Workday have different request costs and should have independent bounded shards under a global hard ceiling.
 
 ### 7.4 Target planner
 
 Input:
 
 - provider catalogs;
+- tracked companies;
+- provider canaries;
 - operator priority and disabled lists;
 - provider policy;
 - tenant runtime state;
+- provider-variant cooldowns;
 - current run budget;
-- compound user profile constraints.
+- future compounded user profile constraints.
 
-Output should be an ordered plan artifact:
-
-```json
-{
-  "schemaVersion": 1,
-  "runId": "...",
-  "targets": [
-    {
-      "provider": "ashby",
-      "tenant": "n8n",
-      "priority": "priority",
-      "reason": "operator_priority",
-      "lookbackStartUtc": "...",
-      "state": "healthy"
-    }
-  ]
-}
-```
+Output is an ordered `target-plan.json` containing explicit source mode, provider variant, health partition, scheduling reason, and lookback.
 
 Ordering:
 
-1. operator priority tenants;
+1. due provider canaries and operator priority tenants;
 2. recently active tenants due for scan;
-3. healthy normal shard;
+3. healthy normal provider shards;
 4. long-empty tenants due for occasional scan;
 5. suspected/confirmed-dead re-probes.
 
-Disabled tenants are omitted.
+Disabled tenants are omitted. Provider shards must be allocated independently so one large catalog cannot starve the others indefinitely.
 
 ### 7.5 Tenant runtime state
 
-Suggested fields:
+State is scanner-owned and separate from operator policy.
+
+Representative fields:
 
 ```json
 {
   "schemaVersion": 1,
-  "provider": "ashby",
-  "tenant": "example",
+  "provider": "successfactors",
+  "providerVariant": "csb",
+  "healthPartition": "successfactors:csb",
+  "tenant": "wlgore.jobs.hr.cloud.sap",
   "lastAttemptAtUtc": null,
   "lastSuccessfulAtUtc": null,
-  "lastNewJobAtUtc": null,
+  "lastRelevantCandidateAtUtc": null,
   "lastResultCount": null,
+  "lastNonEmptyAtUtc": null,
+  "recentSuccessfulCounts": [],
   "consecutiveFailures": 0,
   "lastHttpStatus": null,
   "health": "healthy",
@@ -754,32 +711,36 @@ Suggested fields:
 }
 ```
 
-Keep operator policy outside runtime state.
+`lastRelevantCandidateAtUtc` means a posting passed scanner cheap filters. It does not claim Jobs proved the posting globally new.
 
 ### 7.6 Provider adapter contract
 
-Each provider should expose the minimum stable interface required by ATS Discovery:
+Current provider adapters expose the minimum stable interface required by ATS Discovery:
 
 ```js
 {
   id,
-  detect?,
-  fetch(target, httpContext)
+  source,
+  capabilities,
+  detect(entry),
+  tenant(entry),
+  sourceOrigin(entry),
+  fetch(entry, httpContext)
 }
 ```
 
-Provider output is adapted to the shared candidate shape before filters and API calls.
-
 Provider-specific behavior belongs in provider modules:
 
-- URL construction;
+- URL construction and target detection;
+- variant detection where applicable;
 - pagination;
 - supported server-side date filters;
 - posting timestamp extraction;
 - rate-limit signal interpretation;
 - durable versus transient errors;
 - provider-native structured locations;
-- list versus detail endpoint behavior.
+- list versus detail endpoint behavior;
+- acquisition mode and safe protocol diagnostics.
 
 Shared behavior must not be duplicated inside providers:
 
@@ -791,6 +752,33 @@ Shared behavior must not be duplicated inside providers:
 - artifact writing;
 - user matching.
 
+### 7.7 Provider canaries
+
+A provider canary is a priority health-only target. It:
+
+- bypasses title, location, posting-age, salary, and content filters;
+- does not call Jobs preflight;
+- is never submitted to import;
+- may sample a bounded number of details;
+- uses normal offline cadence and runtime state;
+- shares a fetch with a matching tracked target when possible.
+
+Canaries are appropriate for protocols where a response can appear healthy while silently returning no parseable jobs.
+
+Current CSB protections distinguish:
+
+```text
+listing_success_nonempty
+listing_success_explicit_empty
+listing_empty_anomaly
+listing_volume_anomaly
+listing_schema_error
+listing_auth_error
+listing_transport_error
+```
+
+A historically nonempty CSB tenant receives a short re-probe after zero jobs or a drop of at least 90% from its rolling baseline. A repeated fresh result may establish a new lower baseline.
+
 ---
 
 ## 8. Scan cadence and rate strategy
@@ -799,11 +787,14 @@ Shared behavior must not be duplicated inside providers:
 
 The scanner is primarily local, so cloud compute cost does not dictate cadence. Timeliness and respectful source behavior do.
 
-Recommended initial objectives:
+Current objectives:
 
 ```text
 priority tenants:
   daily, processed first
+
+provider protocol canaries:
+  daily unless evidence supports a different cadence
 
 recently active normal tenants:
   daily or every 48 hours
@@ -816,6 +807,9 @@ long-empty healthy tenants:
 
 suspected or confirmed dead tenants:
   monthly re-probe
+
+suspicious zero or severe volume collapse:
+  fresh-session re-probe after approximately one hour
 ```
 
 A two-week default for all healthy normal tenants is rejected because relevant postings may be stale before discovery.
@@ -824,36 +818,48 @@ The exact sweep target is empirical. If source limits make a 2–3 day sweep uns
 
 ### 8.2 Circuit breaking
 
-Per-provider circuit breaker should stop or pause work when a threshold is exceeded, for example:
+Circuit breakers operate by health partition where required.
+
+Examples:
+
+```text
+ashby
+workday
+successfactors:rmk
+successfactors:csb
+```
+
+A partition breaker may stop or pause work after:
 
 - repeated `429` responses;
 - elevated transient error rate;
 - sustained latency increase;
 - provider-specific anti-bot response;
 - pagination anomaly;
-- unexpected response-schema failure.
+- unexpected response-schema failure;
+- repeated authentication/bootstrap failure.
 
-A provider breaker must not disable unrelated providers.
-
-A tenant failure must not disable the whole provider unless evidence indicates a provider-wide issue.
+A CSB breaker must not disable RMK. A tenant failure must not disable the whole partition unless evidence indicates a partition-wide problem. Repeated tenant `404`/`410` results remain tenant-level durable failures.
 
 ### 8.3 Rate tuning
 
 Start with explicit static limits and measured diagnostics.
 
-Record per provider:
+Record per provider and health partition:
 
-- requests;
-- successful responses;
+- targets planned, attempted, and skipped;
+- requests and successful responses;
 - `429` count;
 - transient and durable errors;
 - p50/p95 latency;
 - jobs returned;
+- listing outcomes and anomalies;
 - candidates retained;
 - tenants skipped by cooldown;
-- breaker activations.
+- breaker activations;
+- canary health.
 
-Initial tuning should be semi-automatic:
+Initial tuning remains semi-automatic:
 
 1. scanner records evidence;
 2. summary recommends increasing, retaining, or decreasing limits;
@@ -866,7 +872,7 @@ Do not implement autonomous rate tuning before several real runs provide a basel
 
 ## 9. Candidate and observation model
 
-Candidate acquisition source must not leak into the downstream contract.
+Candidate acquisition source must not leak into the downstream Jobs contract, but scanner provenance must retain enough evidence to diagnose acquisition.
 
 Example normalized candidate:
 
@@ -875,7 +881,8 @@ Example normalized candidate:
   "schemaVersion": 1,
   "sourceMode": "catalog",
   "sourceProvider": "greenhouse",
-  "sourceCompany": "celonis",
+  "sourceTenant": "celonis",
+  "sourceCompany": "Celonis",
   "url": "https://job-boards.greenhouse.io/celonis/jobs/7798592003",
   "applyUrl": null,
   "foundOn": "ats-discovery",
@@ -889,16 +896,25 @@ Example normalized candidate:
   "remoteType": null,
   "description": null,
   "postedAtUtc": null,
-  "sourceMeta": {
-    "providerImplementationOrigin": "santifer/career-ops",
-    "providerImplementationRef": "...",
-    "catalogOrigin": "Feashliaa/job-board-aggregator",
-    "catalogSha256": "..."
+  "provenance": {
+    "providerNativeId": "7798592003",
+    "sourceOrigin": "https://job-boards.greenhouse.io",
+    "acquisitionMode": "greenhouse-api",
+    "providerImplementation": {
+      "repository": "santifer/career-ops",
+      "file": "providers/greenhouse.mjs",
+      "ref": "...",
+      "license": "MIT"
+    },
+    "catalog": {
+      "repository": "Feashliaa/job-board-aggregator",
+      "sha256": "..."
+    }
   }
 }
 ```
 
-The shared `JobOffering.FoundOn` field is insufficient to represent every observation. Future analytics should keep discovery-run observations separately if source coverage, match rates, or repeated sightings need analysis.
+The shared `JobOffering.FoundOn` field is insufficient to represent every observation. Future analytics should keep discovery-run observations separately if source coverage, match rates, repeated sightings, or acquisition-mode health need analysis.
 
 ---
 
@@ -948,48 +964,55 @@ Do not fetch the same description or create the same shared job separately for e
 
 ---
 
-## 11. Provider roadmap
+## 11. Provider and catalog roadmap
 
-Provider count is not an acceptance criterion. Data quality and relevance are.
+Provider count is not an acceptance criterion. Data quality, relevance, operational safety, and maintenance cost are.
 
-### 11.1 Proven base
+### 11.1 Accepted providers
 
 - Greenhouse;
 - Lever;
 - Ashby;
-- Workday.
-
-### 11.2 Next DACH-relevant evaluation group
-
-Evaluate current Career-Ops implementations and compare with other references:
-
-- SuccessFactors;
+- Workday;
 - Personio;
 - SmartRecruiters;
-- Softgarden.
+- Softgarden;
+- SuccessFactors RMK;
+- SuccessFactors CSB.
 
-SuccessFactors is important for large DACH employers but should be added after the catalog planner, provider policy, and runtime state are stable.
+### 11.2 Phase 5B catalog expansion
 
-### 11.3 Later candidates
+Add machine-managed catalogs for providers already accepted locally and supported by the selected upstream catalog source:
 
-Adopt only when demand and candidate quality justify maintenance:
+- Greenhouse;
+- Lever;
+- Workday.
 
-- BambooHR;
-- Workable;
-- Teamtailor;
-- Recruitee;
-- Avature;
-- Phenom;
-- iCIMS;
-- Paylocity;
-- other provider-specific sources.
+Ashby remains the proven catalog baseline.
+
+Phase 5B must generalize catalog synchronization and planning rather than creating three unrelated copies of Ashby-specific code.
+
+### 11.3 Deferred providers and catalogs
+
+Out of scope for this milestone:
+
+- BambooHR ingestion;
+- iCIMS ingestion;
+- Paylocity ingestion;
+- Personio tenant catalog discovery;
+- SmartRecruiters tenant catalog discovery;
+- Softgarden tenant catalog discovery;
+- SuccessFactors tenant catalog discovery.
+
+These limitations are tracked in issues #3 and #4.
 
 ### 11.4 Provider acceptance matrix
 
 | Capability | Requirement |
 |---|---|
 | Stable origin URL | Required |
-| Canonical identity derivable by Jobs | Required |
+| Canonical identity derivable by Jobs | Required, or an explicit cross-domain issue and import guard must exist |
+| Provider-native identity retained in provenance | Required |
 | Title | Required |
 | Hiring company | Required |
 | Description or reliable detail route | Required before compatibility/import |
@@ -998,6 +1021,8 @@ Adopt only when demand and candidate quality justify maintenance:
 | Bounded pagination | Required |
 | Known request policy | Required |
 | Durable/transient failure distinction | Required |
+| Variant health isolation | Required when a provider family contains materially different protocols |
+| Silent-empty protection or canary | Required for protocols that can fail with superficially successful responses |
 | Tests or fixtures | Required |
 | Attribution and pinned origin | Required when derived |
 
@@ -1005,51 +1030,59 @@ Adopt only when demand and candidate quality justify maintenance:
 
 ## 12. Artifacts and observability
 
-Every run should retain enough evidence to diagnose source and filtering behavior without replaying live requests.
+Every run should retain enough evidence to diagnose source, planning, health, filtering, and Jobs behavior without replaying live requests.
 
-Existing artifacts:
+Implemented artifacts:
 
 ```text
 metadata.json
 summary.json
+target-plan.json
+provider-results.json
+provider-canary-results.json        when canaries are evaluated
 candidates.json
 rejected.json
 preflight-results.json
 detail-results.json
 location-results.json
 import-results.json
-```
-
-Planned additions:
-
-```text
-target-plan.json
-provider-results.json
 tenant-state-changes.json
-user-match-results.json
 rate-observations.json
 ```
 
-Summary should report at least:
+Future artifact:
 
-- targets planned/attempted/skipped;
-- priority versus normal targets;
-- provider request counts;
-- provider errors and `429`s;
-- breaker activation;
-- raw jobs;
-- retained candidates;
+```text
+user-match-results.json
+```
+
+Summary currently reports:
+
+- targets planned, attempted, and skipped;
+- priority, canary, normal, and catalog counts;
+- provider and provider-variant health;
+- partition-specific planning and cooldown skips;
+- provider errors, rate limits, and breaker activation;
+- listing outcomes, empty anomalies, and volume anomalies;
+- provider canary healthy/degraded/inconclusive counts;
+- raw jobs and retained candidates;
 - rejection reasons;
 - preflight existing/missing/errors;
 - detail outcomes;
 - location normalization outcomes;
 - import outcomes;
-- user cheap-match counts;
-- compatibility requests when implemented;
 - catalog source/hash/count;
-- effective lookback window.
+- effective lookback window;
+- tenant-state and re-probe changes;
+- rate recommendations.
 
-Avoid logging secrets, CV content, or full sensitive user profiles.
+Future multi-user summaries should add:
+
+- user cheap-match counts;
+- per-user candidate counts;
+- compatibility requests and outcomes.
+
+Avoid logging secrets, cookies, CSRF tokens, CV content, or full sensitive user profiles.
 
 ---
 
@@ -1069,9 +1102,15 @@ Advantages:
 
 ### 13.2 Local scheduling
 
-After the target planner is stable, add a host timer or lightweight local scheduler that starts a run-to-completion container once per day.
+Phase 7 adds a host timer or lightweight local scheduler that starts a run-to-completion container once per day.
 
-Prevent overlapping runs with a global lock and stale-lock recovery.
+Requirements:
+
+- prevent overlapping runs with a global lock;
+- recover stale locks;
+- retain state backups and bounded artifacts;
+- schedule catalog refresh independently from scan execution;
+- expose degraded provider-variant and canary results as operator-visible failures.
 
 ### 13.3 GCP Cloud Run Job later
 
@@ -1110,12 +1149,13 @@ career-ops-scan
 → ats-discovery
 ```
 
-4. Keep the three existing canary jobs unchanged as historical evidence.
+4. Keep the existing canary jobs unchanged as historical evidence.
 5. Update paths in tests, documentation, Docker commands, and CI.
 6. Replace or clearly mark `copy-upstream-providers.sh` as bootstrap-only.
 7. Ensure notices still distinguish Career-Ops-derived code and job-board-aggregator catalogs.
+8. Preserve provider-family, provider-variant, health-partition, and acquisition-mode terminology.
 
-The rename is cleanup, not a prerequisite for the next catalog-planner experiment.
+The rename is cleanup, not a prerequisite for Phase 5B.
 
 ---
 
@@ -1142,24 +1182,23 @@ The rename is cleanup, not a prerequisite for the next catalog-planner experimen
 - idempotent live canaries;
 - run artifacts and metrics.
 
-### Phase 2 — Catalog and target-planner foundation — next
+### Phase 2 — Ashby catalog and target-planner foundation — completed
 
-- define catalog file contract;
-- add one catalog synchronizer, beginning with Ashby;
-- define `company-overrides.yml`;
-- define provider discovery policy;
-- merge catalog, priority, disabled, and runtime state;
-- write ordered `target-plan.json`;
-- keep execution offline for the first bounded shard;
-- prove priority tenants are processed first;
-- prove disabled tenants are omitted;
-- prove catalog refresh does not overwrite overrides.
+- catalog file contract;
+- Ashby catalog synchronizer;
+- operator priority and disabled policy;
+- provider discovery policy;
+- catalog/override/runtime-state merge;
+- ordered `target-plan.json`;
+- bounded offline catalog shard;
+- priority-first and disabled-wins behavior;
+- atomic refresh without overwriting overrides.
 
-### Phase 3 — Provider-aware scheduling and health
+### Phase 3 — Provider-aware scheduling and health — completed
 
-- persist tenant runtime state;
+- persistent tenant runtime state;
 - rotating healthy shards;
-- recent-activity promotion;
+- relevant-activity promotion;
 - long-empty demotion;
 - monthly dead-tenant re-probe;
 - provider circuit breakers;
@@ -1167,22 +1206,51 @@ The rename is cleanup, not a prerequisite for the next catalog-planner experimen
 - operator-reviewed rate recommendations;
 - bounded date lookback with overlap.
 
-### Phase 4 — Catalog-backed live preflight and import
+### Phase 4 — Catalog-backed live preflight and import — completed
 
-- enable Jobs preflight for a bounded catalog shard;
-- quantify existing/new ratio;
-- fetch details only for missing candidates;
-- import under a small explicit cap;
-- confirm idempotency;
-- scale shard size gradually.
+- bounded catalog preflight;
+- existing/new ratio metrics;
+- missing-only detail fetching;
+- small explicit import cap;
+- replay-safe create reconciliation;
+- location-scope hardening;
+- TTY progress display;
+- gradual shard scaling controls.
 
-### Phase 5 — Provider expansion
+### Phase 5 — Provider expansion and protocol hardening — completed
 
-- inspect current Career-Ops providers and job-board-aggregator behavior;
-- add providers based on DACH relevance and acceptance matrix;
-- likely order: SuccessFactors, Personio, SmartRecruiters, Softgarden;
-- add provider fixtures and request policies;
-- record source provenance per provider.
+- Personio;
+- SmartRecruiters;
+- Softgarden;
+- SuccessFactors RMK and CSB;
+- provider fixtures and request policies;
+- pinned source provenance;
+- title-boundary correction;
+- RMK HTML detail fallback;
+- CSB session/CSRF listing support;
+- CSB detail-session handling and withdrawn-job classification;
+- SuccessFactors RMK/CSB health partitioning;
+- CSB canary, silent-empty, and volume-collapse protection;
+- provider-variant observability.
+
+Known Phase 5 qualification:
+
+- Jobs canonical identity for SuccessFactors CSB URLs is tracked in issue #2 and remains outside scanner ownership.
+
+### Phase 5B — Greenhouse, Lever, and Workday catalogs — next
+
+- generalize the Ashby catalog synchronizer and file contract;
+- add Greenhouse, Lever, and Workday catalog adapters;
+- validate and normalize provider-specific catalog identities;
+- keep separate catalog files and metadata per provider;
+- preserve operator priority, disabled, and patch layers;
+- add independent provider shard budgets under a global hard ceiling;
+- prevent one large catalog from starving other providers;
+- expose per-catalog count, hash, eligibility, planned-target, and sweep metrics;
+- begin with bounded offline shards;
+- retain explicit live-catalog preflight/import gates;
+- do not add unsupported providers or new catalog-discovery crawlers;
+- do not add automatic catalog refresh scheduling yet.
 
 ### Phase 6 — Multi-user discovery
 
@@ -1197,10 +1265,11 @@ The rename is cleanup, not a prerequisite for the next catalog-planner experimen
 ### Phase 7 — Scheduled operations
 
 - local daily run;
-- global lock;
+- global lock and stale-lock recovery;
 - state backup and artifact retention;
-- catalog refresh timer;
-- operational summary and failure alerting.
+- independent catalog refresh timer;
+- operational summary and failure alerting;
+- propagate degraded provider-variant and canary exit status to the operator.
 
 ### Phase 8 — Optional GCP Cloud Run Job
 
@@ -1214,53 +1283,81 @@ The rename is cleanup, not a prerequisite for the next catalog-planner experimen
 
 - merge stabilized architecture into `system-design.md`;
 - archive this milestone document;
-- retain journal and attribution notices.
+- retain journal, issue links, and attribution notices.
 
 ---
 
-## 16. Acceptance criteria
+## 16. Milestone acceptance criteria
 
 The milestone is complete when:
 
 - ATS Discovery has an Ehestifter-owned provider and candidate contract;
-- catalogs and operator overrides are separate;
+- Ashby, Greenhouse, Lever, and Workday catalogs use a common machine-managed contract;
+- catalogs and operator overrides remain separate;
 - priority, normal, disabled, cooldown, and dead concepts are represented correctly;
-- priority tenants run before catalog shards;
+- priority tenants and health canaries run before normal catalog shards;
 - healthy normal tenants are scanned on a measured, timely rotating cadence;
 - provider-side date filtering is used where supported with overlap;
-- rate limits trigger provider-aware cooldown rather than uncontrolled retries;
+- rate limits trigger provider-aware or variant-aware cooldown rather than uncontrolled retries;
+- materially different provider protocols cannot silently disable one another;
+- high-risk protocols have canary or equivalent silent-empty protection;
 - tenant scans are shared across users;
 - candidate filters prevent obviously irrelevant jobs from reaching compatibility;
 - Jobs API remains authoritative for canonical identity and persistence;
 - detail fetches occur only when needed;
 - imports are capped, replay-safe, and idempotent;
 - compatibility is requested per matched user without creating statuses;
-- at least the proven four providers remain operational;
-- additional providers are adopted only through the acceptance matrix;
+- the accepted provider set remains operational through its acceptance matrix;
+- deferred provider/catalog limitations are documented in issues #2–#4 as applicable;
 - all derived code and catalogs retain attribution and source revisions;
-- local scheduled operation is stable;
+- local scheduled operation is stable and surfaces degraded health;
 - scanner and provenance naming are changed to ATS Discovery before merge.
+
+Current milestone status:
+
+```text
+Phases 0–5: complete
+Phase 5B: next
+Phases 6–9: pending
+Current tests: 297 passing
+```
 
 ---
 
 ## 17. Immediate next coding-agent task
 
-Implement **Phase 2A: catalog and target-planner foundation**, without adding another scan pipeline.
+Implement **Phase 5B: Greenhouse, Lever, and Workday catalogs**, without adding unsupported providers or another scan pipeline.
 
 Concrete target:
 
 1. Keep the existing scanner and current directory name temporarily.
-2. Add a machine-managed Ashby catalog loader using `data/ashby_companies.json` from job-board-aggregator.
-3. Store catalog metadata and SHA-256 atomically under `/data/catalogs`.
-4. Replace the current assumption that `portals.yml` is the complete target list.
-5. Treat the existing tracked companies as priority overrides.
-6. Add an explicit disabled list.
-7. Produce `target-plan.json` containing priority targets first, then at most 100 healthy Ashby catalog targets.
-8. Run the planned targets in `--offline` mode only.
-9. Record per-target provider result and rejection reason.
-10. Do not enable catalog-wide preflight or import yet.
+2. Generalize the current Ashby catalog contract, loader, synchronizer, metadata, and atomic-write utilities.
+3. Add machine-managed catalogs for Greenhouse, Lever, and Workday from the selected job-board-aggregator source files.
+4. Keep one file per provider under `/data/catalogs`.
+5. Preserve source URL/path, pinned revision when available, license, fetch time, SHA-256, and item count.
+6. Add provider-specific catalog validation and normalization.
+7. Represent Workday targets with the structured host/tenant/site identity required by the provider.
+8. Merge each catalog with tracked priority targets, disabled overrides, and provider-specific patches.
+9. Add independent bounded normal-target budgets for Ashby, Greenhouse, Lever, and Workday under the existing global hard ceiling.
+10. Allocate deterministic provider shards so a large catalog cannot starve another provider.
+11. Extend `target-plan.json`, `summary.json`, and rate/sweep diagnostics with per-catalog metrics.
+12. Run catalog targets in bounded `--offline` mode first.
+13. Preserve the explicit `--catalog-targets` and configuration gates for catalog-backed preflight/import.
+14. Do not add BambooHR, iCIMS, Paylocity, or new tenant-discovery crawlers.
+15. Do not add the Phase 7 catalog refresh timer.
+16. Add fixtures and tests for successful synchronization, malformed entries, atomic refresh failure, priority/disabled precedence, provider budgets, starvation prevention, and deterministic planning.
+17. Keep all first-session validation commands Docker-only.
 
-First-session validation commands should remain Docker-only.
+Suggested initial offline rollout—not a committed optimum:
+
+```text
+Ashby:       1 target per run
+Greenhouse: 10 targets per run
+Lever:      10 targets per run
+Workday:     2 targets per run
+```
+
+Raise one provider at a time only after inspecting rate limits, durable failures, latency, healthy-empty ratios, candidate yield, and sweep feasibility.
 
 ---
 
@@ -1273,3 +1370,7 @@ First-session validation commands should remain Docker-only.
 - [job-board-aggregator scraper](https://github.com/Feashliaa/job-board-aggregator/blob/main/scripts/scraper.py)
 - [job-board-aggregator tenant catalogs](https://github.com/Feashliaa/job-board-aggregator/tree/main/data)
 - [job-board-aggregator license](https://github.com/Feashliaa/job-board-aggregator/blob/main/LICENSE)
+- [Ehestifter issue #1](https://github.com/Solanum-basilicus/ehestifter/issues/1)
+- [Ehestifter issue #2](https://github.com/Solanum-basilicus/ehestifter/issues/2)
+- [Ehestifter issue #3](https://github.com/Solanum-basilicus/ehestifter/issues/3)
+- [Ehestifter issue #4](https://github.com/Solanum-basilicus/ehestifter/issues/4)
