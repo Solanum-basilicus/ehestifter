@@ -187,6 +187,12 @@ export function buildRunSummary({
   requestedMaxCreates = null,
   canaryResults = null,
   policy,
+  discoveryUsers = null,
+  multiUserEnabled = discoveryUsers != null,
+  discoveryUsersError = null,
+  userMatchResults = null,
+  compatibilityResults = null,
+  targetsSkippedNoEligibleUsers = 0,
 }) {
   const providerResults = scanResult.providerResults;
   const attempted = providerResults.filter((result) => result.status !== 'skipped');
@@ -279,6 +285,7 @@ export function buildRunSummary({
       (result) => result.skipReason === 'provider_circuit_open',
     ),
     targetsSkippedBySchedule: targetPlan.counts.skippedTotal,
+    targetsSkippedNoEligibleUsers,
     priorityTargets: targetPlan.counts.priority,
     canaryTargets: targetPlan.counts.canary ?? 0,
     normalTargets: targetPlan.counts.normal,
@@ -393,6 +400,36 @@ export function buildRunSummary({
       (item) => item.recommendation.action === 'consider_increase',
     ),
 
+    multiUserEnabled,
+    discoveryUsersLoadStatus: !multiUserEnabled
+      ? 'disabled'
+      : discoveryUsersError == null ? 'ok' : 'error',
+    discoveryUsersLoadError: discoveryUsersError,
+    discoveryUsersEligible: multiUserEnabled
+      ? discoveryUsers?.length ?? 0
+      : null,
+    discoveryUsersWithSavedFilters: multiUserEnabled
+      ? count(discoveryUsers ?? [], (user) => user.hasSavedFilters)
+      : null,
+    discoveryUsersWithValidProfiles: multiUserEnabled
+      ? count(discoveryUsers ?? [], (user) => user.profiles.length > 0)
+      : null,
+    discoveryUsersFailingClosed: multiUserEnabled
+      ? count(
+        discoveryUsers ?? [],
+        (user) => user.hasSavedFilters && user.profiles.length === 0,
+      )
+      : null,
+    candidatesRejectedNoUserMatch: count(
+      scanResult.rejected,
+      (item) => item.reason === 'no_user_match',
+    ),
+    userCandidateMatches: scanResult.candidates.reduce(
+      (total, job) => total + (job.matchedUserIds?.length ?? 0),
+      0,
+    ),
+    userMatchArtifactCandidates: userMatchResults?.matches.length ?? 0,
+
     candidates: scanResult.candidates.length,
     priorityCandidates: count(
       scanResult.candidates,
@@ -481,6 +518,34 @@ export function buildRunSummary({
         && job.import.status.startsWith('skipped_'),
     ),
     importErrors: count(evaluated, (job) => job.import?.status === 'error'),
+
+    compatibilityPairs: compatibilityResults?.totalPairs ?? 0,
+    compatibilityEvaluated: compatibilityResults?.evaluatedPairs ?? 0,
+    compatibilityOmittedByPairLimit: compatibilityResults?.omittedPairs ?? 0,
+    compatibilityRequested: count(
+      compatibilityResults?.results ?? [],
+      (item) => item.status === 'requested',
+    ),
+    compatibilityAlreadyActive: count(
+      compatibilityResults?.results ?? [],
+      (item) => item.status === 'skipped_active',
+    ),
+    compatibilityAlreadySucceeded: count(
+      compatibilityResults?.results ?? [],
+      (item) => [
+        'skipped_succeeded_current_cv',
+        'skipped_succeeded_unknown_cv',
+      ].includes(item.status),
+    ),
+    compatibilitySkippedRequestLimit: count(
+      compatibilityResults?.results ?? [],
+      (item) => item.status === 'skipped_request_limit',
+    ),
+    compatibilityErrors: count(
+      compatibilityResults?.results ?? [],
+      (item) => item.status === 'error_latest_check'
+        || item.status === 'error_request',
+    ),
 
     locationProviderStructured: count(
       evaluated,

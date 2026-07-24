@@ -44,6 +44,14 @@ function booleanValue(value, fallback, name) {
   return value;
 }
 
+function enumValue(value, fallback, name, allowed) {
+  if (value == null) return fallback;
+  if (typeof value !== 'string' || !allowed.includes(value)) {
+    throw new Error(`${name} must be one of: ${allowed.join(', ')}`);
+  }
+  return value;
+}
+
 async function readSecret({ env, envName, fileEnvName }) {
   const direct = env[envName];
   if (direct?.trim()) return direct.trim();
@@ -129,6 +137,13 @@ export async function loadRuntimeConfig({
   const imports = requireObject(raw.imports ?? {}, 'imports');
   const liveCatalog = requireObject(raw.liveCatalog ?? {}, 'liveCatalog');
   const jobsApi = requireObject(raw.jobsApi ?? {}, 'jobsApi');
+  const usersApi = requireObject(raw.usersApi ?? {}, 'usersApi');
+  const enrichmentApi = requireObject(raw.enrichmentApi ?? {}, 'enrichmentApi');
+  const multiUser = requireObject(raw.multiUser ?? {}, 'multiUser');
+  const compatibility = requireObject(
+    multiUser.compatibility ?? {},
+    'multiUser.compatibility',
+  );
   const careerOps = requireObject(raw.careerOps ?? {}, 'careerOps');
 
   const dataPath = requireString(paths.data, 'paths.data');
@@ -227,6 +242,87 @@ export async function loadRuntimeConfig({
       ),
       functionKey: null,
     },
+    usersApi: {
+      baseUrl: typeof usersApi.baseUrl === 'string'
+        ? usersApi.baseUrl.replace(/\/$/, '')
+        : '',
+      timeoutMs: positiveInteger(
+        usersApi.timeoutMs,
+        15_000,
+        'usersApi.timeoutMs',
+      ),
+      retryCount: nonNegativeInteger(
+        usersApi.retryCount,
+        2,
+        'usersApi.retryCount',
+      ),
+      maxUsersPerRun: positiveInteger(
+        usersApi.maxUsersPerRun,
+        100,
+        'usersApi.maxUsersPerRun',
+        { max: 1000 },
+      ),
+      functionKey: null,
+    },
+    enrichmentApi: {
+      baseUrl: typeof enrichmentApi.baseUrl === 'string'
+        ? enrichmentApi.baseUrl.replace(/\/$/, '')
+        : '',
+      timeoutMs: positiveInteger(
+        enrichmentApi.timeoutMs,
+        20_000,
+        'enrichmentApi.timeoutMs',
+      ),
+      retryCount: nonNegativeInteger(
+        enrichmentApi.retryCount,
+        2,
+        'enrichmentApi.retryCount',
+      ),
+      functionKey: null,
+    },
+    multiUser: {
+      enabled: booleanValue(multiUser.enabled, false, 'multiUser.enabled'),
+      portalFiltersMode: enumValue(
+        multiUser.portalFiltersMode,
+        'global_gate',
+        'multiUser.portalFiltersMode',
+        ['global_gate', 'scope_only'],
+      ),
+      compatibility: {
+        enabled: booleanValue(
+          compatibility.enabled,
+          false,
+          'multiUser.compatibility.enabled',
+        ),
+        enricherType: typeof compatibility.enricherType === 'string'
+          && compatibility.enricherType.trim()
+          ? compatibility.enricherType.trim()
+          : 'compatibility.v1',
+        concurrency: positiveInteger(
+          compatibility.concurrency,
+          2,
+          'multiUser.compatibility.concurrency',
+          { max: 10 },
+        ),
+        maxPairsPerRun: positiveInteger(
+          compatibility.maxPairsPerRun,
+          100,
+          'multiUser.compatibility.maxPairsPerRun',
+          { max: 1000 },
+        ),
+        maxRequestsPerRun: positiveInteger(
+          compatibility.maxRequestsPerRun,
+          20,
+          'multiUser.compatibility.maxRequestsPerRun',
+          { max: 200 },
+        ),
+        refreshSucceededWithUnknownCvVersion: booleanValue(
+          compatibility.refreshSucceededWithUnknownCvVersion,
+          false,
+          'multiUser.compatibility.refreshSucceededWithUnknownCvVersion',
+        ),
+      },
+    },
     careerOps: {
       upstreamRef: requireString(
         careerOps.upstreamRef,
@@ -278,6 +374,24 @@ export async function loadRuntimeConfig({
     throw new Error(`Unknown config operation: ${operation}`);
   }
 
+  if (operation === 'scan' && config.multiUser.enabled) {
+    config.usersApi.baseUrl = requireString(
+      config.usersApi.baseUrl,
+      'usersApi.baseUrl',
+    );
+    config.usersApi.functionKey = await readSecret({
+      env,
+      envName: 'EHESTIFTER_USERS_FUNCTION_KEY',
+      fileEnvName: 'EHESTIFTER_USERS_FUNCTION_KEY_FILE',
+    });
+    if (!config.usersApi.functionKey) {
+      throw new Error(
+        'Multi-user discovery requires EHESTIFTER_USERS_FUNCTION_KEY '
+        + 'or EHESTIFTER_USERS_FUNCTION_KEY_FILE',
+      );
+    }
+  }
+
   if (mode === 'preflight' || mode === 'import') {
     config.jobsApi.baseUrl = requireString(
       config.jobsApi.baseUrl,
@@ -296,6 +410,27 @@ export async function loadRuntimeConfig({
     }
     if (mode === 'import' && !config.imports.enabled) {
       throw new Error('Import mode requires imports.enabled=true');
+    }
+    if (
+      mode === 'import'
+      && config.multiUser.enabled
+      && config.multiUser.compatibility.enabled
+    ) {
+      config.enrichmentApi.baseUrl = requireString(
+        config.enrichmentApi.baseUrl,
+        'enrichmentApi.baseUrl',
+      );
+      config.enrichmentApi.functionKey = await readSecret({
+        env,
+        envName: 'EHESTIFTER_ENRICHERS_FUNCTION_KEY',
+        fileEnvName: 'EHESTIFTER_ENRICHERS_FUNCTION_KEY_FILE',
+      });
+      if (!config.enrichmentApi.functionKey) {
+        throw new Error(
+          'Compatibility requests require EHESTIFTER_ENRICHERS_FUNCTION_KEY '
+          + 'or EHESTIFTER_ENRICHERS_FUNCTION_KEY_FILE',
+        );
+      }
     }
   }
 

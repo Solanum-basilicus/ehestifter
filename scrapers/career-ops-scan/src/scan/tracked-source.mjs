@@ -140,6 +140,8 @@ export async function runTrackedScan({
   sleep,
   httpContextFactory = makeHttpCtx,
   onProgress = null,
+  candidateMatcher = null,
+  applyPortalCandidateFilters = true,
 }) {
   if (!portalConfig || typeof portalConfig !== 'object' || Array.isArray(portalConfig)) {
     throw new Error('portalConfig must be an object');
@@ -151,6 +153,9 @@ export async function runTrackedScan({
   }
   if (!Number.isInteger(maxCandidates) || maxCandidates <= 0) {
     throw new Error('maxCandidates must be a positive integer');
+  }
+  if (typeof applyPortalCandidateFilters !== 'boolean') {
+    throw new Error('applyPortalCandidateFilters must be a boolean');
   }
 
   const titleEvaluator = buildTitleEvaluator(portalConfig.title_filter);
@@ -275,13 +280,20 @@ export async function runTrackedScan({
         continue;
       }
       seenUrls.add(candidate.url);
-      const titleEvaluation = titleEvaluator(candidate.title);
-      if (!titleEvaluation.allowed) {
-        rejected.push(reject('title_filter', candidate, {
-          positiveMatches: titleEvaluation.positiveMatches,
-          negativeMatches: titleEvaluation.negativeMatches,
-        }));
-        continue;
+      let titleEvaluation = {
+        allowed: true,
+        positiveMatches: [],
+        negativeMatches: [],
+      };
+      if (applyPortalCandidateFilters) {
+        titleEvaluation = titleEvaluator(candidate.title);
+        if (!titleEvaluation.allowed) {
+          rejected.push(reject('title_filter', candidate, {
+            positiveMatches: titleEvaluation.positiveMatches,
+            negativeMatches: titleEvaluation.negativeMatches,
+          }));
+          continue;
+        }
       }
       const locationScope = locationScopeFilter(candidate.rawLocation);
       if (!locationScope.allowed) {
@@ -293,7 +305,7 @@ export async function runTrackedScan({
         }));
         continue;
       }
-      if (!locationFilter(candidate.rawLocation)) {
+      if (applyPortalCandidateFilters && !locationFilter(candidate.rawLocation)) {
         rejected.push(reject('location_filter', candidate));
         continue;
       }
@@ -304,17 +316,40 @@ export async function runTrackedScan({
         rejected.push(reject('posting_age_filter', candidate));
         continue;
       }
-      if (!salaryFilter(candidate.salary)) {
+      if (applyPortalCandidateFilters && !salaryFilter(candidate.salary)) {
         rejected.push(reject('salary_filter', candidate));
         continue;
       }
-      const matched = matchedTitleKeywords(
-        candidate.title,
-        portalConfig.title_filter,
-      );
-      if (!contentFilter(candidate.description, matched)) {
+      const matched = applyPortalCandidateFilters
+        ? matchedTitleKeywords(candidate.title, portalConfig.title_filter)
+        : [];
+      if (
+        applyPortalCandidateFilters
+        && !contentFilter(candidate.description, matched)
+      ) {
         rejected.push(reject('content_filter', candidate));
         continue;
+      }
+      if (candidateMatcher) {
+        let userMatch;
+        try {
+          userMatch = candidateMatcher(candidate);
+        } catch (error) {
+          rejected.push(reject('user_match_error', candidate, {
+            error: error instanceof Error ? error.message : String(error),
+          }));
+          continue;
+        }
+        if (!userMatch?.allowed) {
+          rejected.push(reject('no_user_match', candidate));
+          continue;
+        }
+        candidate.matchedUserIds = [...userMatch.matchedUserIds];
+        candidate.userMatch = {
+          matchedProfiles: Array.isArray(userMatch.matchedProfiles)
+            ? userMatch.matchedProfiles
+            : [],
+        };
       }
 
       const providerResult = resultBySequence.get(batch.target.sequence);

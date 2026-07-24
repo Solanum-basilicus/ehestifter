@@ -30,6 +30,8 @@ export async function writeRunArtifacts({
   tenantStateChanges,
   rateObservations,
   canaryResults,
+  userMatchResults,
+  compatibilityResults,
   candidates,
   rejected,
   preflightResults,
@@ -72,6 +74,18 @@ export async function writeRunArtifacts({
       await writeJsonAtomic(
         path.join(stagingPath, 'provider-canary-results.json'),
         { ...canaryResults, runId },
+      );
+    }
+    if (userMatchResults) {
+      await writeJsonAtomic(
+        path.join(stagingPath, 'user-match-results.json'),
+        { ...userMatchResults, runId },
+      );
+    }
+    if (compatibilityResults) {
+      await writeJsonAtomic(
+        path.join(stagingPath, 'compatibility-results.json'),
+        { ...compatibilityResults, runId },
       );
     }
     await writeJsonAtomic(path.join(stagingPath, 'candidates.json'), {

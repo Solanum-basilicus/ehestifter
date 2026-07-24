@@ -244,3 +244,149 @@ test('Phase 5B summary exposes independent per-catalog metrics', () => {
   assert.equal(summary.catalogs.lever.candidates, 0);
   assert.equal(summary.catalogAshbyItemCount, 10);
 });
+
+test('Phase 6 artifacts and summary expose bounded user matching and compatibility', async () => {
+  await withTempDir(async (directory) => {
+    const userMatchResults = {
+      schemaVersion: 1,
+      users: [{ userId: 'u1', validProfileCount: 1 }],
+      matches: [{ url: 'https://example.test/1', matchedUserIds: ['u1'] }],
+      rejectedNoUserMatch: [],
+    };
+    const compatibilityResults = {
+      schemaVersion: 1,
+      totalPairs: 2,
+      evaluatedPairs: 2,
+      omittedPairs: 0,
+      results: [
+        { status: 'requested' },
+        { status: 'skipped_succeeded_current_cv' },
+      ],
+    };
+    const runPath = await writeRunArtifacts({
+      dataPath: directory,
+      runId: 'run-phase6',
+      metadata: {},
+      targetPlan: {},
+      providerResults: [],
+      tenantStateChanges: null,
+      rateObservations: null,
+      canaryResults: null,
+      userMatchResults,
+      compatibilityResults,
+      candidates: [],
+      rejected: [],
+      preflightResults: null,
+      detailResults: null,
+      locationResults: null,
+      importResults: null,
+      summary: {},
+    });
+    assert.ok((await readdir(runPath)).includes('user-match-results.json'));
+    assert.ok((await readdir(runPath)).includes('compatibility-results.json'));
+  });
+
+  const summary = buildRunSummary({
+    runId: 'run-phase6',
+    mode: 'import',
+    startedAt: new Date('2026-07-24T00:00:00Z'),
+    finishedAt: new Date('2026-07-24T00:00:01Z'),
+    targetPlan: {
+      targets: [],
+      limits: {},
+      counts: {
+        priority: 0, canary: 0, normal: 0, disabled: 0,
+        disabledRemoved: 0, planningRejected: 0, canaryPlanningRejected: 0,
+        catalogEligible: 0, skippedNotDue: 0, skippedProviderCooldown: 0,
+        skippedNormalBudget: 0, skippedTotal: 0,
+      },
+      catalogs: {},
+      healthPartitions: {},
+      sweep: {
+        targetFullSweepDays: 3,
+        estimatedHealthySweepDays: null,
+        recommendedHealthyTargetsPerRun: 0,
+        recommendedNormalTargetsPerRun: 0,
+        feasibleAtConfiguredBudget: true,
+      },
+    },
+    scanResult: {
+      candidates: [{
+        sourceMode: 'catalog',
+        matchedUserIds: ['u1', 'u2'],
+      }],
+      rejected: [{ reason: 'no_user_match' }],
+      providerIds: [],
+      breakerEvents: [],
+      providerResults: [],
+    },
+    evaluated: [],
+    discoveryUsers: [
+      { hasSavedFilters: false, profiles: [] },
+      { hasSavedFilters: true, profiles: [] },
+    ],
+    userMatchResults: { matches: [{}] },
+    compatibilityResults: {
+      totalPairs: 3,
+      evaluatedPairs: 2,
+      omittedPairs: 1,
+      results: [
+        { status: 'requested' },
+        { status: 'error_request' },
+      ],
+    },
+    targetsSkippedNoEligibleUsers: 4,
+  });
+  assert.equal(summary.multiUserEnabled, true);
+  assert.equal(summary.discoveryUsersEligible, 2);
+  assert.equal(summary.discoveryUsersFailingClosed, 1);
+  assert.equal(summary.candidatesRejectedNoUserMatch, 1);
+  assert.equal(summary.userCandidateMatches, 2);
+  assert.equal(summary.targetsSkippedNoEligibleUsers, 4);
+  assert.equal(summary.compatibilityPairs, 3);
+  assert.equal(summary.compatibilityRequested, 1);
+  assert.equal(summary.compatibilityErrors, 1);
+  assert.equal(summary.discoveryUsersLoadStatus, 'ok');
+});
+
+test('Phase 6 summary reports Users API failure without pretending multi-user is disabled', () => {
+  const summary = buildRunSummary({
+    runId: 'run-phase6-users-error',
+    mode: 'offline',
+    startedAt: new Date('2026-07-24T00:00:00Z'),
+    finishedAt: new Date('2026-07-24T00:00:01Z'),
+    targetPlan: {
+      targets: [],
+      limits: {},
+      counts: {
+        priority: 0, canary: 0, normal: 0, disabled: 0,
+        disabledRemoved: 0, planningRejected: 0, canaryPlanningRejected: 0,
+        catalogEligible: 0, skippedNotDue: 0, skippedProviderCooldown: 0,
+        skippedNormalBudget: 0, skippedTotal: 0,
+      },
+      catalogs: {},
+      healthPartitions: {},
+      sweep: {
+        targetFullSweepDays: 3,
+        estimatedHealthySweepDays: null,
+        recommendedHealthyTargetsPerRun: 0,
+        recommendedNormalTargetsPerRun: 0,
+        feasibleAtConfiguredBudget: true,
+      },
+    },
+    scanResult: {
+      candidates: [], rejected: [], providerIds: [], breakerEvents: [],
+      providerResults: [],
+    },
+    evaluated: [],
+    discoveryUsers: null,
+    multiUserEnabled: true,
+    discoveryUsersError: 'Users API unavailable',
+    targetsSkippedNoEligibleUsers: 12,
+  });
+  assert.equal(summary.multiUserEnabled, true);
+  assert.equal(summary.discoveryUsersLoadStatus, 'error');
+  assert.equal(summary.discoveryUsersEligible, 0);
+  assert.equal(summary.discoveryUsersWithSavedFilters, 0);
+  assert.equal(summary.targetsSkippedNoEligibleUsers, 12);
+});

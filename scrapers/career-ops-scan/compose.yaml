@@ -19,10 +19,14 @@ services:
 
     secrets:
       - jobs_function_key
+      - users_function_key
+      - enrichers_function_key      
 
     environment:
       SCANNER_CONFIG_PATH: /config/scanner.local.json
       EHESTIFTER_JOBS_FUNCTION_KEY_FILE: /run/secrets/jobs_function_key
+      EHESTIFTER_USERS_FUNCTION_KEY_FILE: /run/secrets/users_function_key
+      EHESTIFTER_ENRICHERS_FUNCTION_KEY_FILE: /run/secrets/enrichers_function_key
 
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -36,4 +40,7 @@ services:
 secrets:
   jobs_function_key:
     file: ./secrets/jobs-function-key.txt
-
+  users_function_key:
+    file: ./secrets/users-function-key.txt
+  enrichers_function_key:
+    file: ./secrets/enrichers-function-key.txt

@@ -14,8 +14,11 @@ import {
   validateLiveCatalogTargetRequest,
 } from './config.mjs';
 import { enrichCandidateDetails } from './details/fetchers.mjs';
+import { createEnrichmentClient } from './ehestifter/enrichment-client.mjs';
 import { importCandidates } from './ehestifter/import-jobs.mjs';
 import { createJobsClient, preflightCandidates } from './ehestifter/jobs-client.mjs';
+import { requestCompatibilityForMatches } from './ehestifter/request-compatibility.mjs';
+import { createUsersClient } from './ehestifter/users-client.mjs';
 import { normalizeCandidateLocations } from './locations/normalizer.mjs';
 import { loadProviders } from './providers/_registry.mjs';
 import { buildRunSummary } from './run-summary.mjs';
@@ -28,6 +31,16 @@ import {
 } from './state/tenant-state.mjs';
 import { buildTargetPlanFromFiles } from './targets/planner.mjs';
 import { createProgressRenderer } from './ui/progress.mjs';
+import {
+  buildDiscoveryMatcher,
+  buildUserMatchArtifact,
+  selectDiscoveryExecutionTargets,
+} from './users/discovery-matcher.mjs';
+
+function boundedDiagnostic(error) {
+  const raw = error instanceof Error ? error.message : String(error);
+  return raw.replace(/[\u0000-\u001f\u007f]+/gu, ' ').trim().slice(0, 500);
+}
 
 function assertCatalogTargetSafety(mode, runtimeTargets, requestedLimit) {
   const normalTargets = runtimeTargets.filter(
@@ -94,6 +107,10 @@ async function runScan(args) {
       liveCatalog: config.liveCatalog,
     });
 
+    let discoveryUsersPayload = null;
+    let discoveryMatcher = null;
+    let discoveryUsersError = null;
+
     const moduleDir = path.dirname(fileURLToPath(import.meta.url));
     const providersDir = path.join(moduleDir, 'providers');
     const providers = await loadProviders(providersDir);
@@ -118,24 +135,77 @@ async function runScan(args) {
       requestedCatalogTargets,
     );
 
+    if (config.multiUser.enabled) {
+      progress.update({ stage: 'users', current: 0, total: 1 });
+      try {
+        const usersClient = createUsersClient(config.usersApi);
+        discoveryUsersPayload = await usersClient.listDiscoveryEligible();
+        discoveryMatcher = buildDiscoveryMatcher(discoveryUsersPayload);
+      } catch (error) {
+        discoveryUsersError = boundedDiagnostic(error);
+      } finally {
+        progress.update({ stage: 'users', current: 1, total: 1 });
+      }
+    }
+
+    if (discoveryMatcher) {
+      planning.plan.discovery = {
+        ...discoveryMatcher.compoundedProfile,
+        status: 'ok',
+        sourceGeneratedAtUtc: discoveryMatcher.sourceGeneratedAtUtc,
+        portalFiltersMode: config.multiUser.portalFiltersMode,
+      };
+    } else if (config.multiUser.enabled) {
+      planning.plan.discovery = {
+        schemaVersion: 1,
+        status: 'error',
+        eligibleUsers: 0,
+        usersWithSavedFilters: 0,
+        usersWithValidProfiles: 0,
+        usersFailingClosed: 0,
+        profileCount: 0,
+        sourceGeneratedAtUtc: null,
+        portalFiltersMode: config.multiUser.portalFiltersMode,
+        error: discoveryUsersError,
+      };
+    }
+
+    const discoveryExecution = selectDiscoveryExecutionTargets({
+      runtimeTargets: planning.runtimeTargets,
+      multiUserEnabled: config.multiUser.enabled,
+      discoveryUsers: discoveryMatcher?.users ?? [],
+    });
+    const { executionTargets, targetsSkippedNoEligibleUsers } = discoveryExecution;
+
     progress.update({
       stage: 'scan',
       current: 0,
-      total: planning.runtimeTargets.length,
+      total: executionTargets.length,
     });
     const scanResult = await runTrackedScan({
       portalConfig: planning.portalConfig,
-      targets: planning.runtimeTargets,
+      targets: executionTargets,
       providers,
       policy: planning.policy,
       concurrency: config.scan.providerConcurrency,
       maxCandidates: config.scan.maxCandidatesPerRun,
       upstreamRef: config.careerOps.upstreamRef,
+      candidateMatcher: discoveryMatcher?.matchCandidate ?? null,
+      applyPortalCandidateFilters: !config.multiUser.enabled
+        || config.multiUser.portalFiltersMode === 'global_gate',
       onProgress: (event) => progress.update({
         ...event,
         detail: progressDetail(event),
       }),
     });
+
+    const userMatchResults = discoveryMatcher
+      ? buildUserMatchArtifact({
+        discoveryMatcher,
+        candidates: scanResult.candidates,
+        rejected: scanResult.rejected,
+      })
+      : null;
 
     let canaryDetailResults = null;
     if (scanResult.canaryCandidates.length > 0) {
@@ -163,7 +233,7 @@ async function runScan(args) {
     );
     const canaryResults = hasCanaryTargets
       ? buildProviderCanaryResults({
-        targets: planning.runtimeTargets,
+        targets: executionTargets,
         providerResults: scanResult.providerResults,
         detailResults: canaryDetailResults ?? [],
         generatedAt: new Date(),
@@ -246,6 +316,34 @@ async function runScan(args) {
       });
     }
 
+    let compatibilityResults = null;
+    if (
+      args.mode === 'import'
+      && config.multiUser.enabled
+      && config.multiUser.compatibility.enabled
+      && discoveryMatcher != null
+    ) {
+      const enrichmentClient = createEnrichmentClient(config.enrichmentApi);
+      progress.update({
+        stage: 'compatibility',
+        current: 0,
+        total: Math.min(
+          config.multiUser.compatibility.maxPairsPerRun,
+          importResults.reduce(
+            (total, candidate) => total + (candidate.matchedUserIds?.length ?? 0),
+            0,
+          ),
+        ),
+      });
+      compatibilityResults = await requestCompatibilityForMatches({
+        importResults,
+        discoveryUsers: discoveryMatcher.users,
+        client: enrichmentClient,
+        config: config.multiUser.compatibility,
+        onProgress: (event) => progress.update(event),
+      });
+    }
+
     const evaluated = importResults
       ?? locationResults
       ?? detailResults
@@ -261,8 +359,9 @@ async function runScan(args) {
       generatedAt: finishedAt,
     });
 
-    const shouldPersistTenantState = args.mode === 'offline'
-      || planning.plan.counts.normal > 0;
+    const shouldPersistTenantState = executionTargets.length > 0 && (
+      args.mode === 'offline' || planning.plan.counts.normal > 0
+    );
     let nextTenantState = null;
     let tenantStateChanges = null;
     if (shouldPersistTenantState) {
@@ -292,6 +391,12 @@ async function runScan(args) {
       requestedMaxCreates: args.maxCreate,
       canaryResults,
       policy: planning.policy,
+      discoveryUsers: discoveryMatcher?.users ?? null,
+      multiUserEnabled: config.multiUser.enabled,
+      discoveryUsersError,
+      userMatchResults,
+      compatibilityResults,
+      targetsSkippedNoEligibleUsers,
     });
 
     const rejected = [
@@ -319,6 +424,16 @@ async function runScan(args) {
         catalogAshbySha256: planning.plan.catalogs.ashby?.rawSha256 ?? null,
         catalogTargetsRequested: requestedCatalogTargets,
         maxCreatesRequested: args.maxCreate,
+        multiUserEnabled: config.multiUser.enabled,
+        discoveryUsersStatus: !config.multiUser.enabled
+          ? 'disabled'
+          : discoveryUsersError == null ? 'ok' : 'error',
+        eligibleDiscoveryUsers: discoveryMatcher?.users.length ?? null,
+        portalFiltersMode: config.multiUser.enabled
+          ? config.multiUser.portalFiltersMode
+          : null,
+        compatibilityEnabled: config.multiUser.enabled
+          && config.multiUser.compatibility.enabled,
         tenantStatePath: shouldPersistTenantState
           ? config.state.tenantStatePath
           : null,
@@ -330,6 +445,8 @@ async function runScan(args) {
       tenantStateChanges,
       rateObservations,
       canaryResults,
+      userMatchResults,
+      compatibilityResults,
       candidates: scanResult.candidates,
       rejected,
       preflightResults,
@@ -364,6 +481,8 @@ async function runScan(args) {
       || summary.canaryPlanningRejected > 0
       || summary.providerCanariesDegraded > 0
       || summary.providerHealthWarnings.length > 0
+      || summary.discoveryUsersLoadStatus === 'error'
+      || summary.compatibilityErrors > 0
     ) {
       process.exitCode = 2;
     }
