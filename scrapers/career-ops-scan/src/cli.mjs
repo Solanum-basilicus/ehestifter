@@ -359,8 +359,10 @@ async function runScan(args) {
       generatedAt: finishedAt,
     });
 
-    const shouldPersistTenantState = executionTargets.length > 0 && (
+    const shouldPersistTenantState = (
       args.mode === 'offline' || planning.plan.counts.normal > 0
+    ) && (
+      !config.multiUser.enabled || executionTargets.length > 0
     );
     let nextTenantState = null;
     let tenantStateChanges = null;

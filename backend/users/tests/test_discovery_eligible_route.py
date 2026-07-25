@@ -74,10 +74,31 @@ def load_route_module(connection_factory):
     functions_module.AuthLevel = types.SimpleNamespace(FUNCTION="FUNCTION")
     azure_module.functions = functions_module
 
+    helpers_module = types.ModuleType("helpers")
+    helpers_module.__path__ = []
+
     db_module = types.ModuleType("helpers.db")
     db_module.get_connection = connection_factory
     guid_module = types.ModuleType("helpers.guid")
     guid_module.normalize_guid = normalize_guid
+
+    discovery_filters_path = (
+        Path(__file__).parents[1]
+        / "helpers"
+        / "discovery_filters.py"
+    )
+    discovery_filters_spec = importlib.util.spec_from_file_location(
+        "helpers.discovery_filters",
+        discovery_filters_path,
+    )
+    discovery_filters_module = importlib.util.module_from_spec(
+        discovery_filters_spec
+    )
+    discovery_filters_spec.loader.exec_module(discovery_filters_module)
+
+    helpers_module.db = db_module
+    helpers_module.guid = guid_module
+    helpers_module.discovery_filters = discovery_filters_module
 
     module_path = (
         Path(__file__).parents[1]
@@ -94,8 +115,10 @@ def load_route_module(connection_factory):
         {
             "azure": azure_module,
             "azure.functions": functions_module,
+            "helpers": helpers_module,
             "helpers.db": db_module,
             "helpers.guid": guid_module,
+            "helpers.discovery_filters": discovery_filters_module,
         },
     ):
         spec.loader.exec_module(module)

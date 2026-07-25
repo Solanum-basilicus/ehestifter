@@ -1,7 +1,27 @@
+import importlib.util
 import json
 import unittest
+from pathlib import Path
 
-from helpers.discovery_filters import normalize_discovery_profile
+
+def load_discovery_filters_module():
+    module_path = (
+        Path(__file__).parents[1]
+        / "helpers"
+        / "discovery_filters.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "phase6_discovery_filters",
+        module_path,
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+normalize_discovery_profile = (
+    load_discovery_filters_module().normalize_discovery_profile
+)
 
 
 class DiscoveryProfileTests(unittest.TestCase):
