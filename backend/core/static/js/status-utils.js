@@ -3,7 +3,7 @@
   const STATUS_OPTIONS = [
     "Applied","Screening Booked","Screening Done","HM interview Booked","HM interview Done",
     "More interviews Booked","More interviews Done","Rejected with Filled","Rejected with Unfortunately", "Withdrew Applications",
-    "Got Offer","Accepted Offer","Turned down Offer"
+    "Got Offer","Accepted Offer","Turned down Offer", "Ignored"
   ];
 
   function statusKey(label){
@@ -19,7 +19,7 @@
     if (s === "more interviews done")   return "done-more";
     if (s === "got offer")              return "offer";
     if (s === "accepted offer")         return "accepted";
-    if (s === "rejected with filled" || s === "rejected with unfortunately" || s === "turned down offer" || s === "Withdrew Applications" )
+    if (s === "rejected with filled" || s === "rejected with unfortunately" || s === "turned down offer" || s === "withdrew applications" || s === "ignored" )
       return "finished";
     return "default";
   }
