@@ -180,3 +180,4 @@ scrapers/career-ops-scan/config/portals.yml
 scrapers/career-ops-scan/data/runs/*
 scrapers/career-ops-scan/data/catalogs/*
 scrapers/career-ops-scan/data/state/*
+scrapers/career-ops-scan/config/scheduler.local.json

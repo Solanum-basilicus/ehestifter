@@ -1,0 +1,27 @@
+[Unit]
+Description=Ehestifter ATS Discovery daily scan
+Documentation=file://@SCANNER_ROOT@/README-PHASE7.md
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+StartLimitIntervalSec=@START_LIMIT_INTERVAL@
+StartLimitBurst=@START_LIMIT_BURST@
+
+[Service]
+Type=oneshot
+User=@USER@
+Group=@GROUP@
+WorkingDirectory=@SCANNER_ROOT@
+Environment="ATS_SCHEDULER_CONFIG=@SCANNER_ROOT@/config/scheduler.local.json"
+ExecStart=@PYTHON@ @SCANNER_ROOT@/ops/scheduler/ats_scheduler.py run daily-discovery --trigger systemd
+SuccessExitStatus=2
+Restart=on-failure
+RestartSec=@RESTART_SEC@
+RestartPreventExitStatus=3 64 78
+TimeoutStartSec=3h
+UMask=0027
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

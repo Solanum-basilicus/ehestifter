@@ -1,0 +1,12 @@
+[Unit]
+Description=Schedule Ehestifter ATS Discovery daily scan
+
+[Timer]
+OnCalendar=*-*-* @DAILY_SCHEDULE@:00 @TIMEZONE@
+Persistent=true
+AccuracySec=1min
+RandomizedDelaySec=5min
+Unit=ehestifter-ats-discovery.service
+
+[Install]
+WantedBy=timers.target
