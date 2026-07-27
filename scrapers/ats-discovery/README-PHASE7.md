@@ -169,7 +169,7 @@ catalogs.
 
 ## Operations commands
 
-From `scrapers/career-ops-scan`:
+From `scrapers/ats-discovery`:
 
 ```bash
 # Human-readable state

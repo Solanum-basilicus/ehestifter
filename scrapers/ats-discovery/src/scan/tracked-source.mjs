@@ -82,7 +82,7 @@ export function candidateFromJob(job, target, upstreamRef) {
     title: String(job.title ?? '').trim(),
     hiringCompanyName: String(job.company ?? target.name ?? '').trim(),
     postingCompanyName: null,
-    foundOn: 'career-ops-scan',
+    foundOn: 'ats-discovery',
     rawLocation: String(job.location ?? '').trim(),
     locations: [],
     remoteType: inferRemoteType(job.location),

@@ -110,7 +110,7 @@ async function scan(targets, options = {}) {
 test('priority candidate provenance and foundOn remain stable', () => {
   const candidate = candidateFromJob(job(), target(), 'ref');
   assert.equal(candidate.sourceMode, 'priority');
-  assert.equal(candidate.foundOn, 'career-ops-scan');
+  assert.equal(candidate.foundOn, 'ats-discovery');
   assert.equal(candidate.provenance.lookbackStartUtc, '2026-07-17T00:00:00.000Z');
 });
 

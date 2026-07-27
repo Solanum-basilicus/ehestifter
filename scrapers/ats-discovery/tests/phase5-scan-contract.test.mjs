@@ -51,7 +51,7 @@ test('candidate records acquisition tenant, origin, and pinned provider source',
     license: source.license,
   });
   assert.equal('providerCapabilities' in candidate.provenance, false);
-  assert.equal(candidate.foundOn, 'career-ops-scan');
+  assert.equal(candidate.foundOn, 'ats-discovery');
 });
 
 

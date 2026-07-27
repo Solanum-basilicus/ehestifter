@@ -21,7 +21,7 @@ function candidate(overrides = {}) {
     applyUrl:
       'https://job-boards.greenhouse.io/example/jobs/123',
 
-    foundOn: 'career-ops-scan',
+    foundOn: 'ats-discovery',
     sourceCompany: 'Example GmbH',
     hiringCompanyName: 'Example GmbH',
     postingCompanyName: null,
@@ -56,7 +56,7 @@ test('buildCreatePayload uses scanner provenance and Jobs identity', () => {
 
   assert.equal(
     payload.foundOn,
-    'career-ops-scan',
+    'ats-discovery',
   );
 
   assert.equal(
@@ -168,7 +168,7 @@ test('createJob reconciles an ambiguous POST through exists', async () => {
 
   assert.equal(
     JSON.parse(post.options.body).foundOn,
-    'career-ops-scan',
+    'ats-discovery',
   );
 });
 

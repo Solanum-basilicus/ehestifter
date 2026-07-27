@@ -1,12 +1,16 @@
-# Milestone Design: ATS Discovery for Ehestifter
+# Archived Milestone: ATS Discovery for Ehestifter
 
-**Status:** active milestone; Phases 0–5 completed, Phase 5B next  
-**Previous framing:** Career-Ops powered job discovery  
-**Primary implementation location today:** `scrapers/career-ops-scan`  
-**Planned final name before merge:** `scrapers/ats-discovery`  
-**Planned creation provenance:** `foundOn = "ats-discovery"`  
-**Current validated test baseline:** 297 tests passing as of 2026-07-24  
-**Audience:** coding agents and human operators continuing implementation
+**Status:** archived — Phases 0–7 and 9 completed; optional Phase 8 skipped  
+**Completion date:** 2026-07-26  
+**Final implementation location:** `scrapers/ats-discovery`  
+**Creation provenance for new imports:** `foundOn = "ats-discovery"`  
+**Accepted pre-Phase-9 validation baseline:** 355 scanner tests and 27 scheduler tests passing  
+**Canonical steady-state architecture:** [`docs/system-design.md`](../../system-design.md)  
+**Audience:** maintainers investigating implementation history, source attribution, and deferred decisions
+
+This document is the archived implementation design and decision journal. Sections 1–13 preserve the planning-time architecture and implementation evidence, including references to the former working directory `scrapers/career-ops-scan`. Those historical references are intentional. The canonical product name, paths, ownership boundaries, and operator behavior now live in `docs/system-design.md` and `scrapers/ats-discovery/README.md`.
+
+Phase 9 performed the product rename, integrated stable architecture into the master system design, archived this milestone, added a canonical scanner runbook and a repository layout validator, and retained historical run/canary evidence unchanged.
 
 ---
 
@@ -1130,236 +1134,124 @@ A future cloud deployment may scan priority or bounded shards while the local ru
 
 ---
 
-## 14. Rename and cleanup before merge
+## 14. Rename and documentation integration — completed
 
-Before merging the milestone branch into `master`:
-
-1. Rename directory:
+Phase 9 completed the deferred product cleanup:
 
 ```text
 scrapers/career-ops-scan
 → scrapers/ats-discovery
 ```
 
-2. Rename Compose service and image consistently.
-3. Change new-job provenance:
+Active product identifiers were changed consistently:
 
 ```text
-career-ops-scan
-→ ats-discovery
+Compose service:     ats-discovery
+local image:         ehestifter/ats-discovery:local
+npm package:         @ehestifter/ats-discovery
+new-job provenance:  foundOn = "ats-discovery"
 ```
 
-4. Keep the existing canary jobs unchanged as historical evidence.
-5. Update paths in tests, documentation, Docker commands, and CI.
-6. Replace or clearly mark `copy-upstream-providers.sh` as bootstrap-only.
-7. Ensure notices still distinguish Career-Ops-derived code and job-board-aggregator catalogs.
-8. Preserve provider-family, provider-variant, health-partition, and acquisition-mode terminology.
+The migration deliberately moved the complete scanner directory before rewriting active text. This preserved ignored local configuration, secrets, catalogs, tenant/scheduler state, backups, and run artifacts. Historical run artifacts and already-created canary jobs were not rewritten.
 
-The rename is cleanup, not a prerequisite for Phase 5B.
+Installed systemd units were treated as an operational dependency because their rendered `WorkingDirectory` and Compose command contain the scanner path/service. The operator procedure therefore uninstalls old units before the rename and reinstalls them from the canonical path after validation.
 
----
+Career-Ops and job-board-aggregator attribution remains source attribution. The product rename does not remove source repository, pinned revision, license, catalog provenance, or Ehestifter-change records. `scripts/copy-upstream-providers.sh` is explicitly marked bootstrap-only.
 
-## 15. Phase plan
-
-### Phase 0 — Approach validation — completed
-
-- inspect Career-Ops scanner and provider outputs;
-- run controlled ATS sources;
-- verify identity quality and description availability;
-- choose Ehestifter-owned extraction instead of full wrapper;
-- pin and attribute source revision.
-
-### Phase 1 — Controlled tracked scanner — completed
-
-- Docker scanner skeleton;
-- Greenhouse, Lever, Ashby, Workday providers;
-- offline scan;
-- Jobs preflight;
-- detail enrichment;
-- guarded import;
-- ambiguous create reconciliation;
-- location normalization;
-- idempotent live canaries;
-- run artifacts and metrics.
-
-### Phase 2 — Ashby catalog and target-planner foundation — completed
-
-- catalog file contract;
-- Ashby catalog synchronizer;
-- operator priority and disabled policy;
-- provider discovery policy;
-- catalog/override/runtime-state merge;
-- ordered `target-plan.json`;
-- bounded offline catalog shard;
-- priority-first and disabled-wins behavior;
-- atomic refresh without overwriting overrides.
-
-### Phase 3 — Provider-aware scheduling and health — completed
-
-- persistent tenant runtime state;
-- rotating healthy shards;
-- relevant-activity promotion;
-- long-empty demotion;
-- monthly dead-tenant re-probe;
-- provider circuit breakers;
-- rate and latency metrics;
-- operator-reviewed rate recommendations;
-- bounded date lookback with overlap.
-
-### Phase 4 — Catalog-backed live preflight and import — completed
-
-- bounded catalog preflight;
-- existing/new ratio metrics;
-- missing-only detail fetching;
-- small explicit import cap;
-- replay-safe create reconciliation;
-- location-scope hardening;
-- TTY progress display;
-- gradual shard scaling controls.
-
-### Phase 5 — Provider expansion and protocol hardening — completed
-
-- Personio;
-- SmartRecruiters;
-- Softgarden;
-- SuccessFactors RMK and CSB;
-- provider fixtures and request policies;
-- pinned source provenance;
-- title-boundary correction;
-- RMK HTML detail fallback;
-- CSB session/CSRF listing support;
-- CSB detail-session handling and withdrawn-job classification;
-- SuccessFactors RMK/CSB health partitioning;
-- CSB canary, silent-empty, and volume-collapse protection;
-- provider-variant observability.
-
-Known Phase 5 qualification:
-
-- Jobs canonical identity for SuccessFactors CSB URLs is tracked in issue #2 and remains outside scanner ownership.
-
-### Phase 5B — Greenhouse, Lever, and Workday catalogs — next
-
-- generalize the Ashby catalog synchronizer and file contract;
-- add Greenhouse, Lever, and Workday catalog adapters;
-- validate and normalize provider-specific catalog identities;
-- keep separate catalog files and metadata per provider;
-- preserve operator priority, disabled, and patch layers;
-- add independent provider shard budgets under a global hard ceiling;
-- prevent one large catalog from starving other providers;
-- expose per-catalog count, hash, eligibility, planned-target, and sweep metrics;
-- begin with bounded offline shards;
-- retain explicit live-catalog preflight/import gates;
-- do not add unsupported providers or new catalog-discovery crawlers;
-- do not add automatic catalog refresh scheduling yet.
-
-### Phase 6 — Multi-user discovery
-
-- Users discovery-eligible endpoint;
-- profile-derived cheap filters;
-- compounded scan profile;
-- per-candidate matched-user set;
-- shared job import once;
-- compatibility requests per matched user;
-- no automatic status creation.
-
-### Phase 7 — Scheduled operations
-
-- local daily run;
-- global lock and stale-lock recovery;
-- state backup and artifact retention;
-- independent catalog refresh timer;
-- operational summary and failure alerting;
-- propagate degraded provider-variant and canary exit status to the operator.
-
-### Phase 8 — Optional GCP Cloud Run Job
-
-- container cleanup and rename;
-- durable state backend;
-- bounded cloud shard;
-- cost/runtime measurement;
-- explicit decision whether broad scans remain local.
-
-### Phase 9 — Documentation integration
-
-- merge stabilized architecture into `system-design.md`;
-- archive this milestone document;
-- retain journal, issue links, and attribution notices.
-
----
-
-## 16. Milestone acceptance criteria
-
-The milestone is complete when:
-
-- ATS Discovery has an Ehestifter-owned provider and candidate contract;
-- Ashby, Greenhouse, Lever, and Workday catalogs use a common machine-managed contract;
-- catalogs and operator overrides remain separate;
-- priority, normal, disabled, cooldown, and dead concepts are represented correctly;
-- priority tenants and health canaries run before normal catalog shards;
-- healthy normal tenants are scanned on a measured, timely rotating cadence;
-- provider-side date filtering is used where supported with overlap;
-- rate limits trigger provider-aware or variant-aware cooldown rather than uncontrolled retries;
-- materially different provider protocols cannot silently disable one another;
-- high-risk protocols have canary or equivalent silent-empty protection;
-- tenant scans are shared across users;
-- candidate filters prevent obviously irrelevant jobs from reaching compatibility;
-- Jobs API remains authoritative for canonical identity and persistence;
-- detail fetches occur only when needed;
-- imports are capped, replay-safe, and idempotent;
-- compatibility is requested per matched user without creating statuses;
-- the accepted provider set remains operational through its acceptance matrix;
-- deferred provider/catalog limitations are documented in issues #2–#4 as applicable;
-- all derived code and catalogs retain attribution and source revisions;
-- local scheduled operation is stable and surfaces degraded health;
-- scanner and provenance naming are changed to ATS Discovery before merge.
-
-Current milestone status:
+The steady-state documentation shape is now:
 
 ```text
-Phases 0–5: complete
-Phase 5B: next
-Phases 6–9: pending
-Current tests: 297 passing
+docs/system-design.md
+  canonical as-is architecture and ownership rules
+
+scrapers/ats-discovery/README.md
+  current component architecture, config, operations, tests, and limitations
+
+docs/archive/milestones/ats-discovery.md
+  this historical milestone design and decision journal
 ```
 
----
+## 15. Final phase ledger
 
-## 17. Immediate next coding-agent task
+### Phase 0 — approach validation — complete
 
-Implement **Phase 5B: Greenhouse, Lever, and Workday catalogs**, without adding unsupported providers or another scan pipeline.
+Career-Ops and job-board-aggregator were inspected; an Ehestifter-owned scanner with selectively adapted providers/catalogs was chosen instead of deploying either complete upstream application.
 
-Concrete target:
+### Phase 1 — controlled tracked scanner — complete
 
-1. Keep the existing scanner and current directory name temporarily.
-2. Generalize the current Ashby catalog contract, loader, synchronizer, metadata, and atomic-write utilities.
-3. Add machine-managed catalogs for Greenhouse, Lever, and Workday from the selected job-board-aggregator source files.
-4. Keep one file per provider under `/data/catalogs`.
-5. Preserve source URL/path, pinned revision when available, license, fetch time, SHA-256, and item count.
-6. Add provider-specific catalog validation and normalization.
-7. Represent Workday targets with the structured host/tenant/site identity required by the provider.
-8. Merge each catalog with tracked priority targets, disabled overrides, and provider-specific patches.
-9. Add independent bounded normal-target budgets for Ashby, Greenhouse, Lever, and Workday under the existing global hard ceiling.
-10. Allocate deterministic provider shards so a large catalog cannot starve another provider.
-11. Extend `target-plan.json`, `summary.json`, and rate/sweep diagnostics with per-catalog metrics.
-12. Run catalog targets in bounded `--offline` mode first.
-13. Preserve the explicit `--catalog-targets` and configuration gates for catalog-backed preflight/import.
-14. Do not add BambooHR, iCIMS, Paylocity, or new tenant-discovery crawlers.
-15. Do not add the Phase 7 catalog refresh timer.
-16. Add fixtures and tests for successful synchronization, malformed entries, atomic refresh failure, priority/disabled precedence, provider budgets, starvation prevention, and deterministic planning.
-17. Keep all first-session validation commands Docker-only.
+Docker scanner, initial providers, offline/preflight/import modes, Jobs canonical-identity integration, bounded detail/location processing, replay-safe create reconciliation, artifacts, and live canaries were implemented.
 
-Suggested initial offline rollout—not a committed optimum:
+### Phase 2 — Ashby catalog and target planner — complete
 
-```text
-Ashby:       1 target per run
-Greenhouse: 10 targets per run
-Lever:      10 targets per run
-Workday:     2 targets per run
-```
+Machine-managed catalog synchronization, operator priority/disabled policy, deterministic planning, catalog artifacts, and atomic refresh were implemented.
 
-Raise one provider at a time only after inspecting rate limits, durable failures, latency, healthy-empty ratios, candidate yield, and sweep feasibility.
+### Phase 3 — provider-aware scheduling and health — complete
 
----
+Persistent tenant health/cadence state, rotating shards, promotion/demotion, cooldown/dead re-probe, request pacing, circuit breaking, lookback overlap, and rate diagnostics were implemented.
+
+### Phase 4 — bounded catalog-backed live operation — complete
+
+Explicit live catalog gates, catalog target ceilings, missing-only detail, guarded create caps, replay-safe reconciliation, and progress/summary diagnostics were implemented.
+
+### Phase 5 — DACH provider expansion and protocol hardening — complete
+
+Personio, SmartRecruiters, Softgarden, and SuccessFactors RMK/CSB were accepted with fixtures/live evidence. SuccessFactors variant health isolation, CSB session/CSRF behavior, canaries, silent-empty/volume-collapse protection, and detail outcome classification were implemented.
+
+### Phase 5B — Greenhouse, Lever, and Workday catalogs — complete
+
+The catalog contract/synchronizer was generalized; provider-specific catalog identities and validation were added; per-provider deterministic budgets under the global ceiling prevent catalog starvation; bounded offline and explicit live gates were preserved.
+
+### Phase 6 — multi-user discovery — complete
+
+Users gained a bounded discovery-eligible endpoint. The scanner compounds eligible profiles into one scan, tracks matched users per candidate, imports a shared job once, and requests compatibility per matched user without creating status. CV text remains outside the discovery-profile contract.
+
+### Phase 7 — scheduled operations — complete
+
+System-level persistent timers, latest-slot catch-up, remaining boot grace, `flock` mutual exclusion, bounded retries, degraded completion semantics, scheduler/tenant-state backups, retention, status commands, and independent catalog refresh were implemented.
+
+### Phase 8 — optional GCP Cloud Run Job — skipped
+
+No Cloud Run Job was introduced. Local Docker/systemd remains the accepted runtime until measurements and a concrete operational need justify cloud execution and durable cloud state.
+
+### Phase 9 — documentation, validation, and cleanup — complete
+
+The canonical rename, system-design integration, milestone archival, root/component README cleanup, bootstrap-helper warning, migration tooling, and repository-layout validation were implemented. Phase 9 intentionally does not alter provider, matching, Jobs, import, compatibility, or scheduler algorithms.
+
+## 16. Acceptance outcome
+
+The milestone acceptance criteria are met with the following explicit qualifications:
+
+- Jobs remains authoritative for canonical identity and persistence.
+- Jobs and compatibility work are shared/bounded as designed; application status remains manual.
+- Provider families with materially different protocols use isolated health partitions.
+- High-risk protocols retain health-only canaries and silent-empty protection.
+- Catalogs and operator policy remain separate.
+- Imports remain capped, replay-safe, and idempotent.
+- Derived providers/catalogs retain source attribution and revisions.
+- Local scheduling exposes degraded health and catches up the latest due slot after boot/resume.
+- The product is named ATS Discovery in active code/config/docs.
+- Phase 8 is not required for milestone completion.
+
+Accepted limitations:
+
+- direct Compose commands bypass the host lock;
+- no external notification channel exists;
+- timers do not wake sleeping hardware;
+- schedule/retry changes require reinstalling rendered units;
+- the local node cannot discover vacancies while powered off;
+- rootless Docker needs operator-specific adaptation;
+- unsupported providers/catalogs and richer cross-domain identity/location work remain deferred.
+
+## 17. Deferred issues and future work
+
+The milestone does not absorb unrelated domain fixes or provider expansion:
+
+- [Issue #1](https://github.com/Solanum-basilicus/ehestifter/issues/1): richer location normalization/evidence.
+- [Issue #2](https://github.com/Solanum-basilicus/ehestifter/issues/2): Jobs canonical identity for SuccessFactors CSB URLs.
+- [Issue #3](https://github.com/Solanum-basilicus/ehestifter/issues/3): unsupported provider ingestion.
+- [Issue #4](https://github.com/Solanum-basilicus/ehestifter/issues/4): missing provider tenant catalogs.
+
+A later milestone may consider Cloud Run Job execution, external notifications, stronger lock enforcement inside the container entrypoint, or additional provider/catalog coverage. Those changes must preserve the ownership, traffic-bounding, attribution, and no-status rules recorded in the master system design.
 
 ## 18. References
 

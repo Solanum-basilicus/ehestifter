@@ -22,7 +22,7 @@
       "docker",
       "compose"
     ],
-    "service": "career-ops-scan"
+    "service": "ats-discovery"
   },
   "dailyDiscovery": {
     "enabled": true,

@@ -8,7 +8,7 @@ This scaffold adds only:
 - Ehestifter `GET /jobs/exists?url=...` preflight;
 - no `POST /jobs` path.
 
-Copy these files into `scrapers/career-ops-scan`, then run:
+Copy these files into `scrapers/ats-discovery`, then run:
 
 ```bash
 ./scripts/copy-upstream-providers.sh /tmp/career-ops-upstream src/providers

@@ -1,8 +1,8 @@
 # ATS Discovery Journal: Approach Spike Through Guarded Import
 
 **Date covered:** July 2026  
-**Branch:** `feature/career-ops-scan`  
-**Current implementation path:** `scrapers/career-ops-scan`  
+**Branch:** `feature/ats-discovery`  
+**Current implementation path:** `scrapers/ats-discovery`  
 **Planned final name:** `scrapers/ats-discovery`  
 **Purpose:** implementation record and new-session handoff  
 
@@ -83,7 +83,7 @@ Attribution was retained through `UPSTREAM.md`, licenses, and derived-source com
 Current directory:
 
 ```text
-scrapers/career-ops-scan
+scrapers/ats-discovery
 ```
 
 Important files introduced during the spike:
@@ -111,7 +111,7 @@ LOCAL_GID="$(id -g)" \
 docker compose run --rm \
   --no-deps \
   --entrypoint node \
-  career-ops-scan \
+  ats-discovery \
   --test
 ```
 
@@ -210,7 +210,7 @@ A design correction was made during implementation:
 
 - `canonicalIdentity` contains only Jobs-owned identity fields;
 - URL-derived `foundOn`, hiring company, and posting company hints remain in a separate `urlInference` object;
-- scanner provenance remains `career-ops-scan` and is not overwritten by Jobs inference.
+- scanner provenance remains `ats-discovery` and is not overwritten by Jobs inference.
 
 ---
 
@@ -388,7 +388,7 @@ Command:
 LOCAL_UID="$(id -u)" \
 LOCAL_GID="$(id -g)" \
 docker compose run --rm \
-  career-ops-scan \
+  ats-discovery \
   scan tracked --import --max-create 1
 ```
 
@@ -408,7 +408,7 @@ Observed summary:
 The imported job appeared in the Ehestifter web UI with correct title, company, description, and:
 
 ```text
-found on career-ops-scan
+found on ats-discovery
 ```
 
 The first Greenhouse canary had no structured location at that time because Greenhouse list/detail handling preserved only `rawLocation`.
@@ -593,14 +593,14 @@ ATS Discovery
 Before merge to `master`, perform cleanup:
 
 ```text
-scrapers/career-ops-scan
+scrapers/ats-discovery
 → scrapers/ats-discovery
 ```
 
 and change new creation provenance:
 
 ```text
-foundOn = "career-ops-scan"
+foundOn = "ats-discovery"
 → foundOn = "ats-discovery"
 ```
 
@@ -671,7 +671,7 @@ Compound user cheap filters into one scan plan. Fetch each tenant once, then det
 
 Expected branch state includes:
 
-- working scanner in `scrapers/career-ops-scan`;
+- working scanner in `scrapers/ats-discovery`;
 - imports enabled locally for the canary test;
 - four provider modules;
 - offline, preflight, detail, location, and import stages;
@@ -719,7 +719,7 @@ Continue the ATS Discovery milestone from the attached milestone and journal.
 
 Treat the journal as the record of completed work. Do not repeat the Career-Ops wrapper/extraction spike, Jobs identity work, detail enrichment, guarded import, or location normalizer.
 
-First inspect the current feature/career-ops-scan branch and confirm the Docker test result and scanner config. Then implement Phase 2A only: an Ashby tenant catalog loader and ordered target planner that merges machine-managed catalog entries with priority and disabled overrides. Reuse the existing scanner pipeline. Limit the first catalog experiment to 100 normal Ashby tenants, run offline only, and write target-plan/provider-result artifacts. Keep all host commands Docker-only.
+First inspect the current feature/ats-discovery branch and confirm the Docker test result and scanner config. Then implement Phase 2A only: an Ashby tenant catalog loader and ordered target planner that merges machine-managed catalog entries with priority and disabled overrides. Reuse the existing scanner pipeline. Limit the first catalog experiment to 100 normal Ashby tenants, run offline only, and write target-plan/provider-result artifacts. Keep all host commands Docker-only.
 ```
 
 ---

@@ -1,6 +1,6 @@
 # Ehestifter System Design
 
-Status: current `as-is` system design
+Status: current `as-is` system design; ATS Discovery integrated after Phase 9 (2026-07-26)
 Audience: coding agents working on the repo, with enough detail for a human operator to follow
 Primary goal: enable safe feature work without guessing, duplicating existing services, or bypassing ownership boundaries
 
@@ -57,6 +57,7 @@ Current implemented system areas:
 - Jobs domain,
 - Telegram bot,
 - enrichment subsystem for compatibility scoring,
+- ATS Discovery for scheduled multi-user vacancy discovery from supported ATS providers,
 - Gateway running on GCP Cloud Run as the preferred worker/enrichment Gateway path, with Azure Functions Gateway retained as explicit rollback,
 - Analytics bounded context running on GCP Cloud Run with owned Azure SQL event storage and Mixpanel EU export,
 - local inference stack for compatibility worker.
@@ -65,8 +66,9 @@ Current implemented system areas:
 
 Current practical goals:
 - keep a shared store of job postings,
+- discover recent relevant postings from supported ATS providers without scanning each tenant once per user,
 - allow each user to track their own status against a shared job,
-- allow each user to maintain a CV for later enrichment,
+- allow each user to maintain a CV and bounded discovery preferences,
 - compute compatibility scores for `(jobId, userId)`,
 - expose those scores in UX without recomputing on every page load,
 - record selected product behavior events in owned storage and export them to Mixpanel for lightweight analysis,
@@ -80,6 +82,8 @@ flowchart TD
 Azure App Service: ehestifter]
     TGUser[Telegram User] --> Bot[Telegram Bot
 Azure App Service: ehestifter-telegram-bot]
+    ATSSources[Supported ATS providers and tenant catalogs] --> ATS[ATS Discovery
+local Docker + systemd]
 
     Core -->|x-functions-key| Jobs[Jobs Function App
 ehestifter-jobs]
@@ -90,6 +94,10 @@ ehestifter-enrichers]
 
     Bot -->|x-functions-key| Jobs
     Bot -->|x-functions-key| Users
+
+    ATS -->|x-functions-key| Jobs
+    ATS -->|x-functions-key| Users
+    ATS -->|x-functions-key| Enrichers
 
     Enrichers -->|x-functions-key| Jobs
     Enrichers -->|x-functions-key| Users
@@ -153,6 +161,7 @@ ehestifterdata)]
 | `backend/enrichers` | Enrichment Core, run lifecycle, snapshot building, projection dispatch | Azure Function App `ehestifter-enrichers` |
 | `backend/gateway` | Worker-facing APIs and Service Bus bridge | GCP Cloud Run service `ehestifter-gateway` is preferred/default; Azure Function App `ehestifter-gateway` remains deployed as explicit rollback |
 | `backend/analytics` | Owned analytics ingestion, event storage, Mixpanel mapping/dispatch, diagnostics | GCP Cloud Run service `ehestifter-analytics` |
+| `scrapers/ats-discovery` | ATS catalogs, provider scanning, multi-user matching, Jobs import orchestration, local scheduler | Local Docker container launched manually or by system-level systemd timers |
 | `workers/compatibility` | Polls work, builds prompts, performs compatibility inference | Local Docker container `compatibility-worker` |
 | `infrastructure/docker/llama.cpp` | Local inference server | Local Docker container `llama-server` |
 | Azure Service Bus | Queue transport for enrichment requests | Azure namespace `ehestifter` |
@@ -171,6 +180,7 @@ Constraints:
 - one shared hobby environment,
 - one main Azure resource group in one subscription,
 - one GCP project used for the current preferred Gateway runtime and Analytics Cloud Run service,
+- one local development node used for compatibility inference and ATS Discovery; it may be powered off at a scheduled slot,
 - no realistic support for multiple full environments on current budget/free tiers.
 
 Implication for agents:
@@ -178,7 +188,8 @@ Implication for agents:
 - migrations and config changes should be conservative,
 - avoid large refactors that assume a staging environment exists,
 - do not mistake Azure Gateway and GCP Gateway for staging/production environments; they are explicit runtime alternatives for the same single system,
-- Analytics is part of the same single system even though it runs on GCP Cloud Run and writes to Azure SQL.
+- Analytics is part of the same single system even though it runs on GCP Cloud Run and writes to Azure SQL,
+- ATS Discovery scheduling must tolerate the local node being offline by processing the latest due logical slot after boot/resume rather than replaying every missed day.
 
 ---
 
@@ -193,6 +204,7 @@ Implication for agents:
 5. **Assume cold starts.** Retries, timeouts, and UI blocking/unblocking patterns are part of the architecture, not incidental implementation detail.
 6. **Prefer consistency of shape over novelty.** New functions and routes should resemble existing ones.
 7. **Select Gateway explicitly.** Gateway routing between Azure and GCP is controlled by environment variables; there is no automatic fallback or dual-dispatch.
+8. **Bound external discovery traffic.** ATS scans use explicit provider budgets, pacing, lookback overlap, health partitions, canaries, and import caps; broad unbounded scraping is not acceptable.
 
 ### 3.2 Non-goals
 
@@ -202,7 +214,7 @@ These are not current goals and agents should not optimize for them unless expli
 - event-sourced redesign of domains,
 - rich frontend SPA framework migration,
 - direct browser access to domain functions,
-- scrapers productionization,
+- cloud-scale or unbounded ATS scraping, automatic application submission, or replacing manual application status,
 - warehouse-style analytics, Synapse, Parquet archival, or broad BI platform work,
 - browser-side Mixpanel SDK/session replay/clickstream tracking,
 - replacing Azure Service Bus with GCP Pub/Sub as part of the current Gateway hosting setup.
@@ -239,6 +251,8 @@ For GCP Cloud Run Analytics:
 - Core, Jobs, Users, and Enrichers keys can ingest events only for their own `sourceDomain`,
 - Scheduler and operator keys are separate from producer keys,
 - browser JavaScript must never receive Analytics keys, Mixpanel credentials, or Mixpanel project tokens.
+
+ATS Discovery is trusted local infrastructure. It calls protected Users, Jobs, and Enrichment endpoints with service credentials supplied through existing local secret/config paths. It must not log those credentials, CV content, provider session cookies, CSRF tokens, or full user profiles. Provider endpoints are external and untrusted; responses are bounded, validated, and normalized before product-domain calls.
 
 ### 4.3 Canonical user identity
 
@@ -302,6 +316,7 @@ Owns:
 - initial creation of internal user from Azure AD B2C data,
 - retrieval of user basic information,
 - user preferences related to the user profile,
+- bounded discovery eligibility/profile output derived from saved user preferences,
 - Telegram link code generation and link/unlink flows,
 - storage references to user-specific blobs,
 - CV storage and retrieval contracts for enrichment.
@@ -427,6 +442,30 @@ Boundaries:
 - Analytics validates event names, source domains, source surfaces, schema version, and forbidden property names before persistence,
 - Analytics stores the raw internal `UserId` only in owned Azure SQL and exports only the pseudonymous `DistinctId` to Mixpanel,
 - Mixpanel is an external analysis sink, not a durable system of record.
+
+### 5.9 ATS Discovery (`scrapers/ats-discovery`)
+
+Owns:
+- provider adapters and normalized candidate observations;
+- machine-managed catalogs and operator discovery policy;
+- target planning, provider/variant health, cadence, canaries, and bounded request policy;
+- cheap matching of one shared scan against all eligible users;
+- Jobs canonical-identity preflight, detail enrichment orchestration, location normalization, and guarded import;
+- compatibility request orchestration for matched users;
+- local run artifacts, provider/tenant state, scheduler state, locking, backups, and retention.
+
+Does not own:
+- canonical job identity or job persistence;
+- user/CV source data;
+- compatibility run/projection lifecycle;
+- application status;
+- direct SQL writes in any product domain.
+
+Boundary:
+- Users supplies bounded discovery profiles without CV text;
+- Jobs remains authoritative for duplicate identity and shared job creation;
+- Enrichment Core receives compatibility requests per matched user;
+- a discovery import never creates or changes user status.
 
 ---
 
@@ -716,6 +755,19 @@ Agents should preserve these unless explicitly asked to change the model.
 - Analytics is a side channel for selected behavior facts; product correctness must not depend on Analytics ingestion or Mixpanel export succeeding.
 - Browser code must not call Analytics or Mixpanel directly.
 
+### 8.5 ATS Discovery invariants
+
+- ATS tenants are scanned once per shared target plan, not once per user.
+- Catalogs and operator policy remain separate inputs.
+- Disabled operator overrides always win; runtime health cannot re-enable them.
+- Materially different provider protocols have independent health partitions.
+- Provider canaries are health-only and never call Jobs or enter import candidates.
+- Jobs API canonical identity is authoritative for deduplication and creation.
+- Detail fetching and shared job creation happen once per candidate, not once per matched user.
+- Compatibility is requested only for matched users; status is never created automatically.
+- New discovery imports use `foundOn = "ats-discovery"`; historical provenance is not rewritten.
+- Direct Compose commands bypass the host scheduler lock and are not the preferred routine operator path.
+
 ---
 
 ## 9. Users domain details
@@ -727,7 +779,8 @@ Users domain currently owns:
 - returning user basic profile information,
 - Telegram link code generation and display,
 - Telegram link and unlink,
-- user preferences, currently primarily CV,
+- user preferences, currently primarily CV plus discovery filters,
+- bounded discovery-eligible profile output for ATS Discovery,
 - user-related blob management for CV storage,
 - internal plaintext CV snapshot retrieval for enrichment,
 - emitting the safe `CV Updated` analytics event after successful web CV/preferences update.
@@ -783,6 +836,7 @@ Agent rule:
 | `GET /users/by-telegram/{telegram_user_id}` | resolve Telegram account to internal user | telegram bot |
 | `POST /users/preferences` | update user preferences including CV | web core |
 | `GET /users/internal/{userId}/cv-snapshot` | provide plaintext CV snapshot for enrichment | Enrichment Core |
+| `GET /users/internal/discovery-eligible` | return bounded discovery-eligible profiles and saved filters without CV text | ATS Discovery |
 
 ---
 
@@ -1443,15 +1497,168 @@ POST /gateway/dispatch
 
 ---
 
-## 14. Main end-to-end flows
+## 14. ATS Discovery
 
-### 14.1 Browser user opens the system
+### 14.1 Purpose and runtime
+
+ATS Discovery is the implemented vacancy-discovery component at:
+
+```text
+scrapers/ats-discovery
+```
+
+It is a local Docker, run-to-completion workload. A small host-side Python scheduler and system-level systemd timers provide daily discovery and independent catalog refresh. Optional GCP Cloud Run Job deployment was explicitly skipped; local operation remains the steady-state runtime.
+
+The product/service identity is `ats-discovery`. Career-Ops is an attributed upstream source for selected provider code and design ideas, not the Ehestifter component name.
+
+### 14.2 Supported provider surface
+
+Accepted provider paths:
+- Greenhouse;
+- Lever;
+- Ashby;
+- Workday;
+- Personio;
+- SmartRecruiters;
+- Softgarden;
+- SuccessFactors RMK;
+- SuccessFactors CSB.
+
+Machine-managed catalogs exist for Ashby, Greenhouse, Lever, and Workday. Catalog artifacts record source, license, fetch time, item count, and SHA-256 and are atomically replaced only after validation. Operator priority, disabled, and provider-patch policy remains separate from machine-managed catalogs.
+
+SuccessFactors uses independent operational partitions:
+
+```text
+successfactors:rmk
+successfactors:csb
+```
+
+Circuit breakers, cooldowns, state, summaries, and canaries use the health partition where a provider family contains materially different protocols. Tenant-local durable failures do not automatically degrade the entire partition.
+
+### 14.3 Planning, cadence, and provider safety
+
+The target planner combines:
+- tracked/priority company policy;
+- disabled overrides;
+- provider catalogs and provider-specific patches;
+- provider budgets under a global hard ceiling;
+- tenant runtime state;
+- provider/variant cooldowns and circuit breakers;
+- due health canaries;
+- bounded lookback and overlap;
+- compounded eligible-user filters.
+
+Priority targets and due provider canaries are processed before normal catalog shards. Healthy catalogs rotate deterministically so a large provider catalog cannot starve smaller providers. Recently relevant tenants can be promoted; long-empty tenants are demoted; suspected/confirmed-dead tenants receive long-interval re-probes.
+
+Provider-supported date constraints are used where useful. Otherwise posting age is filtered locally. Request pacing, concurrency, pagination, detail limits, rate observations, and live catalog target caps remain explicit configuration; autonomous rate tuning is not implemented.
+
+Provider canaries are filter-independent health probes. They never call Jobs and never become import candidates. High-risk protocols distinguish explicit empty, suspicious empty/volume collapse, schema/authentication failure, transport failure, and healthy nonempty outcomes.
+
+### 14.4 Multi-user discovery contract
+
+Users exposes:
+
+```text
+GET /users/internal/discovery-eligible
+```
+
+The endpoint returns a bounded set of eligible users and saved discovery filters. CV text does not cross this boundary. Malformed saved filters fail closed. A user with no saved filters follows the scanner's deliberately configured default matching behavior.
+
+One scan plan compounds all eligible profiles. Each candidate records the users that pass cheap filters. A candidate matching nobody is rejected before Jobs detail/import and compatibility work.
+
+For a retained candidate:
+1. Jobs canonical-identity preflight occurs once;
+2. detail is fetched once when the candidate is missing and detail is required;
+3. the shared job is created once through Jobs;
+4. compatibility is requested through Enrichment Core for each matched user when required;
+5. no application status is created or changed.
+
+### 14.5 Jobs and Enrichment integration
+
+Jobs remains authoritative for canonical identity and persistence:
+
+```text
+GET /jobs/exists?url=<origin-url>
+POST /jobs
+```
+
+ATS Discovery preserves provider-native identity and acquisition evidence even when Jobs resolves a different canonical representation. New imported jobs use:
+
+```text
+foundOn = "ats-discovery"
+```
+
+`foundOn` is the creation channel, not a complete observation history. Historical jobs and run artifacts created under the former product name remain unchanged as evidence.
+
+Compatibility requests go through the existing Enrichment Core API. ATS Discovery never writes compatibility projections or enrichment tables directly.
+
+### 14.6 State, artifacts, and observability
+
+Scanner-owned local state is under `scrapers/ats-discovery/data`:
+
+```text
+data/catalogs/                 machine-managed provider catalogs
+data/runs/<run-id>/            run evidence
+data/state/tenant-state.json   provider/tenant cadence and health
+data/state/scheduler-state.json logical scheduler slots and outcomes
+data/backups/                  bounded operational backups
+```
+
+Representative run artifacts include target plans, provider and canary results, candidates/rejections, user matches, Jobs preflight, detail/location/import results, tenant-state changes, rate observations, summary, and scheduler metadata.
+
+Artifacts and logs must not contain service keys, provider cookies/CSRF tokens, CV content, or full user profiles. Operator visibility comes from run summaries, provider/variant warnings, canary outcomes, `ats-ops status`, systemd unit state, and journal output.
+
+### 14.7 Scheduling and missed-run semantics
+
+Phase 7 supplies independent system-level timers for daily discovery and weekly catalog refresh. Services run as the repository owner so Docker bind-mount ownership matches manual operation.
+
+The timer's `Persistent=true` activation is not treated as proof of completed work. The scheduler calculates a local logical slot and records it complete only after scanner exit `0`, scanner exit `2` (completed degraded), or an intentional minimum-spacing collapse.
+
+Rules:
+- only the latest due slot is processed; missed days are not replayed one by one;
+- a late boot follows the same catch-up logic with no late cutoff;
+- only the remaining configured boot grace is waited;
+- `fcntl.flock` serializes discovery, catalog refresh, and wrapped manual scanner commands;
+- lock contention and launch failures use bounded retry behavior;
+- malformed or timezone-mismatched state fails closed;
+- discovery can continue with the previous valid catalogs when refresh fails;
+- scheduler and tenant-state backups plus artifact retention are bounded.
+
+Rendered systemd units contain the scanner path, Compose service, timer times, and retry values. Changing the scanner path or schedule/retry configuration requires uninstalling/reinstalling the units.
+
+Direct `docker compose run` remains possible for controlled validation but bypasses the host lock. Routine manual operation should use:
+
+```text
+./ops/scheduler/ats-ops scanner -- <scanner arguments>
+```
+
+### 14.8 Attribution and maintenance
+
+Selected provider implementations are derived from pinned Career-Ops sources under their recorded license. Selected catalogs and resilience ideas are attributed to job-board-aggregator under the recorded license/non-commercial constraint.
+
+`scripts/copy-upstream-providers.sh` is bootstrap/reproducibility tooling only. It may overwrite adapted provider files and must not be used as an unattended update path. Upstream improvements are inspected, selectively ported, attributed, and validated through fixtures and live canaries where appropriate.
+
+### 14.9 Known limitations
+
+- Direct Compose commands cannot be forced to take the host lock.
+- There is no external email/chat alert channel; failure visibility is local.
+- Timers catch up after resume but do not wake sleeping hardware.
+- Rootless Docker needs explicit operator adaptation.
+- Scheduler timing/retry changes require unit reinstall.
+- Unsupported provider ingestion and missing tenant catalogs remain deferred issues.
+- The local node can delay discovery until its next boot/resume; latest-slot catch-up avoids waiting a full additional day but cannot discover while powered off.
+
+---
+
+## 15. Main end-to-end flows
+
+### 15.1 Browser user opens the system
 
 1. User authenticates through Azure AD B2C.
 2. Flask core establishes session state.
 3. Core resolves/uses internal user identity and proxies downstream requests using function key auth.
 
-### 14.2 Manual job creation from web UI
+### 15.2 Manual job creation from web UI
 
 1. User opens create page.
 2. User enters job URL and fills other fields. 
@@ -1463,7 +1670,7 @@ POST /gateway/dispatch
 8. UI redirects to resulting job details page.
 9. History entry may be written even when duplicate create resolves to existing object.
 
-### 14.3 Job update from web UI
+### 15.3 Job update from web UI
 
 1. User opens edit page.
 2. Only non-identifying fields are editable.
@@ -1471,7 +1678,7 @@ POST /gateway/dispatch
 4. Jobs validates ownership and updates allowed fields.
 5. Jobs writes history entry.
 
-### 14.4 Status update from web UI
+### 15.4 Status update from web UI
 
 1. User selects new status for a job.
 2. Core proxy sends to `PUT /jobs/{jobId}/status`.
@@ -1479,7 +1686,7 @@ POST /gateway/dispatch
 4. Current visible status for that user is derived from latest entry.
 5. History relevant to that user can later show the change.
 
-### 14.5 Telegram link flow
+### 15.5 Telegram link flow
 
 1. Web UI gets or displays link code using Users domain.
 2. User performs bot link operation.
@@ -1487,7 +1694,7 @@ POST /gateway/dispatch
 4. Users stores unique mapping between telegram account and internal user.
 5. Future bot operations resolve internal user via `GET /users/by-telegram/{telegram_user_id}`.
 
-### 14.6 Telegram status update flow
+### 15.6 Telegram status update flow
 
 1. User sends status command with a status and search text.
 2. Bot resolves internal user.
@@ -1495,7 +1702,7 @@ POST /gateway/dispatch
 4. If ambiguous, callback flow lets user pick correct job.
 5. Bot calls Jobs endpoint to update status.
 
-### 14.7 Enrichment run flow
+### 15.7 Enrichment run flow
 
 1. A compatibility run is requested.
 2. Enrichment Core creates run and fetches job + CV snapshots.
@@ -1514,7 +1721,7 @@ POST /gateway/dispatch
 15. Jobs upserts into `dbo.CompatibilityScores`.
 16. Web UI later reads compatibility via Jobs APIs, not by calling Enrichment Core directly for list rendering.
 
-### 14.8 Analytics ingestion and Mixpanel export flow
+### 15.8 Analytics ingestion and Mixpanel export flow
 
 1. A product action or route succeeds in Core, Jobs, Users, or Enrichment Core.
 2. The producer emits a small server-side Analytics event with its own Analytics key.
@@ -1530,7 +1737,7 @@ Producer behavior:
 - Analytics emit helpers use short timeouts and do not raise errors into product routes,
 - synchronous event emission is a known tradeoff and may be replaced with async/local-cache-first emission if UX latency becomes visible.
 
-### 14.9 Analytics event sources
+### 15.9 Analytics event sources
 
 Current implemented server-side event sources:
 
@@ -1543,26 +1750,40 @@ Current implemented server-side event sources:
 
 Telegram analytics is intentionally deferred.
 
+### 15.10 Scheduled ATS discovery flow
+
+1. The systemd timer activates the discovery oneshot service for the latest due local slot.
+2. The host scheduler waits only the remaining boot grace and obtains the global `flock`.
+3. ATS Discovery loads valid catalogs, operator policy, tenant/provider health, and bounded eligible-user profiles.
+4. The planner orders due canaries/priority targets and deterministic provider catalog shards.
+5. Each selected ATS target is fetched once and normalized.
+6. Cheap filters produce a matched-user set; candidates matching no user are rejected.
+7. Jobs canonical identity is checked once per retained candidate.
+8. Missing candidates receive bounded detail/location processing and guarded shared-job creation.
+9. Compatibility is requested for matched users without creating status.
+10. Run artifacts, tenant state, rate observations, and scheduler metadata are published.
+11. Exit `0` records normal completion; exit `2` records degraded completion; other outcomes remain due and visible for bounded retry/operator action.
+
 ---
 
-## 15. API contract guidance
+## 16. API contract guidance
 
 This is not full OpenAPI. It is the minimal cross-service contract map agents should honor.
 
-### 15.1 General rules
+### 16.1 General rules
 
 - UI endpoints in core face the browser.
 - Domain functions are not intended for direct browser access.
 - Internal/domain-to-domain auth is function-key based.
 
-### 15.2 Idempotency guidance
+### 16.2 Idempotency guidance
 
 Current project-wide intent:
 - non-create operations should be repeatable,
 - create should resolve duplicates to existing object where applicable,
 - projection upserts should be safe to repeat.
 
-### 15.3 Hazard rule for DB-affecting changes
+### 16.3 Hazard rule for DB-affecting changes
 
 Any non-trivial DB write-path change should be treated as hazardous.
 
@@ -1573,7 +1794,27 @@ Agent protocol for hazardous DB work:
 4. ask for explicit clarification or approval if change is ambiguous or cross-domain,
 5. prefer adding/using owner-domain endpoint over direct cross-domain table access.
 
-### 15.4 Analytics API contract
+### 16.4 ATS Discovery cross-domain contracts
+
+Users discovery input:
+- `GET /users/internal/discovery-eligible`
+- function-key protected;
+- bounded profile/filter output;
+- no CV text.
+
+Jobs identity and persistence:
+- `GET /jobs/exists?url=<origin-url>` is authoritative for canonical identity preflight;
+- `POST /jobs` creates/reconciles the shared job;
+- imports carry system-actor context and `foundOn = "ats-discovery"`;
+- no status endpoint is called by discovery.
+
+Enrichment:
+- compatibility requests use the existing Enrichment Core service contract;
+- discovery does not write run or projection tables directly.
+
+Catalog/provider traffic is not a product-domain API contract. Provider-specific schemas remain isolated behind adapters and normalized candidate observations.
+
+### 16.5 Analytics API contract
 
 Ingest endpoint:
 - `POST /analytics/events`
@@ -1621,9 +1862,9 @@ Rules:
 
 ---
 
-## 16. Storage model
+## 17. Storage model
 
-### 16.1 Azure SQL
+### 17.1 Azure SQL
 
 Current SQL usage:
 - Users domain tables and metadata,
@@ -1635,7 +1876,7 @@ Guideline:
 - DB stores domain data,
 - DB should not become storage for static service configuration.
 
-### 16.2 Blob Storage
+### 17.2 Blob Storage
 
 Current blob usage is intentionally narrow.
 
@@ -1648,7 +1889,18 @@ Not currently used for:
 - Parquet analytics,
 - general product file storage beyond CV/enrichment needs.
 
-### 16.3 Analytics storage and external export
+### 17.3 ATS Discovery local storage
+
+ATS Discovery stores operational data under `scrapers/ats-discovery/data`:
+- machine-managed provider catalogs;
+- immutable-ish run artifacts;
+- tenant/provider health and cadence state;
+- scheduler logical-slot state;
+- bounded state backups.
+
+These are scanner-owned files, not product-domain records. Catalog/state replacement is atomic where implemented. Historical run artifacts are retained as evidence and are not rewritten during product renames. Active scheduler state corruption fails closed rather than silently resetting and risking duplicate work.
+
+### 17.4 Analytics storage and external export
 
 Current live Analytics storage:
 - `dbo.AnalyticsEvents` is the canonical owned analytics event log,
@@ -1676,15 +1928,15 @@ Agent rule:
 
 ---
 
-## 17. Configuration and secrets
+## 18. Configuration and secrets
 
-### 17.1 General rule
+### 18.1 General rule
 
 Environment variables are the normal place for service-level configuration and secrets.
 
 Current convention is imperfect and somewhat inconsistent across services. Agents should improve consistency gradually, not by large rewrites.
 
-### 17.2 Rules for future changes
+### 18.2 Rules for future changes
 
 - avoid introducing new env vars without a good reason,
 - avoid duplicating existing env vars under new names,
@@ -1693,7 +1945,7 @@ Current convention is imperfect and somewhat inconsistent across services. Agent
 - preserve explicit Gateway switch semantics,
 - do not introduce automatic fallback between Azure Gateway and GCP Gateway.
 
-### 17.3 Operational location
+### 18.3 Operational location
 
 For Azure-hosted apps/functions, environment values are typically managed in:
 - `Settings -> Environment variables`
@@ -1711,6 +1963,13 @@ For GCP Cloud Run Analytics:
 - secrets are stored in GCP Secret Manager and referenced by Cloud Run,
 - GCP Cloud Scheduler calls the protected dispatch endpoint with the scheduler-specific Analytics key,
 - do not print Scheduler HTTP headers in CLI output because they include `x-functions-key`.
+
+For local ATS Discovery:
+- committed examples and operator-owned local JSON/YAML files configure providers, tracked companies, overrides, discovery policy, scanner behavior, and scheduler behavior;
+- machine-managed catalogs and local state live under `data/`;
+- service credentials live in the existing local secret/config path and are not committed;
+- `config/scheduler.local.json` is authoritative for logical slots while systemd sees rendered values, so schedule/retry changes require reinstall;
+- Compose service identity is `ats-discovery`.
 
 Core/Jobs/Users/Enrichers Analytics producer config:
 
@@ -1739,9 +1998,9 @@ Disable switches:
 
 ---
 
-## 18. Operational constraints and observability
+## 19. Operational constraints and observability
 
-### 18.1 Cold starts and retries
+### 19.1 Cold starts and retries
 
 Cold starts are a first-order design constraint.
 
@@ -1756,11 +2015,11 @@ Agent rules:
 - preserve user-safe button blocking for mutating actions,
 - do not optimize only for warm-path performance.
 
-### 18.2 Database latency assumptions
+### 19.2 Database latency assumptions
 
 DB currently does not hibernate the way Functions do, but existing DB retries/timeouts should still be preserved in case of future tier changes or transient failures.
 
-### 18.3 Observability
+### 19.3 Observability
 
 Current observability tools:
 - Azure Application Insights,
@@ -1772,6 +2031,8 @@ Current observability tools:
 - GCP Cloud Scheduler status for Analytics dispatch trigger,
 - GCP Artifact Registry image tags for Gateway and Analytics deployment traceability,
 - GitHub Actions run logs for GCP Gateway deployment automation,
+- ATS Discovery `summary.json`, provider/variant warnings, canary outcomes, target/state/rate artifacts, and scheduler metadata,
+- `ats-ops status`, systemd unit state, and journal output for local discovery scheduling,
 - job history as partial end-to-end breadcrumbing.
 
 Known limitations:
@@ -1779,27 +2040,30 @@ Known limitations:
 - Gateway diagnosis may require checking both Cloud Run logs and Enrichers Core logs because Gateway forwards work to Enrichers Core and Service Bus,
 - Analytics producer emission is synchronous and best-effort; it can still add up to the configured short timeout to a product request when Analytics is slow.
 
-### 18.4 Runbooks
+### 19.4 Runbooks
 
-Operational runbooks are not yet mature enough to encode here.
+ATS Discovery has a component runbook in `scrapers/ats-discovery/README.md`, including config validation, wrapper-based manual operation, timer installation/uninstallation, missed-slot semantics, tests, and artifact inspection.
 
-Leave as future work:
-- retrying failed enrichment dispatches,
-- inspecting stuck runs,
-- clearing broken message states,
-- diagnosing projection-delivery failures,
-- formalizing GCP Gateway deploy/rollback checks,
-- deciding whether Analytics producer emission should move to async/local-cache-first if UX is affected,
-- adding Analytics retention/cleanup once event volume is understood,
-- setting GCP budget alerts.
+Still future work:
+- retrying failed enrichment dispatches;
+- inspecting stuck enrichment runs;
+- clearing broken message states;
+- diagnosing projection-delivery failures;
+- formalizing GCP Gateway deploy/rollback checks;
+- deciding whether Analytics producer emission should move to async/local-cache-first if UX is affected;
+- adding Analytics retention/cleanup once event volume is understood;
+- setting GCP budget alerts;
+- adding an external ATS Discovery notification channel if local unit/artifact visibility becomes insufficient.
 
 ---
 
-## 19. Current exclusions and explicitly not implemented
+## 20. Current exclusions and explicitly not implemented
 
 These items should not be treated as working system capabilities:
-- production scrapers,
-- StepStone scraper stub as usable source,
+- optional GCP Cloud Run Job execution for ATS Discovery;
+- unsupported ATS ingestion such as BambooHR, iCIMS, Paylocity, or StepStone;
+- tenant catalogs for providers not represented by current machine-managed catalogs;
+- automatic job application or automatic application-status creation;
 - Synapse analytics stack,
 - Parquet archival pipeline,
 - broad data warehouse / BI pipeline beyond owned Analytics SQL and Mixpanel export,
@@ -1816,11 +2080,11 @@ Agent rule:
 
 ---
 
-## 20. Strict design rules for future changes
+## 21. Strict design rules for future changes
 
 These rules are intentionally blunt.
 
-### 20.1 Do
+### 21.1 Do
 
 - Use the owner domain API for another domain's data.
 - Keep new function structure close to existing patterns.
@@ -1830,9 +2094,11 @@ These rules are intentionally blunt.
 - Keep Analytics best-effort and privacy-preserving.
 - Reuse existing constants and helpers before creating new ones.
 - Read migration SQL before touching DB-side behavior.
+- Preserve provider/variant health isolation, request bounds, canaries, and import caps in ATS Discovery.
+- Use Jobs preflight/create and Enrichment APIs rather than adding cross-domain scanner writes.
 - Ask for clarification when a DB write change is ambiguous.
 
-### 20.2 Do not
+### 21.2 Do not
 
 - Do not directly mutate DB tables owned by another domain.
 - Do not let browser code call domain functions directly.
@@ -1845,14 +2111,16 @@ These rules are intentionally blunt.
 - Do not add automatic fallback between Azure Gateway and GCP Gateway.
 - Do not log function keys or duplicate GCP runtime secrets into GitHub Actions.
 - Do not put Mixpanel credentials, Analytics keys, raw user IDs, CV text, job descriptions, job titles, company names, raw URLs, external IDs, exception text, or tokens into Mixpanel events.
+- Do not scan ATS tenants once per user, bypass Jobs canonical identity, create status from discovery, or turn provider canaries into import sources.
+- Do not remove upstream attribution when renaming or adapting ATS Discovery code.
 
 ---
 
-## 21. Feature development protocol for coding agents
+## 22. Feature development protocol for coding agents
 
 This section is intended to shape future agent behavior.
 
-### 21.1 Before proposing code changes
+### 22.1 Before proposing code changes
 
 An agent should first answer:
 1. Which domain owns this behavior?
@@ -1860,7 +2128,7 @@ An agent should first answer:
 3. Which existing endpoints/helpers/constants already cover part of it?
 4. Does the change affect DB writes, auth, or cross-domain contracts?
 
-### 21.2 Extraction-first workflow
+### 22.2 Extraction-first workflow
 
 For small-context models, use this process:
 1. Extract the smallest relevant set of sections from this document.
@@ -1868,7 +2136,7 @@ For small-context models, use this process:
 3. Summarize the extracted constraints before implementing.
 4. Only then modify code.
 
-### 21.3 Required caution for hazardous changes
+### 22.3 Required caution for hazardous changes
 
 Treat these as hazardous and deserving explicit clarification or highly conservative implementation:
 - adding/removing/changing DB columns,
@@ -1879,14 +2147,14 @@ Treat these as hazardous and deserving explicit clarification or highly conserva
 - changing proxy/auth routing,
 - changing deduplication identity.
 
-### 21.4 Preferred implementation style
+### 22.4 Preferred implementation style
 
 - Extend existing route/module shapes instead of creating parallel patterns.
 - Prefer narrow targeted changes.
 - Keep code understandable without requiring advanced inference tooling.
 - Add comments where intent is not obvious from code.
 
-### 21.5 When to create a milestone design doc
+### 22.5 When to create a milestone design doc
 
 Create a temporary milestone doc when:
 - the change spans multiple services,
@@ -1898,9 +2166,9 @@ Merge the milestone doc back into this master file after implementation stabiliz
 
 ---
 
-## 22. Safe extension guidance
+## 23. Safe extension guidance
 
-### 22.1 Adding a new user-facing browser feature
+### 23.1 Adding a new user-facing browser feature
 
 Usually touch, in order:
 1. owner domain endpoint or logic,
@@ -1909,14 +2177,14 @@ Usually touch, in order:
 4. retries/blocking states,
 5. tests.
 
-### 22.2 Adding a new Telegram flow
+### 23.2 Adding a new Telegram flow
 
 Usually touch:
 1. bot command/callback handling,
 2. existing Jobs/Users endpoints if possible,
 3. only add new bot-specific endpoint if existing surfaces are genuinely insufficient.
 
-### 22.3 Adding a new enrichment projection
+### 23.3 Adding a new enrichment projection
 
 Usually touch:
 1. Enrichment Core postprocessing/dispatch registration,
@@ -1926,7 +2194,7 @@ Usually touch:
 
 Do not make worker write directly to owner domain stores.
 
-### 22.4 Adding or changing an analytics event
+### 23.4 Adding or changing an analytics event
 
 Usually touch:
 1. producer service helper/route where the owner-domain fact is known,
@@ -1941,7 +2209,19 @@ Rules:
 - do not add free-text properties without explicit review,
 - do not send raw internal `UserId` to Mixpanel; let Analytics derive/export `DistinctId`.
 
-### 22.5 Adding a new field to jobs or users
+### 23.5 Adding a provider or provider catalog to ATS Discovery
+
+Procedure:
+1. confirm the provider is in scope and canonical identity can be resolved by Jobs or is guarded by an explicit issue/import constraint;
+2. implement behind the existing provider adapter contract;
+3. define bounded pagination, pacing, concurrency, date behavior, transient/durable failure classification, and detail behavior;
+4. add a health partition/canary when superficially successful empty/schema behavior is possible;
+5. preserve provider-native identity, source revision, license, and Ehestifter modifications;
+6. add fixtures and bounded live evidence;
+7. add catalog support only through the common machine-managed contract, keeping operator policy separate;
+8. update the component README and this document only after acceptance.
+
+### 23.6 Adding a new field to jobs or users
 
 Procedure:
 1. identify owner domain,
@@ -1952,33 +2232,33 @@ Procedure:
 
 ---
 
-## 23. Known weak spots and intentional compromises
+## 24. Known weak spots and intentional compromises
 
 These are not mistakes to automatically “fix.” They are tradeoffs.
 
-### 23.1 Single shared environment
+### 24.1 Single shared environment
 
 There is no realistic staging environment. Changes should assume direct impact on the only meaningful environment.
 
-### 23.2 Function-key trust model
+### 24.2 Function-key trust model
 
 Current system relies heavily on `x-functions-key` between components. This is acceptable for the current project stage.
 
 Do not replace it with a heavier auth system unless explicitly requested.
 
-### 23.3 Session persistence in core
+### 24.3 Session persistence in core
 
 Browser auth session state in Flask is not backed by persistent shared session infrastructure. This is a known limitation, not an invitation to redesign auth without request.
 
-### 23.4 Lightweight frontend architecture
+### 24.4 Lightweight frontend architecture
 
 Flask templates plus JS are the intended frontend architecture for now.
 
-### 23.5 Local inference
+### 24.5 Local inference
 
 Compatibility worker and llama.cpp are intentionally local and simple. Do not redesign toward managed inference platforms without explicit instruction.
 
-### 23.6 Synchronous Analytics producer emission
+### 24.6 Synchronous Analytics producer emission
 
 Current producer helpers emit Analytics events synchronously inside request handling with short timeouts.
 
@@ -1993,7 +2273,7 @@ Do not treat this as a permanent architectural requirement. If UX latency become
 - local durable cache/outbox drained by a lightweight worker,
 - domain-owned replay from existing durable history where practical.
 
-### 23.7 Analytics Cloud Run to Azure SQL networking
+### 24.7 Analytics Cloud Run to Azure SQL networking
 
 Analytics Cloud Run reaches Azure SQL from GCP. The current firewall/network posture is a hobby-budget compromise rather than best-practice private networking.
 
@@ -2005,7 +2285,7 @@ Mitigations:
 - no broad DB roles are granted,
 - function keys and Mixpanel credentials are stored in GCP Secret Manager.
 
-### 23.8 Cross-cloud Gateway
+### 24.8 Cross-cloud Gateway
 
 GCP Cloud Run Gateway is intentionally narrow. It does not mean the system has become broadly multi-cloud.
 
@@ -2017,9 +2297,15 @@ Current compromise:
 
 Do not generalize this into a broader migration pattern without a separate milestone.
 
+### 24.9 Local ATS Discovery scheduler
+
+ATS Discovery depends on a local node that may be powered off. Persistent timers plus logical-slot state catch up the latest due run after boot/resume, but discovery cannot happen while the node is unavailable.
+
+Direct Compose commands bypass the global host lock, timer units embed rendered paths/settings, and there is no external notification channel. These are accepted hobby-project compromises documented in the component runbook.
+
 ---
 
-## 24. Change log guidance for this document
+## 25. Change log guidance for this document
 
 Update this document when any of the following happens:
 - new service/component is added,
@@ -2030,15 +2316,16 @@ Update this document when any of the following happens:
 - storage responsibilities move,
 - Gateway default runtime, routing, auth, or deployment model changes,
 - Analytics event taxonomy, privacy rules, producer responsibilities, dispatch behavior, or Mixpanel export model changes,
+- ATS Discovery provider contract, accepted provider/catalog set, multi-user contract, Jobs/Enrichment integration, product identity, health model, or scheduler semantics change,
 - a milestone finishes and becomes part of steady-state architecture.
 
 Do not update this document for every small bugfix.
 
 ---
 
-## 25. Quick reference
+## 26. Quick reference
 
-### 25.1 Where should a change probably go?
+### 26.1 Where should a change probably go?
 
 | Change type | Likely owner |
 |---|---|
@@ -2049,9 +2336,10 @@ Do not update this document for every small bugfix.
 | Enrichment lifecycle / snapshot / dispatch | Enrichment Core |
 | Service Bus / lease / worker handoff / Gateway hosting wrapper behavior | Gateway |
 | Analytics event ingestion, validation, dispatch, Mixpanel mapping | Analytics |
+| ATS catalogs, providers, target planning, discovery matching/import orchestration, local scheduling | ATS Discovery |
 | Prompting / score generation / inference fallback behavior | Compatibility worker |
 
-### 25.2 What should never be guessed?
+### 26.2 What should never be guessed?
 
 - status values,
 - owner of a table,
@@ -2060,9 +2348,12 @@ Do not update this document for every small bugfix.
 - whether browser may call a function directly,
 - which Gateway endpoint is selected by configuration,
 - whether an Analytics event/property is privacy-safe,
+- provider/variant health partition and canary semantics,
+- whether a catalog entry is machine-managed or operator policy,
+- whether a scanner run may create status (it may not),
 - whether a stub/experiment is production-ready.
 
-### 25.3 What should usually trigger clarification?
+### 26.3 What should usually trigger clarification?
 
 - non-trivial DB write changes,
 - cross-domain data writes,
@@ -2070,11 +2361,12 @@ Do not update this document for every small bugfix.
 - introducing new dependencies or frameworks,
 - changing auth or trust model,
 - changing Gateway selection, Gateway auth, or deployment automation semantics,
-- changing Analytics event names, property safety rules, auth, or export behavior.
+- changing Analytics event names, property safety rules, auth, or export behavior,
+- changing ATS provider request bounds, canonical-identity integration, matching defaults, import/status behavior, or scheduler logical-slot semantics.
 
 ---
 
-## 26. Current state summary
+## 27. Current state summary
 
 As of this document version:
 - web UI, Users, Jobs, Telegram bot, Enrichment Core, Gateway, compatibility worker, and local llama.cpp are the active system,
@@ -2083,7 +2375,8 @@ As of this document version:
 - Enrichers Core and compatibility worker select Gateway through explicit environment variables,
 - GitHub Actions can deploy GCP Gateway to Cloud Run through Workload Identity Federation,
 - Synapse and Parquet are not active,
-- scrapers are not active,
+- ATS Discovery is active as a local Docker/systemd component at `scrapers/ats-discovery`, with accepted provider/catalog coverage, shared multi-user matching, guarded Jobs import, and latest-slot missed-run catch-up,
+- optional GCP Cloud Run Job execution for discovery is skipped,
 - compatibility score is the only implemented enrichment projection,
 - one file is preferred as the main source of truth,
 - future milestone docs may exist temporarily but should be merged back here after completion.

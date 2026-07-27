@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# ATS-DISCOVERY-BOOTSTRAP-ONLY
+# Bootstrap/reproducibility helper only. It may overwrite adapted provider files.
+# Do not use it as an unattended upstream-update mechanism; inspect and test diffs.
 set -euo pipefail
 
 UPSTREAM_DIR="${1:-/tmp/career-ops-upstream}"

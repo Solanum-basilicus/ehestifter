@@ -66,7 +66,7 @@ test('existsByUrl uses Jobs identity response as authority', async () => {
 test('preflightCandidates preserves scanner provenance and maps Jobs identity', async () => {
   const candidate = {
     url: 'https://boards.greenhouse.io/example/jobs/123',
-    foundOn: 'career-ops-scan',
+    foundOn: 'ats-discovery',
     canonicalIdentity: null,
     urlInference: null,
     existingJobId: null,
@@ -99,7 +99,7 @@ test('preflightCandidates preserves scanner provenance and maps Jobs identity', 
     1,
   );
 
-  assert.equal(result.foundOn, 'career-ops-scan');
+  assert.equal(result.foundOn, 'ats-discovery');
 
   assert.deepEqual(result.canonicalIdentity, {
     provider: 'greenhouse',

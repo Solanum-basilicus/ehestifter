@@ -47,7 +47,7 @@ def write_config(root: Path, **overrides):
         "bootGraceMinutes": 10,
         "minimumSpacingMinutes": 240,
         "retry": {"maxRetries": 3, "retryIntervalMinutes": 30, "retryWindowMinutes": 240},
-        "compose": {"command": ["docker", "compose"], "service": "career-ops-scan"},
+        "compose": {"command": ["docker", "compose"], "service": "ats-discovery"},
         "dailyDiscovery": {
             "enabled": True,
             "schedule": "08:30",
@@ -345,7 +345,7 @@ class SchedulerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             config = write_config(Path(temp))
             command = scheduler.build_scanner_command(config, "dailyDiscovery")
-            self.assertEqual(command, ["docker", "compose", "run", "--rm", "career-ops-scan", "scan", "tracked", "--offline"])
+            self.assertEqual(command, ["docker", "compose", "run", "--rm", "ats-discovery", "scan", "tracked", "--offline"])
 
     def test_systemd_trigger_waits_only_remaining_boot_grace(self):
         with tempfile.TemporaryDirectory() as temp:

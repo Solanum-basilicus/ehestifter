@@ -18,7 +18,7 @@ function candidate(overrides = {}) {
     title: 'Product Manager',
     hiringCompanyName: 'Acme',
     postingCompanyName: null,
-    foundOn: 'career-ops-scan',
+    foundOn: 'ats-discovery',
     rawLocation: 'Remote Europe',
     locations: [],
     remoteType: 'Remote',

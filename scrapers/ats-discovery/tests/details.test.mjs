@@ -27,7 +27,7 @@ test('Greenhouse details populate description without changing scanner provenanc
   const candidate = {
     url: 'https://job-boards.greenhouse.io/example/jobs/123',
     applyUrl: 'https://job-boards.greenhouse.io/example/jobs/123',
-    foundOn: 'career-ops-scan',
+    foundOn: 'ats-discovery',
     description: '',
     descriptionStatus: 'missing',
     locations: [],
@@ -87,7 +87,7 @@ test('Greenhouse details populate description without changing scanner provenanc
     result.descriptionStatus,
     'greenhouse-detail-api',
   );
-  assert.equal(result.foundOn, 'career-ops-scan');
+  assert.equal(result.foundOn, 'ats-discovery');
   assert.equal(result.detail.status, 'ok');
 });
 
@@ -98,7 +98,7 @@ test('Ashby details reuse one board request and preserve structured primary loca
         `https://jobs.ashbyhq.com/example/${externalId}`,
       applyUrl:
         `https://jobs.ashbyhq.com/example/${externalId}`,
-      foundOn: 'career-ops-scan',
+      foundOn: 'ats-discovery',
       description: '',
       descriptionStatus: 'missing',
       locations: [],

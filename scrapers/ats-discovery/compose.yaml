@@ -1,8 +1,8 @@
 services:
-  career-ops-scan:
+  ats-discovery:
     build:
       context: .
-    image: ehestifter/career-ops-scan:local
+    image: ehestifter/ats-discovery:local
 
     # Override the image UID locally so bind-mounted artifacts belong
     # to the host developer.
