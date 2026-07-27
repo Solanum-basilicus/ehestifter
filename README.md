@@ -1,73 +1,88 @@
-# Ehestifter – Applicant's Application Tracking Service
+# Ehestifter
 
-Ehestifter is a hobby project to explore **Azure cloud services** and **agentic AI workflows** while building something marginally useful:  
-a system that scrapes job offerings, normalizes and enriches them, checks user compatibility, and exposes APIs and a lightweight UI.
-So far it doesn't scrape or enrich anyting with AI, but we'll getting there. One step at time.
+Ehestifter is a hobby-scale applicant tracking and job-discovery system built to gain practical experience with Azure, GCP, local inference, and agentic development workflows.
 
-## Features
-- Allows you to track applications, pushing them along common statuses
-- Tracks dates for you. When did you applied to Amazon SRE role? Is it time to try again?
-- Keeps job description for you even if company hid/archived the original.
-- Have a simple telegram bot so you can check or change status of the application without opening web UI. You can even add new application through bot, to be edited later when you are back to keyboard.
-- (Mostly) survices off free tier options in Azure. With casual use you'll have to pay pennies to host. 
+The application keeps shared job offerings, per-user application status, CV data, compatibility projections, and selected product analytics. ATS Discovery periodically searches supported company applicant-tracking systems, filters candidates against eligible user profiles, imports missing shared jobs through the Jobs API, and requests compatibility only for matched users.
 
-## Future Features
-- Scrapers for job offerings from multiple sources
-- Data enrichment using LLMs
-- Compatibility checks against user profiles & preferences
-- Notifications (e.g., via Telegram)
-- Archival and analytics of historical job postings
+## Implemented system
 
-##  Architecture
+| Area | Responsibility | Runtime |
+|---|---|---|
+| Web Core | Browser authentication, server-rendered UI, proxy/orchestration routes | Azure App Service |
+| Users | User profile, CV blobs/metadata, Telegram identity, discovery-eligible profiles | Azure Functions + Azure SQL/Blob |
+| Jobs | Shared job offerings, canonical identity, user status, compatibility projections | Azure Functions + Azure SQL |
+| Enrichment Core | Compatibility run lifecycle, snapshots, projection dispatch | Azure Functions + Azure Blob |
+| Gateway | Worker-facing Service Bus bridge | GCP Cloud Run by default; Azure Functions rollback |
+| Compatibility Worker | Local prompt/inference execution | Docker + local llama.cpp |
+| Analytics | Owned event log and best-effort Mixpanel EU export | GCP Cloud Run + Azure SQL |
+| ATS Discovery | Provider scanning, catalogs, health, filtering, import, scheduling | Local Docker + system-level systemd timers |
+| Telegram Bot | Lightweight application-status and link workflows | Azure App Service |
 
-### Components
-- **Azure Functions**  
-  - Provide APIs for job offerings, users, and preferences  
-  - Run scrapers on triggers (in future)
-  - Handle enrichment pipelines  (in future)
+The master as-is architecture and ownership rules are in [`docs/system-design.md`](docs/system-design.md).
 
-- **Azure SQL Database**  
-  - Stores structured data: users, preferences, job references  
-  - Enforces constraints (duplicate handling, cascade deletes)  
+## Repository layout
 
-- **Azure Storage (StorageV2)**  
-  - Holds user'S CVs for AI functions (blob storage)
-  - Archives normalized job postings as **Parquet** for analytics  (in future)
+```text
+backend/
+  analytics/          analytics ingestion and Mixpanel dispatch
+  core/               Flask web UI and browser-facing proxy routes
+  enrichers/          enrichment lifecycle and snapshots
+  gateway/            Service Bus bridge and hosting wrappers
+  jobs/               Jobs bounded context
+  telegrambot/        Telegram UX
+  users/              Users bounded context
+infrastructure/       cloud and local infrastructure assets
+scrapers/
+  ats-discovery/      local ATS discovery scanner and scheduler
+workers/
+  compatibility/      local compatibility worker
+docs/
+  system-design.md    canonical as-is architecture
+  archive/milestones/ completed milestone design records
+```
 
-- **Azure Synapse Analytics**  
-  - Queries Parquet files directly for reporting and ad-hoc analytics  
+## ATS Discovery
 
-- **Web Application (Flask + JS/React frontend)**  
-  - Handles authentication (Azure AD B2C)  
-  - Provides a user-facing interface for browsing and filtering jobs  
-  - Connects to Functions APIs  
+The canonical scanner path is:
 
-### Data Flow
-1. **Scrapers** fetch job postings → store raw data.  
-2. **Enricher Functions** normalize and enrich with LLM-based metadata.  
-3. **Jobs API** exposes enriched data for the frontend and external queries.  
-4. **User API** manages authentication, user records, and preference filters.  
-5. **UI** lets users log in, see compatible jobs, and set alerts.  
-6. **Storage + Synapse** enable historical data analysis.
+```text
+scrapers/ats-discovery
+```
 
-Only 2-5 exists for now, you are expected to input job applications manually. Still better than sorting auto-replies into subfolders in your email box, eh.
+Its product identity is `ats-discovery`; Career-Ops remains an attributed upstream source for selected provider implementations, not the Ehestifter component name.
 
-See docs/system-design.md for more details.
+From the scanner directory, routine operator entry points are:
 
-## Repository Layout
-- infrastructure/ # SQL schemas, IaC templates
-- backend/core/ # Web app that provides UI
-- backend/jobs/ # jobs API azure function (CRUD jobs, statuses, search and filters for job list)
-- backend/telegrambot/ # web app that hosts telegram bot
-- backend/users/ # users API azure function (auth, preferences)
-- tools/ # simple scripts to help with setup (e.g. generate a list of counrtries and cities to be used in dropdown lists in filters and on create/edit application pages)
-- docs/ # Diagrams, notes
+```bash
+./ops/scheduler/ats-ops validate-config
+./ops/scheduler/ats-ops status
+./ops/scheduler/ats-ops scanner -- scan tracked --offline
+```
 
-Each component should have its own `README.md` with setup & deployment details. If it does not - I got distracted, please ping me and I'll help you to setup.
+Use the scheduler wrapper for routine manual scans after timers are installed. Direct `docker compose run` commands bypass the host lock and are intended for controlled validation only.
 
-## License
-This project is licensed under the [GNU GPL v3](LICENSE).
+See [`scrapers/ats-discovery/README.md`](scrapers/ats-discovery/README.md) for architecture, configuration, validation, scheduling, and operational commands.
 
-## Status
-This is a work-in-progress hobby project. Expect breaking changes, incomplete features, and frequent experiments.
+## Core design rules
 
+- Each bounded context owns its tables and write model.
+- Cross-domain writes go through owner-domain APIs.
+- Browser code calls Web Core, not domain functions directly.
+- Jobs owns canonical job identity and shared persistence.
+- ATS Discovery never creates user application status.
+- Compatibility and status remain per `(jobId, userId)` while jobs remain shared.
+- Analytics is best-effort and must not affect product correctness.
+- Gateway selection is explicit; there is no automatic Azure/GCP dual dispatch.
+- Provider traffic is bounded, measurable, and governed by provider/variant health.
+
+## Environment posture
+
+This is one budget-constrained hobby environment, not a production/staging fleet. Azure hosts most product domains and storage, GCP hosts the preferred Gateway and Analytics runtime, and a local development node runs compatibility inference and ATS Discovery. Changes should remain incremental, reversible, and conservative about recurring cloud cost.
+
+## Documentation
+
+- [`docs/system-design.md`](docs/system-design.md) — current as-is architecture and guardrails.
+- [`docs/archive/milestones/ats-discovery.md`](docs/archive/milestones/ats-discovery.md) — archived implementation design and phase history for ATS Discovery.
+- Component-local READMEs — implementation and operator detail.
+
+Historical phase records are evidence of implementation decisions; the master system design and current component README are authoritative for steady-state behavior.

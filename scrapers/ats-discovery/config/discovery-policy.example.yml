@@ -1,0 +1,118 @@
+schema_version: 1
+
+defaults:
+  scheduling:
+    priority_interval_hours: 24
+    active_interval_hours: 24
+    healthy_interval_hours: 72
+    recent_activity_window_hours: 168
+    long_empty_after_empty_scans: 3
+    long_empty_interval_hours: 168
+    first_durable_failure_retry_hours: 24
+    suspected_dead_after_failures: 2
+    confirmed_dead_after_failures: 4
+    dead_reprobe_interval_hours: 720
+    transient_failure_cooldown_minutes: 360
+    rate_limit_cooldown_minutes: 1440
+  lookback:
+    initial_hours: 72
+    overlap_hours: 12
+    max_hours: 240
+    dead_reprobe_unbounded: true
+  execution:
+    concurrency: 3
+    min_request_interval_ms: 150
+    breaker:
+      rate_limit_threshold: 2
+      transient_error_threshold: 8
+      transient_error_ratio_threshold: 0.5
+      minimum_requests_for_ratio: 10
+      cooldown_minutes: 1440
+  recommendations:
+    minimum_requests: 20
+    healthy_success_ratio: 0.98
+    high_transient_error_ratio: 0.2
+    fast_p95_ms: 5000
+    maximum_suggested_concurrency: 8
+  monitoring:
+    # A historically active tenant returning an explicit zero is re-probed
+    # before it is accepted as genuinely empty.
+    suspicious_empty_baseline_minimum_jobs: 10
+    suspicious_empty_reprobe_minutes: 60
+    # A nonzero result that falls by at least this ratio from the rolling
+    # median is also re-probed once before accepting the new volume.
+    suspicious_volume_drop_ratio: 0.9
+    recent_successful_count_window: 8
+    # Variant summaries become degraded only after a meaningful sample.
+    degraded_minimum_attempts: 2
+    degraded_error_ratio: 0.5
+
+providers:
+  ashby:
+    catalog_enabled: true
+    # Keep the current production-safe value if it is lower. Phase 5B does
+    # not overwrite the operator-owned discovery-policy.yml.
+    max_normal_targets_per_run: 1
+    target_full_sweep_days: 3
+    execution:
+      concurrency: 3
+      min_request_interval_ms: 150
+
+  greenhouse:
+    catalog_enabled: true
+    # Initial Phase 5B offline rollout. Raise only after inspecting provider
+    # errors, healthy-empty ratios, latency, candidate yield, and sweep time.
+    max_normal_targets_per_run: 10
+    target_full_sweep_days: 3
+    execution:
+      concurrency: 3
+      min_request_interval_ms: 150
+
+  lever:
+    catalog_enabled: true
+    max_normal_targets_per_run: 10
+    target_full_sweep_days: 3
+    execution:
+      concurrency: 3
+      min_request_interval_ms: 150
+
+  workday:
+    catalog_enabled: true
+    max_normal_targets_per_run: 2
+    target_full_sweep_days: 3
+    execution:
+      concurrency: 1
+      min_request_interval_ms: 750
+
+  # Phase 5 tracked providers without catalogs in this milestone.
+  # the limits below control priority/canary targets only.
+  personio:
+    execution:
+      concurrency: 2
+      min_request_interval_ms: 500
+
+  smartrecruiters:
+    execution:
+      concurrency: 2
+      min_request_interval_ms: 500
+
+  softgarden:
+    execution:
+      concurrency: 2
+      min_request_interval_ms: 750
+
+  successfactors:
+    lookback:
+      initial_hours: 168
+      overlap_hours: 24
+      max_hours: 336
+      dead_reprobe_unbounded: true
+    execution:
+      concurrency: 1
+      min_request_interval_ms: 1000
+      breaker:
+        rate_limit_threshold: 2
+        transient_error_threshold: 5
+        transient_error_ratio_threshold: 0.4
+        minimum_requests_for_ratio: 5
+        cooldown_minutes: 1440

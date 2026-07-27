@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "timezone": "Europe/Berlin",
+  "paths": {
+    "state": "data/state/scheduler-state.json",
+    "lock": "data/state/ats-discovery.lock",
+    "lockOwner": "data/state/ats-discovery-lock-owner.json",
+    "runs": "data/runs",
+    "stateBackups": "data/state/backups",
+    "tenantState": "data/state/tenant-state.json",
+    "tenantStateBackups": "data/state/backups/tenant-state"
+  },
+  "bootGraceMinutes": 10,
+  "minimumSpacingMinutes": 240,
+  "retry": {
+    "maxRetries": 3,
+    "retryIntervalMinutes": 30,
+    "retryWindowMinutes": 240
+  },
+  "compose": {
+    "command": [
+      "docker",
+      "compose"
+    ],
+    "service": "ats-discovery"
+  },
+  "dailyDiscovery": {
+    "enabled": true,
+    "schedule": "08:30",
+    "scannerArgs": [
+      "scan",
+      "tracked",
+      "--import",
+      "--max-create",
+      "1",
+      "--catalog-targets",
+      "23"
+    ]
+  },
+  "catalogRefresh": {
+    "enabled": true,
+    "weekday": "Sunday",
+    "schedule": "07:30",
+    "scannerArgs": [
+      "catalog",
+      "sync",
+      "all"
+    ]
+  },
+  "retention": {
+    "successfulDays": 30,
+    "degradedOrFailedDays": 90,
+    "minimumRuns": 20,
+    "stateBackups": 14,
+    "temporaryDirectoryHours": 24,
+    "tenantStateBackups": 14
+  }
+}

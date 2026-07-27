@@ -1,0 +1,46 @@
+services:
+  ats-discovery:
+    build:
+      context: .
+    image: ehestifter/ats-discovery:local
+
+    # Override the image UID locally so bind-mounted artifacts belong
+    # to the host developer.
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+
+    read_only: true
+
+    tmpfs:
+      - /tmp:size=64m
+
+    volumes:
+      - ./config:/config:ro
+      - ./data:/data
+
+    secrets:
+      - jobs_function_key
+      - users_function_key
+      - enrichers_function_key      
+
+    environment:
+      SCANNER_CONFIG_PATH: /config/scanner.local.json
+      EHESTIFTER_JOBS_FUNCTION_KEY_FILE: /run/secrets/jobs_function_key
+      EHESTIFTER_USERS_FUNCTION_KEY_FILE: /run/secrets/users_function_key
+      EHESTIFTER_ENRICHERS_FUNCTION_KEY_FILE: /run/secrets/enrichers_function_key
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    cap_drop:
+      - ALL
+
+    security_opt:
+      - no-new-privileges:true
+
+secrets:
+  jobs_function_key:
+    file: ./secrets/jobs-function-key.txt
+  users_function_key:
+    file: ./secrets/users-function-key.txt
+  enrichers_function_key:
+    file: ./secrets/enrichers-function-key.txt

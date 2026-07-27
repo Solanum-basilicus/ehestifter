@@ -1,0 +1,63 @@
+{
+  "careerOps": {
+    "upstreamRef": "493487462608c0cced82c1440e7ba8be6c01f306"
+  },
+  "schemaVersion": 1,
+  "jobsApi": {
+    "baseUrl": "https://ehestifter-jobs.azurewebsites.net/api",
+    "timeoutMs": 15000,
+    "retryCount": 2
+  },
+  "paths": {
+    "portals": "/config/portals.yml",
+    "companyOverrides": "/config/company-overrides.yml",
+    "discoveryPolicy": "/config/discovery-policy.yml",
+    "catalogs": "/data/catalogs",
+    "data": "/data",
+    "state": "/data/state"
+  },
+  "scan": {
+    "providerConcurrency": 3,
+    "jobsApiConcurrency": 3,
+    "maxCandidatesPerRun": 100,
+    "requireDescriptionForCreate": true,
+    "description": {
+      "fetchMissing": true,
+      "maxFetchesPerRun": 50,
+      "concurrency": 2,
+      "timeoutMs": 30000
+    }
+  },
+  "imports": {
+    "enabled": false,
+    "maxCreatesPerRun": 5
+  },
+  "liveCatalog": {
+    "enabled": false,
+    "maxPreflightTargetsPerRun": 100,
+    "maxImportTargetsPerRun": 100
+  },
+  "usersApi": {
+    "baseUrl": "https://ehestifter-users.azurewebsites.net/api",
+    "timeoutMs": 15000,
+    "retryCount": 2,
+    "maxUsersPerRun": 100
+  },
+  "enrichmentApi": {
+    "baseUrl": "https://ehestifter-enrichers.azurewebsites.net/api",
+    "timeoutMs": 20000,
+    "retryCount": 2
+  },
+  "multiUser": {
+    "enabled": false,
+    "portalFiltersMode": "scope_only",
+    "compatibility": {
+      "enabled": false,
+      "enricherType": "compatibility.v1",
+      "concurrency": 2,
+      "maxPairsPerRun": 100,
+      "maxRequestsPerRun": 20,
+      "refreshSucceededWithUnknownCvVersion": false
+    }
+  }
+}

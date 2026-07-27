@@ -1,0 +1,12 @@
+[Unit]
+Description=Schedule Ehestifter ATS Discovery catalog refresh
+
+[Timer]
+OnCalendar=@CATALOG_WEEKDAY_SHORT@ *-*-* @CATALOG_SCHEDULE@:00 @TIMEZONE@
+Persistent=true
+AccuracySec=1min
+RandomizedDelaySec=5min
+Unit=ehestifter-ats-catalog-refresh.service
+
+[Install]
+WantedBy=timers.target

@@ -5,7 +5,7 @@ STATUS_OPTIONS = [
     "Applied","Screening Booked","Screening Done","HM interview Booked","HM interview Done",
     "More interviews Booked","More interviews Done","Rejected with Filled",
     "Rejected with Unfortunately", "Withdrew Applications",
-    "Got Offer","Accepted Offer","Turned down Offer"
+    "Got Offer","Accepted Offer","Turned down Offer", "Ignored"
 ]
 
 def status_key(label: str) -> str:
@@ -28,6 +28,7 @@ def status_key(label: str) -> str:
         "rejected with unfortunately",
         "turned down offer",
         "withdrew applications",
+        "ignored",
     }:
         return "finished"
     return "default"
@@ -56,7 +57,8 @@ def status_key_case_sql(col_sql: str) -> str:
         'rejected with filled',
         'rejected with unfortunately',
         'turned down offer',
-        'withdrew applications'
+        'withdrew applications',
+        'ignored'
       ) THEN 'finished'
       WHEN {col_sql} IS NULL THEN 'unset'
       ELSE 'default'
