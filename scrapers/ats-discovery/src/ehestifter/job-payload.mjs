@@ -1,3 +1,5 @@
+import { plainTextToSafeHtml } from '../text/html.mjs';
+
 function requiredString(value, name) {
   if (typeof value !== 'string' || value.trim() === '') {
     throw new Error(`${name} must be a non-empty string`);
@@ -81,10 +83,9 @@ export function buildCreatePayload(
     throw new Error('Candidate has no canonical identity');
   }
 
-  const description =
-    typeof candidate.description === 'string'
-      ? candidate.description.trim()
-      : '';
+  const description = plainTextToSafeHtml(
+    candidate.description,
+  );
 
   if (requireDescription && description === '') {
     throw new Error('Candidate has no description');

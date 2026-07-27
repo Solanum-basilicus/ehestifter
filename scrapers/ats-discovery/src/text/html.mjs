@@ -1,3 +1,9 @@
+const HTML_TEXT_ESCAPES = new Map([
+  ['&', '&amp;'],
+  ['<', '&lt;'],
+  ['>', '&gt;'],
+]);
+
 const NAMED_ENTITIES = new Map([
   ['amp', '&'],
   ['lt', '<'],
@@ -51,4 +57,30 @@ export function htmlToPlainText(value) {
     .replace(/[ \t]{2,}/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+function escapeHtmlText(value) {
+  return value.replace(
+    /[&<>]/g,
+    (character) => HTML_TEXT_ESCAPES.get(character),
+  );
+}
+
+/**
+ * Convert scanner-normalized plain text to the restricted HTML shape
+ * consumed by the Jobs UI. Source markup is always treated as text.
+ */
+export function plainTextToSafeHtml(value) {
+  if (typeof value !== 'string' || value.trim() === '') return '';
+
+  const normalized = value
+    .replace(/\r\n?|\u2028|\u2029/g, '\n')
+    .trim();
+
+  return normalized
+    .split(/\n(?:[ \t]*\n)+/)
+    .map((paragraph) => (
+      `<p>${escapeHtmlText(paragraph).replaceAll('\n', '<br>')}</p>`
+    ))
+    .join('');
 }
