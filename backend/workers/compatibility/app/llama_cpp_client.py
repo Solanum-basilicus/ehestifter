@@ -154,6 +154,18 @@ class LlamaCppClient:
         diag["cleaned_snippet"] = clean_s[:2000]
         return None, diag
 
+
+    def is_healthy(self, timeout_s: int = 5) -> bool:
+        """Return True only when llama.cpp reports its model ready."""
+        try:
+            response = self.session.get(
+                f"{self.base_url}/health",
+                timeout=(min(2, timeout_s), timeout_s),
+            )
+            return response.status_code == 200
+        except requests.RequestException:
+            return False
+
     def generate_json(
         self,
         *,
