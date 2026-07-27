@@ -29,3 +29,22 @@ class GatewayClient:
         resp = self.session.post(url, json=payload, timeout=self.timeout_s)
         resp.raise_for_status()
         return resp.json()
+
+    def complete_error(
+        self,
+        run_id: str,
+        lease_token: str,
+        *,
+        code: str,
+        message: str,
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/work/complete"
+        payload = {
+            "runId": run_id,
+            "leaseToken": lease_token,
+            "error": {"code": code, "message": message},
+        }
+        resp = self.session.post(url, json=payload, timeout=self.timeout_s)
+        resp.raise_for_status()
+        return resp.json()
+

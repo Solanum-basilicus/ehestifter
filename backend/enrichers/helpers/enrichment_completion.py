@@ -12,6 +12,7 @@ from helpers.db import get_connection
 
 TERMINAL_STATUSES = ("Succeeded", "Failed", "Superseded", "Expired")
 ACTIVE_STATUSES = ("Pending", "Queued", "Leased")
+REQUEUE_ERROR_CODES = frozenset({"INFERENCE_UNAVAILABLE"})
 
 
 def utcnow() -> datetime:
@@ -37,7 +38,7 @@ class CompletionRunRow:
 
 @dataclass
 class CompletionOutcome:
-    outcome: str  # completed | already_terminal | stale_ignored
+    outcome: str  # completed | requeued | already_terminal | stale_ignored
     dispatches_created: int = 0
 
 
@@ -104,6 +105,31 @@ def mark_run_superseded(cur, run_id: str, now: datetime) -> None:
         now, now, run_id,
     )
 
+
+
+
+def requeue_run_after_temporary_failure(cur, run_id: str, now: datetime) -> None:
+    cur.execute(
+        """
+        UPDATE dbo.EnrichmentRuns
+        SET Status = 'Queued',
+            QueuedAt = ?,
+            LeasedAt = NULL,
+            LeaseToken = NULL,
+            LeaseUntil = NULL,
+            ResultJson = NULL,
+            EnrichmentAttributesJson = NULL,
+            ErrorCode = NULL,
+            ErrorMessage = NULL,
+            CompletedAt = NULL,
+            UpdatedAt = ?
+        WHERE RunId = ?
+          AND Status = 'Leased'
+        """,
+        now, now, run_id,
+    )
+    if cur.rowcount != 1:
+        raise ValueError("Run lease changed while returning it to queue")
 
 def update_run_completion(
     cur,
@@ -283,6 +309,11 @@ def complete_run_transactionally(
 
         if run.status != "Leased":
             raise ValueError(f"Run cannot be completed from status '{run.status}'")
+
+        if status == "Failed" and error_code in REQUEUE_ERROR_CODES:
+            requeue_run_after_temporary_failure(cur, run.run_id, now)
+            conn.commit()
+            return CompletionOutcome(outcome="requeued", dispatches_created=0)
 
         update_run_completion(
             cur,

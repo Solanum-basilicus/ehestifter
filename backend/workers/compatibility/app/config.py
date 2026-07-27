@@ -19,6 +19,47 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return v.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+
+def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    raw = os.getenv(name)
+    value_s = str(default) if raw is None else raw.strip()
+    try:
+        value = int(value_s)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be an integer") from exc
+    if not minimum <= value <= maximum:
+        raise RuntimeError(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
+def _env_int_tuple(
+    name: str,
+    default: str,
+    *,
+    minimum: int,
+    maximum: int,
+    max_items: int,
+) -> tuple[int, ...]:
+    raw = (os.getenv(name, default) or "").strip()
+    if not raw:
+        return ()
+    parts = [part.strip() for part in raw.split(",")]
+    if len(parts) > max_items:
+        raise RuntimeError(f"{name} accepts at most {max_items} comma-separated values")
+    values: list[int] = []
+    for part in parts:
+        try:
+            value = int(part)
+        except ValueError as exc:
+            raise RuntimeError(f"{name} contains a non-integer value: {part!r}") from exc
+        if not minimum <= value <= maximum:
+            raise RuntimeError(
+                f"{name} values must be between {minimum} and {maximum} seconds"
+            )
+        values.append(value)
+    return tuple(values)
+
+
 def _load_gateway_config() -> tuple[str, str]:
     """
     Select the Gateway endpoint/key pair used by the worker.
@@ -89,6 +130,11 @@ class Settings:
     poll_wait_seconds: int
     backoff_seconds: int
     lease_ttl_seconds: int
+    inference_retry_delays_seconds: tuple[int, ...]
+    inference_outage_cooldown_seconds: int
+    inference_timeout_seconds: int
+    inference_health_timeout_seconds: int
+    message_lock_renewal_seconds: int
 
     # yaml-configured
     model: str
@@ -134,6 +180,37 @@ def load_settings(config_path: str = "/app/config.yaml") -> Settings:
         poll_wait_seconds=int(os.getenv("WORKER_POLL_WAIT_SECONDS", "10")),
         backoff_seconds=int(os.getenv("WORKER_BACKOFF_SECONDS", "5")),
         lease_ttl_seconds=int(os.getenv("LEASE_TTL_SECONDS", "3600")),
+        inference_retry_delays_seconds=_env_int_tuple(
+            "WORKER_INFERENCE_RETRY_DELAYS_SECONDS",
+            "10,30",
+            minimum=0,
+            maximum=300,
+            max_items=4,
+        ),
+        inference_outage_cooldown_seconds=_env_int(
+            "WORKER_INFERENCE_OUTAGE_COOLDOWN_SECONDS",
+            600,
+            minimum=30,
+            maximum=3600,
+        ),
+        inference_timeout_seconds=_env_int(
+            "WORKER_INFERENCE_TIMEOUT_SECONDS",
+            180,
+            minimum=10,
+            maximum=1800,
+        ),
+        inference_health_timeout_seconds=_env_int(
+            "WORKER_INFERENCE_HEALTH_TIMEOUT_SECONDS",
+            5,
+            minimum=1,
+            maximum=60,
+        ),
+        message_lock_renewal_seconds=_env_int(
+            "WORKER_MESSAGE_LOCK_RENEWAL_SECONDS",
+            43200,
+            minimum=900,
+            maximum=86400,
+        ),
 
         model=str(c.get("model", "llama3.1:8b")),
         temperature=float(c.get("temperature", 0.2)),

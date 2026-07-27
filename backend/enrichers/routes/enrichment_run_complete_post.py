@@ -92,8 +92,15 @@ def register(app: func.FunctionApp):
                             properties=props,
                         )
 
-            # old/stale/already-terminal completion should still be non-fatal for Gateway
-            if outcome.outcome in ("completed", "stale_ignored", "already_terminal"):
+            # Requeued temporary failures and old/stale/already-terminal completions
+# are non-fatal for Gateway. Requeue is intentionally not emitted as
+# Compatibility Failed analytics.
+            if outcome.outcome in (
+                "completed",
+                "requeued",
+                "stale_ignored",
+                "already_terminal",
+            ):
                 return func.HttpResponse(status_code=204)
 
             logging.error("Unexpected completion outcome for run %s: %s", run_id, outcome.outcome)

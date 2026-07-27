@@ -3,7 +3,7 @@ import logging
 import os
 import time
 import json
-from requests import HTTPError, Timeout, ConnectionError
+from requests import HTTPError
 
 from azure.servicebus.exceptions import ServiceBusError
 
@@ -19,26 +19,13 @@ from .compatibility import (
     calculate_final_score,
 )
 from .stats import Stats
+from .inference_resilience import (
+    InferenceFatal,
+    http_status as inference_http_status,
+    run_with_outage_recovery,
+)
 
 MAX_DEBUG_CHARS = int(os.getenv("MAX_DEBUG_CHARS", "10000"))
-
-# 400 kept temporarily because fallback/no-thinking retry can recover
-RETRYABLE_STATUSES = {400, 500, 502, 503, 504}
-
-
-def _http_status(e: Exception) -> int | None:
-    resp = getattr(e, "response", None)
-    return getattr(resp, "status_code", None)
-
-
-def _resp_text(e: Exception, limit: int = 1000) -> str:
-    resp = getattr(e, "response", None)
-    if resp is None:
-        return ""
-    try:
-        return (resp.text or "")[:limit]
-    except Exception:
-        return ""
 
 
 def _truncate(s: str) -> str:
@@ -96,7 +83,10 @@ def main() -> None:
     log.info("Worker stats path=%s", os.getenv("WORKER_STATS_PATH", "/tmp/worker_stats.json"))
 
     gw = GatewayClient(s.gateway_base_url, s.gateway_api_key)
-    llm = LlamaCppClient(s.llama_cpp_base_url)
+    llm = LlamaCppClient(
+        s.llama_cpp_base_url,
+        timeout_s=s.inference_timeout_seconds,
+    )
     sb = make_client(s.sb_conn_str)
 
     last_flush = time.time()
@@ -109,7 +99,7 @@ def main() -> None:
                 receiver = sb.get_queue_receiver(
                     queue_name=s.sb_queue,
                     max_wait_time=s.poll_wait_seconds,
-                    max_auto_lock_renewal_duration=600,
+                    max_auto_lock_renewal_duration=s.message_lock_renewal_seconds,
                 )
                 with receiver:
                     msgs = receiver.receive_messages(max_message_count=1, max_wait_time=s.poll_wait_seconds)
@@ -275,10 +265,6 @@ def main() -> None:
                             reasoning_format=s.reasoning_format,                            
                         )
 
-                    def _status_from_exc(e: Exception):
-                        resp = getattr(e, "response", None)
-                        return getattr(resp, "status_code", None)
-
                     def _body_from_exc(e: Exception, limit: int = 1000) -> str:
                         body = getattr(e, "_llama_cpp_body", None)
                         if isinstance(body, str) and body:
@@ -310,97 +296,136 @@ def main() -> None:
                           "Start your response with '{' and end it with '}'."
                     )
 
-                    try:
-                        attempt_meta["attempts"] = 1
-                        raw = _llm_call(num_predict=max_tokens_1)
+                    def _primary_call():
+                        return _llm_call(num_predict=max_tokens_1)
 
-                        if log.isEnabledFor(logging.DEBUG):
-                            try:
-                                raw_json = json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
-                            except TypeError:
-                                raw_json = json.dumps({"raw": str(raw)}, ensure_ascii=False, separators=(",", ":"))
-                            log.debug("llama.cpp response %s", _truncate(raw_json))
+                    def _fallback_call():
+                        return _llm_call(
+                            num_predict=max_tokens_2,
+                            system_override=retry_system,
+                        )
 
-                    except (HTTPError, Timeout, ConnectionError) as e:
-                        status = _status_from_exc(e)
-                        body = _truncate(_body_from_exc(e))
-                        retryable = (status in RETRYABLE_STATUSES) or isinstance(e, (Timeout, ConnectionError))
-
-                        dbg = _debug_from_exc(e)
+                    def _on_attempt_error(exc: BaseException, attempt: int, will_retry: bool):
+                        status = inference_http_status(exc)
+                        body = _body_from_exc(exc)
+                        dbg = _debug_from_exc(exc)
+                        debug_keys = sorted(dbg.keys()) if isinstance(dbg, dict) else []
                         log.error(
-                            "Inference failed runId=%s status=%s retryable=%s body=%s debug=%s",
-                            parsed.run_id, status, retryable, body, dbg
+                            "Inference attempt failed runId=%s attempt=%s status=%s will_retry=%s error_type=%s body_len=%s debug_keys=%s",
+                            parsed.run_id,
+                            attempt,
+                            status,
+                            will_retry,
+                            type(exc).__name__,
+                            len(body),
+                            debug_keys,
                         )
                         stats.bump("llm_errors", "llm_errors_last_at")
                         if status == 500:
                             stats.bump("llm_http_500", "llm_http_500_last_at")
                         stats.flush()
 
-                        if retryable:
-                            try:
-                                attempt_meta["attempts"] = 2
-                                attempt_meta["fallback_no_thinking"] = True
-                                attempt_meta["degraded"] = True
+                    def _release_unavailable(active_lease_token: str, message: str):
+                        log.warning(
+                            "Returning run to Queued after inference outage runId=%s",
+                            parsed.run_id,
+                        )
+                        gw.complete_error(
+                            parsed.run_id,
+                            active_lease_token,
+                            code="INFERENCE_UNAVAILABLE",
+                            message=message,
+                        )
+                        stats.bump("inference_runs_requeued", "inference_runs_requeued_last_at")
+                        stats.flush()
 
-                                if isinstance(e, Timeout):
-                                    attempt_meta["degraded_reason"] = "initial inference timed out; retried without thinking"
-                                elif isinstance(e, ConnectionError):
-                                    attempt_meta["degraded_reason"] = "initial inference connection failed; retried without thinking"
-                                else:
-                                    attempt_meta["degraded_reason"] = f"initial inference failed with status={status}; retried without thinking"
+                    def _reacquire_lease() -> str:
+                        log.info("Re-leasing recovered runId=%s", parsed.run_id)
+                        renewed = gw.lease(parsed.run_id, s.lease_ttl_seconds)
+                        token = str((renewed or {}).get("leaseToken") or "")
+                        if not token:
+                            raise RuntimeError("Gateway returned no lease token after inference recovery")
+                        return token
 
-                                log.warning(
-                                    "Retrying inference once runId=%s max_tokens=%s (no thinking override) reason=%s",
-                                    parsed.run_id, max_tokens_2, attempt_meta["degraded_reason"]
-                                )
+                    def _on_circuit_open(exc, recovery_cycle: int):
+                        log.warning(
+                            "Inference circuit open runId=%s cycle=%s cooldown_seconds=%s reason=%s",
+                            parsed.run_id,
+                            recovery_cycle,
+                            s.inference_outage_cooldown_seconds,
+                            exc.public_message,
+                        )
+                        stats.bump("inference_circuit_opened", "inference_circuit_opened_last_at")
+                        stats.flush()
 
-                                raw = _llm_call(
-                                    num_predict=max_tokens_2,
-                                    system_override=retry_system,
-                                )
+                    def _on_health_probe(healthy: bool, probe_number: int):
+                        log.info(
+                            "Inference health probe runId=%s probe=%s healthy=%s",
+                            parsed.run_id,
+                            probe_number,
+                            healthy,
+                        )
+                        stats.bump("inference_health_probes", "inference_health_probes_last_at")
+                        if healthy:
+                            stats.bump("inference_health_recovered", "inference_health_recovered_last_at")
+                        stats.flush()
 
-                                if log.isEnabledFor(logging.DEBUG):
-                                    try:
-                                        raw_json = json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
-                                    except TypeError:
-                                        raw_json = json.dumps({"raw": str(raw)}, ensure_ascii=False, separators=(",", ":"))
-                                    log.debug("llama.cpp response %s", _truncate(raw_json))
+                    try:
+                        recovery = run_with_outage_recovery(
+                            initial_lease_token=lease_token,
+                            primary_call=_primary_call,
+                            fallback_call=_fallback_call,
+                            release_unavailable=_release_unavailable,
+                            reacquire_lease=_reacquire_lease,
+                            health_check=lambda: llm.is_healthy(
+                                timeout_s=s.inference_health_timeout_seconds
+                            ),
+                            retry_delays_seconds=s.inference_retry_delays_seconds,
+                            outage_cooldown_seconds=s.inference_outage_cooldown_seconds,
+                            on_attempt_error=_on_attempt_error,
+                            on_circuit_open=_on_circuit_open,
+                            on_health_probe=_on_health_probe,
+                        )
+                    except InferenceFatal as exc:
+                        log.error(
+                            "Terminal inference failure runId=%s code=%s message=%s",
+                            parsed.run_id,
+                            exc.code,
+                            exc.public_message,
+                        )
+                        gw.complete_error(
+                            parsed.run_id,
+                            exc.lease_token,
+                            code=exc.code,
+                            message=exc.public_message,
+                        )
+                        stats.bump("completes_failed", "completes_failed_last_at")
+                        stats.flush()
+                        receiver.complete_message(msg)
+                        continue
 
-                            except Exception as e2:
-                                status2 = _status_from_exc(e2)
-                                body2 = _truncate(_body_from_exc(e2))
-                                dbg2 = _debug_from_exc(e2)
-
-                                log.error(
-                                    "Inference retry failed runId=%s status=%s body=%s debug=%s",
-                                    parsed.run_id, status2, body2, dbg2
-                                )
-                                stats.bump("llm_retries_failed", "llm_retries_failed_last_at")
-                                stats.flush()
-
-                                fail_result = {
-                                    "score": 0.0,
-                                    "summary": f"Inference failed (status={status2}). {body2}".strip()
-                                }
-                                log.info("Completing run as failed runId=%s", parsed.run_id)
-                                gw.complete(parsed.run_id, lease_token, fail_result)
-                                stats.bump("completes_failed", "completes_failed_last_at")
-                                stats.flush()
-
-                                receiver.complete_message(msg)
-                                continue
+                    raw = recovery.raw
+                    lease_token = recovery.lease_token
+                    attempt_meta["attempts"] = recovery.attempts
+                    attempt_meta["fallback_no_thinking"] = recovery.used_fallback
+                    attempt_meta["degraded"] = bool(
+                        recovery.used_fallback or recovery.recovery_cycles
+                    )
+                    attempt_meta["degraded_reason"] = recovery.degraded_reason
+                    if recovery.recovery_cycles:
+                        recovery_note = (
+                            f"inference recovered after {recovery.recovery_cycles} outage cycle(s)"
+                        )
+                        if attempt_meta["degraded_reason"]:
+                            attempt_meta["degraded_reason"] += "; " + recovery_note
                         else:
-                            fail_result = {
-                                "score": 0.0,
-                                "summary": f"Inference failed (status={status}). {body}".strip()
-                            }
-                            log.info("Completing run as failed runId=%s", parsed.run_id)
-                            gw.complete(parsed.run_id, lease_token, fail_result)
-                            stats.bump("completes_failed", "completes_failed_last_at")
-                            stats.flush()
-
-                            receiver.complete_message(msg)
-                            continue
+                            attempt_meta["degraded_reason"] = recovery_note
+                    if log.isEnabledFor(logging.DEBUG):
+                        try:
+                            raw_json = json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
+                        except TypeError:
+                            raw_json = json.dumps({"raw": str(raw)}, ensure_ascii=False, separators=(",", ":"))
+                        log.debug("llama.cpp response %s", _truncate(raw_json))
 
                     structured = normalize_result(raw)
 
