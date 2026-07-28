@@ -1,4 +1,4 @@
-export const PHASE3_MAX_NORMAL_TARGETS_PER_RUN = 2000;
+export const PHASE3_MAX_NORMAL_TARGETS_PER_RUN = 50000;
 export const CATALOG_POLICY_PROVIDERS = Object.freeze([
   'ashby', 'greenhouse', 'lever', 'workday',
 ]);
