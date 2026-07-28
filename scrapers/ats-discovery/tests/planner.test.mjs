@@ -310,7 +310,7 @@ test('skipped samples are bounded while counts remain complete', () => {
 });
 
 test('Phase 3 hard limit is exposed and enforced by policy parser', () => {
-  assert.equal(PHASE3_MAX_NORMAL_TARGETS_PER_RUN, 2000);
+  assert.equal(PHASE3_MAX_NORMAL_TARGETS_PER_RUN, 15000);
 });
 
 test('file-backed planner loads state and avoids catalog read in preflight', async () => {

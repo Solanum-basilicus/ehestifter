@@ -276,7 +276,7 @@ test('live catalog request validation requires an explicit enabled live mode', (
 });
 
 test('live catalog ceilings and requests retain a hard safety maximum', async () => {
-  assert.equal(LIVE_CATALOG_HARD_MAX_TARGETS, 2000);
+  assert.equal(LIVE_CATALOG_HARD_MAX_TARGETS, 15000);
 
   assert.throws(
     () => validateLiveCatalogTargetRequest({
@@ -288,7 +288,7 @@ test('live catalog ceilings and requests retain a hard safety maximum', async ()
         maxImportTargetsPerRun: 1,
       },
     }),
-    /cannot exceed 2000/,
+    /cannot exceed 15000/,
   );
 
   await withTempDir(async (directory) => {
@@ -300,7 +300,7 @@ test('live catalog ceilings and requests retain a hard safety maximum', async ()
 
     await assert.rejects(
       loadRuntimeConfig({ configPath, operation: 'scan' }),
-      /no greater than 2000/,
+      /no greater than 15000/,
     );
   });
 });

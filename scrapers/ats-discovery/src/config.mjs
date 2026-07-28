@@ -2,7 +2,7 @@ import { constants as fsConstants } from 'node:fs';
 import { access, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
-export const LIVE_CATALOG_HARD_MAX_TARGETS = 2000;
+export const LIVE_CATALOG_HARD_MAX_TARGETS = 15000;
 
 function requireObject(value, name) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {

@@ -64,17 +64,17 @@ test('unknown providers inherit defaults and cannot scan catalogs', () => {
 });
 
 test('Phase 3 retains a hard normal-target ceiling', () => {
-  assert.equal(PHASE3_MAX_NORMAL_TARGETS_PER_RUN, 2000);
+  assert.equal(PHASE3_MAX_NORMAL_TARGETS_PER_RUN, 15000);
   assert.throws(
     () => parseDiscoveryPolicy(raw({
       providers: {
         ashby: {
-          max_normal_targets_per_run: 2001,
+          max_normal_targets_per_run: 15001,
           target_full_sweep_days: 3,
         },
       },
     })),
-    /must be an integer from 1 to 2000/,
+    /must be an integer from 1 to 15000/,
   );
 });
 

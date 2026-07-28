@@ -6,19 +6,103 @@ import {
 } from 'node:fs/promises';
 import path from 'node:path';
 
-import { writeJsonAtomic } from '../io/atomic-json.mjs';
+import {
+  writeJsonArrayEnvelopeAtomic,
+  writeJsonAtomic,
+} from '../io/atomic-json.mjs';
 
 export function createRunId(now = new Date()) {
   return `${now.toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`;
 }
 
+async function writeArtifact(stagingPath, fileName, writer) {
+  try {
+    await writer(path.join(stagingPath, fileName));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to write run artifact ${fileName}: ${message}`, {
+      cause: error,
+    });
+  }
+}
+
+async function writeJsonArtifact(stagingPath, fileName, value) {
+  await writeArtifact(
+    stagingPath,
+    fileName,
+    (filePath) => writeJsonAtomic(filePath, value),
+  );
+}
+
+async function writeArrayArtifact(
+  stagingPath,
+  fileName,
+  header,
+  arrayProperty,
+  items,
+) {
+  await writeArtifact(
+    stagingPath,
+    fileName,
+    (filePath) => writeJsonArrayEnvelopeAtomic(filePath, {
+      header,
+      arrayProperty,
+      items,
+    }),
+  );
+}
+
 async function writeOptionalJobsArtifact(runPath, fileName, runId, jobs) {
   if (!jobs) return;
-  await writeJsonAtomic(path.join(runPath, fileName), {
-    schemaVersion: 1,
-    runId,
+  await writeArrayArtifact(
+    runPath,
+    fileName,
+    { schemaVersion: 1, runId },
+    'jobs',
     jobs,
-  });
+  );
+}
+
+function rejectionCandidateForArtifact(candidate) {
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+    return candidate ?? null;
+  }
+  return {
+    schemaVersion: candidate.schemaVersion ?? 1,
+    sourceMode: candidate.sourceMode ?? null,
+    sourceProvider: candidate.sourceProvider ?? null,
+    sourceProviderVariant: candidate.sourceProviderVariant ?? null,
+    sourceTenant: candidate.sourceTenant ?? null,
+    sourceCompany: candidate.sourceCompany ?? null,
+    url: candidate.url ?? null,
+    title: candidate.title ?? null,
+    hiringCompanyName: candidate.hiringCompanyName ?? null,
+    rawLocation: candidate.rawLocation ?? null,
+    remoteType: candidate.remoteType ?? null,
+    postedAtUtc: candidate.postedAtUtc ?? null,
+    descriptionStatus: candidate.descriptionStatus ?? null,
+    provenance: candidate.provenance ? {
+      providerNativeId: candidate.provenance.providerNativeId ?? null,
+      acquisitionMode: candidate.provenance.acquisitionMode ?? null,
+      healthPartition: candidate.provenance.healthPartition ?? null,
+      targetSequence: candidate.provenance.targetSequence ?? null,
+      targetReason: candidate.provenance.targetReason ?? null,
+      lookbackStartUtc: candidate.provenance.lookbackStartUtc ?? null,
+    } : null,
+  };
+}
+
+function* rejectedItemsForArtifact(items) {
+  for (const item of items) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      yield item;
+      continue;
+    }
+    yield {
+      ...item,
+      candidate: rejectionCandidateForArtifact(item.candidate),
+    };
+  }
 }
 
 export async function writeRunArtifacts({
@@ -46,59 +130,73 @@ export async function writeRunArtifacts({
     runsPath,
     `.${runId}.${process.pid}.${randomUUID()}.tmp`,
   );
-
   await mkdir(runsPath, { recursive: true });
   await mkdir(stagingPath, { recursive: false });
-
   try {
-    await writeJsonAtomic(path.join(stagingPath, 'metadata.json'), metadata);
-    await writeJsonAtomic(path.join(stagingPath, 'target-plan.json'), targetPlan);
-    await writeJsonAtomic(path.join(stagingPath, 'provider-results.json'), {
-      schemaVersion: 2,
-      runId,
-      results: providerResults,
-    });
+    await writeJsonArtifact(stagingPath, 'metadata.json', metadata);
+    await writeJsonArtifact(stagingPath, 'target-plan.json', targetPlan);
+    await writeArrayArtifact(
+      stagingPath,
+      'provider-results.json',
+      { schemaVersion: 2, runId },
+      'results',
+      providerResults,
+    );
     if (tenantStateChanges) {
-      await writeJsonAtomic(
-        path.join(stagingPath, 'tenant-state-changes.json'),
+      await writeJsonArtifact(
+        stagingPath,
+        'tenant-state-changes.json',
         { ...tenantStateChanges, runId },
       );
     }
     if (rateObservations) {
-      await writeJsonAtomic(
-        path.join(stagingPath, 'rate-observations.json'),
+      await writeJsonArtifact(
+        stagingPath,
+        'rate-observations.json',
         { ...rateObservations, runId },
       );
     }
     if (canaryResults) {
-      await writeJsonAtomic(
-        path.join(stagingPath, 'provider-canary-results.json'),
+      await writeJsonArtifact(
+        stagingPath,
+        'provider-canary-results.json',
         { ...canaryResults, runId },
       );
     }
     if (userMatchResults) {
-      await writeJsonAtomic(
-        path.join(stagingPath, 'user-match-results.json'),
+      await writeJsonArtifact(
+        stagingPath,
+        'user-match-results.json',
         { ...userMatchResults, runId },
       );
     }
     if (compatibilityResults) {
-      await writeJsonAtomic(
-        path.join(stagingPath, 'compatibility-results.json'),
+      await writeJsonArtifact(
+        stagingPath,
+        'compatibility-results.json',
         { ...compatibilityResults, runId },
       );
     }
-    await writeJsonAtomic(path.join(stagingPath, 'candidates.json'), {
-      schemaVersion: 1,
-      runId,
-      jobs: candidates,
-    });
-    await writeJsonAtomic(path.join(stagingPath, 'rejected.json'), {
-      schemaVersion: 1,
-      runId,
-      items: rejected,
-    });
-
+    await writeArrayArtifact(
+      stagingPath,
+      'candidates.json',
+      { schemaVersion: 1, runId },
+      'jobs',
+      candidates,
+    );
+    await writeArtifact(
+      stagingPath,
+      'rejected.json',
+      (filePath) => writeJsonArrayEnvelopeAtomic(filePath, {
+        header: {
+          schemaVersion: 1,
+          runId,
+          candidateShape: 'diagnostic-v1',
+        },
+        arrayProperty: 'items',
+        items: rejectedItemsForArtifact(rejected),
+      }),
+    );
     await writeOptionalJobsArtifact(
       stagingPath,
       'preflight-results.json',
@@ -123,8 +221,7 @@ export async function writeRunArtifacts({
       runId,
       importResults,
     );
-
-    await writeJsonAtomic(path.join(stagingPath, 'summary.json'), summary);
+    await writeJsonArtifact(stagingPath, 'summary.json', summary);
     await rename(stagingPath, runPath);
     return runPath;
   } catch (error) {
