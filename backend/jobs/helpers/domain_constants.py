@@ -7,4 +7,5 @@ FINAL_STATUSES: tuple[str, ...] = (
     "Accepted Offer",
     "Turned down Offer",
     "Withdrew Applications",
+    "Ignored",
 )

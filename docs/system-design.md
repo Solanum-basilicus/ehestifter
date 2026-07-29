@@ -908,6 +908,7 @@ Current statuses:
 - `Got Offer`
 - `Accepted Offer`
 - `Turned down Offer`
+- `Ignored`
 
 Final statuses are defined in:
 - `backend/jobs/helpers/domain_constants.py` as `FINAL_STATUSES`
@@ -918,6 +919,7 @@ Current final statuses:
 - `Accepted Offer`
 - `Turned down Offer`
 - `Withdrew Applications`
+- `Ignored`
 
 Agent rules:
 - do not invent new statuses casually,
