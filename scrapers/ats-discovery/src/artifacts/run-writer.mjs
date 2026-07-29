@@ -52,12 +52,18 @@ async function writeArrayArtifact(
   );
 }
 
-async function writeOptionalJobsArtifact(runPath, fileName, runId, jobs) {
+async function writeOptionalJobsArtifact(
+  runPath,
+  fileName,
+  runId,
+  jobs,
+  schemaVersion = 1,
+) {
   if (!jobs) return;
   await writeArrayArtifact(
     runPath,
     fileName,
-    { schemaVersion: 1, runId },
+    { schemaVersion, runId },
     'jobs',
     jobs,
   );
@@ -214,6 +220,7 @@ export async function writeRunArtifacts({
       'location-results.json',
       runId,
       locationResults,
+      2,
     );
     await writeOptionalJobsArtifact(
       stagingPath,

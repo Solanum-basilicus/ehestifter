@@ -1590,6 +1590,20 @@ foundOn = "ats-discovery"
 
 `foundOn` is the creation channel, not a complete observation history. Historical jobs and run artifacts created under the former product name remain unchanged as evidence.
 
+Before creating a Jobs record, ATS Discovery canonicalizes provider locations
+against a committed snapshot generated from Web Core's geography dictionary and
+re-evaluates geographic eligibility after bounded detail enrichment. Provider
+location observations remain primary; explicit description statements can
+refine them, add independently supported scope, or mark a conflict, but do not
+silently overwrite them. Only decisive incompatible restrictions or mandatory
+presence outside the compatible scope block creation. Unresolved parsing and
+inconclusive conflicts fail open and remain visible in location artifacts.
+
+The geography snapshot is a scanner build input, not a runtime cross-domain
+filesystem dependency. `tools/refresh_ats_geo_snapshot.py` is the host entry
+point and runs the Node generator inside the scanner Docker image from a full
+checkout. Scanner-only deployments consume the committed snapshot.
+
 Compatibility requests go through the existing Enrichment Core API. ATS Discovery never writes compatibility projections or enrichment tables directly.
 
 ### 14.6 State, artifacts, and observability

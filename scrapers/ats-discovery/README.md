@@ -340,11 +340,38 @@ What it adds on top of the provider scan:
 
 - calls Jobs `/jobs/exists` for canonical identity and duplicate status;
 - fetches bounded missing details for Jobs-missing candidates when configured;
-- normalizes locations;
+- canonicalizes provider and description-derived locations against the Web Core
+  geography snapshot;
+- evaluates final location eligibility after detail enrichment;
 - writes preflight/detail/location artifacts.
 
-It does **not** create jobs and does not request compatibility. For normal
-catalog tenants, add an explicit live-traffic cap:
+It does **not** create jobs and does not request compatibility.
+
+Description evidence is secondary. It may refine `Germany` to a confidently
+resolved city such as `Garching`, clarify an unqualified `Remote` scope, or mark
+a provider/description conflict. It never silently erases the provider
+observation. Only decisive incompatible evidence blocks import; unresolved,
+unsupported, and inconclusive conflicts are retained in artifacts and propagate
+to Jobs.
+
+The scanner packages a generated copy of Web Core's geography data. Runtime
+containers do not mount or read the Web Core directory. Refresh the committed
+snapshot from a full checkout through the host-side Python entry point; Node.js
+runs inside the scanner image:
+
+```bash
+python3 tools/refresh_ats_geo_snapshot.py
+python3 tools/validate_ats_discovery_layout.py
+```
+
+The refresh command builds `ehestifter/ats-discovery:geo-tools`, validates a
+full checkout, mounts only the Web source file and scanner output directory,
+and invokes the Node generator in Docker. A scanner-only
+checkout or deployment can build and run from the committed snapshot, but it
+cannot regenerate that snapshot without the Web Core source file. After a
+refresh, rebuild the normal scanner image.
+
+For normal catalog tenants, add an explicit live-traffic cap:
 
 ```bash
 ./ops/scheduler/ats-ops scanner -- \

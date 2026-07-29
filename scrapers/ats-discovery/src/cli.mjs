@@ -293,6 +293,9 @@ async function runScan(args) {
     if (args.mode === 'preflight' || args.mode === 'import') {
       locationResults = normalizeCandidateLocations(
         detailResults ?? preflightResults,
+        {
+          locationScopeFilter: planning.portalConfig.location_scope_filter,
+        },
       );
     }
 

@@ -557,7 +557,33 @@ export function buildRunSummary({
         'normalized_city_country',
         'normalized_country',
         'normalized_country_scope',
+        'normalized_multiple',
       ].includes(job.locationNormalization?.status),
+    ),
+    locationEligible: count(
+      evaluated,
+      (job) => job.locationEligibility?.status === 'eligible',
+    ),
+    locationIneligible: count(
+      evaluated,
+      (job) => job.locationEligibility?.status === 'ineligible',
+    ),
+    locationUnclear: count(
+      evaluated,
+      (job) => job.locationEligibility?.status === 'unclear',
+    ),
+    locationConflicting: count(
+      evaluated,
+      (job) => job.locationNormalization?.consistency === 'conflicting',
+    ),
+    locationUnresolvedObservations: evaluated.reduce(
+      (total, job) => total
+        + (job.locationNormalization?.unresolved?.length ?? 0),
+      0,
+    ),
+    importSkippedLocationIneligible: count(
+      evaluated,
+      (job) => job.import?.status === 'skipped_location_ineligible',
     ),
     locationUnparsed: count(
       evaluated,

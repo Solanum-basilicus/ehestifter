@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "sourcePath": "backend/core/static/data/geo.sample8.json",
+  "sourceSha256": "a2d0aa99695dc606d6e579f28a45c7b4144365353adbe8c827361bbed9d5377e",
+  "generatorPath": "scrapers/ats-discovery/scripts/refresh-web-geo-snapshot.mjs",
+  "generatorSha256": "7cf211304a7d4bedaa41558016df7efc9616dafa385183b5a319e9742dce2a74",
+  "snapshotPath": "scrapers/ats-discovery/src/locations/data/web-geo.generated.json",
+  "snapshotSha256": "635d6094fc8512404dbd03fcb203973f8fa0172c156dd08331dff307effbf730",
+  "countries": 251,
+  "cities": 93935
+}

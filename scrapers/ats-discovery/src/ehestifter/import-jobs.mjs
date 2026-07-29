@@ -20,11 +20,9 @@ export async function importCandidates(
 ) {
   const results = [];
   let createAttempts = 0;
-
   for (let index = 0; index < candidates.length; index += 1) {
     const candidate = candidates[index];
     let output;
-
     if (candidate.preflight?.status !== 'ok') {
       output = {
         ...candidate,
@@ -39,6 +37,16 @@ export async function importCandidates(
         import: {
           status: 'existing_preflight',
           jobId: candidate.existingJobId,
+        },
+      };
+    } else if (candidate.locationEligibility?.status === 'ineligible') {
+      output = {
+        ...candidate,
+        import: {
+          status: 'skipped_location_ineligible',
+          jobId: null,
+          reason: candidate.locationEligibility.reason ?? null,
+          consistency: candidate.locationEligibility.consistency ?? null,
         },
       };
     } else if (
@@ -77,7 +85,6 @@ export async function importCandidates(
           },
         };
       }
-
       if (!output) {
         createAttempts += 1;
         try {
@@ -109,7 +116,6 @@ export async function importCandidates(
         }
       }
     }
-
     results.push(output);
     safeProgress(onProgress, index + 1, candidates.length);
   }

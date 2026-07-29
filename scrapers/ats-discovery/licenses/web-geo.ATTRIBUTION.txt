@@ -1,0 +1,11 @@
+ATS Discovery's generated geography snapshot is derived from the Web Core
+artifact at backend/core/static/data/geo.sample8.json.
+
+Countries: mledoze/countries (ODbL 1.0)
+https://github.com/mledoze/countries
+
+Cities: GeoNames (CC BY 4.0)
+https://www.geonames.org/
+
+The generated snapshot is refreshed by tools/refresh_ats_geo_snapshot.py and
+scrapers/ats-discovery/scripts/refresh-web-geo-snapshot.mjs.

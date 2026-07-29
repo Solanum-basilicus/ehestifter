@@ -10,6 +10,7 @@ RUN npm ci --omit=dev \
 
 COPY src ./src
 COPY config ./config
+COPY scripts ./scripts
 COPY tests ./tests
 COPY UPSTREAM.md ./
 COPY licenses ./licenses
@@ -20,7 +21,5 @@ RUN groupadd --system --gid 10001 scanner \
     && chown 10001:10001 /data
 
 USER 10001:10001
-
 ENTRYPOINT ["node", "src/cli.mjs"]
 CMD ["scan", "tracked", "--offline"]
-

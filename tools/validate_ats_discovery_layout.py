@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -81,6 +82,10 @@ def text_files(root: Path) -> Iterable[Path]:
 def require(condition: bool, message: str, errors: list[str]) -> None:
     if not condition:
         errors.append(message)
+
+
+def sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def active_repository_candidates(repo_root: Path) -> list[Path]:
@@ -205,6 +210,40 @@ def validate(repo_root: Path) -> list[str]:
     else:
         errors.append(f"missing bootstrap helper: {bootstrap.relative_to(repo_root)}")
 
+    geo_source = repo_root / "backend/core/static/data/geo.sample8.json"
+    geo_generator = scanner / "scripts/refresh-web-geo-snapshot.mjs"
+    geo_snapshot = scanner / "src/locations/data/web-geo.generated.json"
+    geo_manifest = scanner / "src/locations/data/web-geo.generated.manifest.json"
+    geo_tool = repo_root / "tools/refresh_ats_geo_snapshot.py"
+    for path in [geo_source, geo_generator, geo_snapshot, geo_manifest, geo_tool]:
+        require(path.is_file(), f"missing ATS geography file: {path.relative_to(repo_root)}", errors)
+    if all(path.is_file() for path in [geo_source, geo_generator, geo_snapshot, geo_manifest]):
+        try:
+            manifest = json.loads(read_text(geo_manifest))
+            expected_paths = {
+                "sourcePath": "backend/core/static/data/geo.sample8.json",
+                "generatorPath": "scrapers/ats-discovery/scripts/refresh-web-geo-snapshot.mjs",
+                "snapshotPath": "scrapers/ats-discovery/src/locations/data/web-geo.generated.json",
+            }
+            for key, expected in expected_paths.items():
+                require(
+                    manifest.get(key) == expected,
+                    f"ATS geography manifest {key} is stale or invalid",
+                    errors,
+                )
+            expected_hashes = {
+                "sourceSha256": sha256_file(geo_source),
+                "generatorSha256": sha256_file(geo_generator),
+                "snapshotSha256": sha256_file(geo_snapshot),
+            }
+            for key, expected in expected_hashes.items():
+                require(
+                    manifest.get(key) == expected,
+                    f"ATS geography manifest {key} is stale; run tools/refresh_ats_geo_snapshot.py",
+                    errors,
+                )
+        except (OSError, json.JSONDecodeError) as exc:
+            errors.append(f"cannot validate ATS geography manifest: {exc}")
     expected_scheduler_files = [
         scanner / "ops" / "scheduler" / "ats_scheduler.py",
         scanner / "ops" / "systemd" / "install_systemd.py",
