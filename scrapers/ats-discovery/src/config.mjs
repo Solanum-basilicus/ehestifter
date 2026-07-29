@@ -308,13 +308,13 @@ export async function loadRuntimeConfig({
           compatibility.maxPairsPerRun,
           100,
           'multiUser.compatibility.maxPairsPerRun',
-          { max: 1000 },
+          { max: 2000 },
         ),
         maxRequestsPerRun: positiveInteger(
           compatibility.maxRequestsPerRun,
           20,
           'multiUser.compatibility.maxRequestsPerRun',
-          { max: 200 },
+          { max: 1000 },
         ),
         refreshSucceededWithUnknownCvVersion: booleanValue(
           compatibility.refreshSucceededWithUnknownCvVersion,
