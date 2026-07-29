@@ -73,6 +73,23 @@ function workArrangementFromTitle(value) {
   return null;
 }
 
+function workArrangementFromDescriptionPolicy(value) {
+  const text = cleanText(value);
+  if (text === '') return null;
+
+  const match = text.match(
+    /^(?:[-*•]\s*)?(?:location\s*(?:\/|&)\s*hybrid\s+policy|work(?:place)?\s+(?:arrangement|model)|working\s+model|remote\s+policy|location\s+policy)\s*[:\-–—]\s*(.{2,60})$/iu,
+  );
+  if (!match) return null;
+
+  const normalized = lookupKey(match[1]);
+  if (/^(?:fully )?remote(?: first)?$/u.test(normalized)) return 'Remote';
+  if (normalized === 'distributed') return 'Remote';
+  if (normalized === 'hybrid') return 'Hybrid';
+  if (/^(?:on site|onsite|office based)$/u.test(normalized)) return 'On-Site';
+  return null;
+}
+
 function stripArrangementWords(value) {
   return cleanText(value)
     .replace(/\b(?:fully\s+remote|remote[- ]first|remote|distributed|hybrid|on[- ]?site|onsite|home\s*office)\b/giu, ' ')
@@ -508,9 +525,22 @@ function descriptionEvidence(candidate, primaryLocations, dictionary, scopeFilte
   const locations = [];
   const unresolved = [];
   const eligibilityEvidence = [];
+  const descriptionArrangements = [];
   const primaryCountries = [...new Set(primaryLocations.map((item) => item.countryCode))];
 
   for (const window of windows) {
+    const descriptionArrangement = workArrangementFromDescriptionPolicy(window);
+    if (descriptionArrangement) {
+      descriptionArrangements.push(descriptionArrangement);
+      observations.push({
+        source: 'description',
+        raw: window,
+        kind: 'work_arrangement',
+        status: 'resolved',
+        arrangement: descriptionArrangement,
+        context: window,
+      });
+    }
     const configuredMarker = firstMatchingTerm(window, markers);
     const marker = configuredMarker
       ?? (/\bauthori[sz](?:ed|ation)\s+to\s+work\b/iu.test(window)
@@ -626,11 +656,16 @@ function descriptionEvidence(candidate, primaryLocations, dictionary, scopeFilte
     }
   }
 
+  const uniqueDescriptionArrangements = [...new Set(descriptionArrangements)];
   return {
     observations,
     locations: collapseCountryOnlyLocations(dedupeLocations(locations)),
     unresolved,
     eligibilityEvidence,
+    arrangement: uniqueDescriptionArrangements.length === 1
+      ? uniqueDescriptionArrangements[0]
+      : null,
+    arrangementConflict: uniqueDescriptionArrangements.length > 1,
   };
 }
 
@@ -829,22 +864,34 @@ export function normalizeCandidateLocations(
       primaryLocations,
       description.locations,
     );
+    const explicitArrangement = workArrangementFromText(candidate.remoteType);
+    const titleArrangement = workArrangementFromTitle(candidate.title);
+    const strongerArrangement = explicitArrangement
+      ?? primary.arrangement
+      ?? titleArrangement;
+    const arrangementConsistency = description.arrangementConflict
+      ? 'conflicting'
+      : description.arrangement && strongerArrangement
+        ? description.arrangement === strongerArrangement
+          ? 'consistent'
+          : 'conflicting'
+        : description.arrangement
+          ? 'refined'
+          : 'insufficient';
     const reconciled = {
       ...descriptionReconciliation,
       consistency: combineConsistency(
         providerReconciliation.consistency,
         descriptionReconciliation.consistency,
+        arrangementConsistency,
       ),
     };
     const eligibilityEvidence = [
       ...providerScope.eligibilityEvidence,
       ...description.eligibilityEvidence,
     ];
-    const explicitArrangement = workArrangementFromText(candidate.remoteType);
-    const titleArrangement = workArrangementFromTitle(candidate.title);
-    const resolvedArrangement = explicitArrangement
-      ?? primary.arrangement
-      ?? titleArrangement;
+    const resolvedArrangement = strongerArrangement
+      ?? description.arrangement;
     const remoteType = resolvedArrangement
       ?? (cleanText(candidate.remoteType) || 'Unknown');
     const titleObservations = (
