@@ -4,7 +4,6 @@ import assert from 'node:assert/strict';
 import {
   getProviderPolicy,
   parseDiscoveryPolicy,
-  PHASE3_MAX_NORMAL_TARGETS_PER_RUN,
 } from '../src/policy/discovery-policy.mjs';
 
 function raw(overrides = {}) {
@@ -63,21 +62,23 @@ test('unknown providers inherit defaults and cannot scan catalogs', () => {
   assert.equal(lever.execution.concurrency, 3);
 });
 
-test('Phase 3 retains a hard normal-target ceiling', () => {
-  assert.equal(PHASE3_MAX_NORMAL_TARGETS_PER_RUN, 15000);
+test('catalog target budgets are operator-owned positive integers', () => {
+  const policy = parseDiscoveryPolicy(raw({
+    providers: {
+      ashby: {
+        max_normal_targets_per_run: 50000,
+        target_full_sweep_days: 3,
+      },
+    },
+  }));
+  assert.equal(getProviderPolicy(policy, 'ashby').maxNormalTargetsPerRun, 50000);
   assert.throws(
     () => parseDiscoveryPolicy(raw({
-      providers: {
-        ashby: {
-          max_normal_targets_per_run: 15001,
-          target_full_sweep_days: 3,
-        },
-      },
+      providers: { ashby: { max_normal_targets_per_run: 0 } },
     })),
-    /must be an integer from 1 to 15000/,
+    /must be an integer from 1/,
   );
 });
-
 test('confirmed-dead threshold must exceed suspected-dead threshold', () => {
   assert.throws(
     () => parseDiscoveryPolicy(raw({

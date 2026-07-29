@@ -2,8 +2,6 @@ import { constants as fsConstants } from 'node:fs';
 import { access, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
-export const LIVE_CATALOG_HARD_MAX_TARGETS = 15000;
-
 function requireObject(value, name) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`${name} must be a JSON object`);
@@ -94,11 +92,6 @@ export function validateLiveCatalogTargetRequest({
   if (targetCount > ceiling) {
     throw new Error(
       `--catalog-targets ${targetCount} exceeds ${mode} ceiling ${ceiling}`,
-    );
-  }
-  if (targetCount > LIVE_CATALOG_HARD_MAX_TARGETS) {
-    throw new Error(
-      `--catalog-targets cannot exceed ${LIVE_CATALOG_HARD_MAX_TARGETS}`,
     );
   }
   return targetCount;
@@ -260,7 +253,6 @@ export async function loadRuntimeConfig({
         usersApi.maxUsersPerRun,
         100,
         'usersApi.maxUsersPerRun',
-        { max: 1000 },
       ),
       functionKey: null,
     },
@@ -302,19 +294,16 @@ export async function loadRuntimeConfig({
           compatibility.concurrency,
           2,
           'multiUser.compatibility.concurrency',
-          { max: 10 },
         ),
         maxPairsPerRun: positiveInteger(
           compatibility.maxPairsPerRun,
           100,
           'multiUser.compatibility.maxPairsPerRun',
-          { max: 2000 },
         ),
         maxRequestsPerRun: positiveInteger(
           compatibility.maxRequestsPerRun,
           20,
           'multiUser.compatibility.maxRequestsPerRun',
-          { max: 1000 },
         ),
         refreshSucceededWithUnknownCvVersion: booleanValue(
           compatibility.refreshSucceededWithUnknownCvVersion,
@@ -339,13 +328,11 @@ export async function loadRuntimeConfig({
         liveCatalog.maxPreflightTargetsPerRun,
         100,
         'liveCatalog.maxPreflightTargetsPerRun',
-        { max: LIVE_CATALOG_HARD_MAX_TARGETS },
       ),
       maxImportTargetsPerRun: positiveInteger(
         liveCatalog.maxImportTargetsPerRun,
         100,
         'liveCatalog.maxImportTargetsPerRun',
-        { max: LIVE_CATALOG_HARD_MAX_TARGETS },
       ),
     },
     imports: {

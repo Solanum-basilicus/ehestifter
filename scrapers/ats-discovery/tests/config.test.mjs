@@ -9,7 +9,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  LIVE_CATALOG_HARD_MAX_TARGETS,
   loadRuntimeConfig,
   validateLiveCatalogTargetRequest,
 } from '../src/config.mjs';
@@ -275,32 +274,36 @@ test('live catalog request validation requires an explicit enabled live mode', (
   );
 });
 
-test('live catalog ceilings and requests retain a hard safety maximum', async () => {
-  assert.equal(LIVE_CATALOG_HARD_MAX_TARGETS, 15000);
-
-  assert.throws(
-    () => validateLiveCatalogTargetRequest({
-      mode: 'preflight',
-      requested: LIVE_CATALOG_HARD_MAX_TARGETS + 1,
-      liveCatalog: {
-        enabled: true,
-        maxPreflightTargetsPerRun: LIVE_CATALOG_HARD_MAX_TARGETS + 1,
-        maxImportTargetsPerRun: 1,
-      },
-    }),
-    /cannot exceed 15000/,
-  );
+test('live catalog workload ceilings are operator-owned', async () => {
+  const operatorCeiling = 50000;
+  assert.equal(validateLiveCatalogTargetRequest({
+    mode: 'preflight',
+    requested: operatorCeiling,
+    liveCatalog: {
+      enabled: true,
+      maxPreflightTargetsPerRun: operatorCeiling,
+      maxImportTargetsPerRun: operatorCeiling,
+    },
+  }), operatorCeiling);
+  assert.throws(() => validateLiveCatalogTargetRequest({
+    mode: 'preflight',
+    requested: operatorCeiling + 1,
+    liveCatalog: {
+      enabled: true,
+      maxPreflightTargetsPerRun: operatorCeiling,
+      maxImportTargetsPerRun: operatorCeiling,
+    },
+  }), /exceeds preflight ceiling 50000/);
 
   await withTempDir(async (directory) => {
     await writeScanFiles(directory);
     const configPath = path.join(directory, 'scanner.json');
     const raw = configFor(directory);
-    raw.liveCatalog.maxPreflightTargetsPerRun = LIVE_CATALOG_HARD_MAX_TARGETS + 1;
+    raw.liveCatalog.maxPreflightTargetsPerRun = operatorCeiling;
+    raw.liveCatalog.maxImportTargetsPerRun = operatorCeiling;
     await writeFile(configPath, JSON.stringify(raw));
-
-    await assert.rejects(
-      loadRuntimeConfig({ configPath, operation: 'scan' }),
-      /no greater than 15000/,
-    );
+    const config = await loadRuntimeConfig({ configPath, operation: 'scan' });
+    assert.equal(config.liveCatalog.maxPreflightTargetsPerRun, operatorCeiling);
+    assert.equal(config.liveCatalog.maxImportTargetsPerRun, operatorCeiling);
   });
 });

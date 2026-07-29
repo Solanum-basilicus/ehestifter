@@ -286,7 +286,7 @@ Review active configuration before live traffic, especially:
 
 - provider enablement and request bounds;
 - priority/disabled overrides;
-- catalog target budgets and global ceilings;
+- catalog target budgets and live-traffic caps;
 - posting lookback/overlap;
 - import mode and create caps;
 - selected discovery users and matching defaults;
@@ -350,6 +350,14 @@ catalog tenants, add an explicit live-traffic cap:
 ./ops/scheduler/ats-ops scanner -- \
   scan tracked --preflight --catalog-targets 5
 ```
+
+`--catalog-targets N` is an operator-owned upper bound, not an exact target
+count. The planner uses the smaller of that value and the sum of enabled
+providers' `max_normal_targets_per_run` budgets. It may therefore be set above
+the current policy capacity without failing; future enabled catalogs can consume
+the unused headroom. `target-plan.json` records `catalogTargetsRequested`,
+`catalogTargetsEffective`, and `combinedPolicyCapacity`. There is no separate
+compiled catalog-count ceiling.
 
 Use this after offline evidence looks correct and before the first import for a
 new target or major filter change.

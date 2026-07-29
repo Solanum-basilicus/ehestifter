@@ -12,7 +12,6 @@ import {
 import {
   getProviderPolicy,
   parseDiscoveryPolicy,
-  PHASE3_MAX_NORMAL_TARGETS_PER_RUN,
 } from '../policy/discovery-policy.mjs';
 import { resolveProvider } from '../providers/_registry.mjs';
 import { targetHealthIdentity } from '../providers/_variant.mjs';
@@ -23,7 +22,6 @@ import {
   tenantStateMaps,
 } from '../state/tenant-state.mjs';
 
-export { PHASE3_MAX_NORMAL_TARGETS_PER_RUN };
 
 const MAX_SKIPPED_SAMPLES = 50;
 
@@ -678,16 +676,13 @@ export function buildTargetPlan({
   if (liveCatalogRequested && enabledCatalogProviders.length === 0) {
     throw new Error('Live catalog scanning requires at least one catalog-enabled provider');
   }
-  const policyCapacity = enabledCatalogProviders.reduce(
-    (total, provider) => total + getProviderPolicy(policy, provider).maxNormalTargetsPerRun,
-    0,
-  );
-  if (requestedCatalogTargetLimit > Math.min(policyCapacity, PHASE3_MAX_NORMAL_TARGETS_PER_RUN)) {
-    throw new Error(
-      `Requested ${requestedCatalogTargetLimit} catalog targets exceeds combined policy capacity `
-      + `${Math.min(policyCapacity, PHASE3_MAX_NORMAL_TARGETS_PER_RUN)}`,
-    );
-  }
+  const policyCapacity = enabledCatalogProviders.reduce((total, provider) => {
+    const next = total + getProviderPolicy(policy, provider).maxNormalTargetsPerRun;
+    if (!Number.isSafeInteger(next)) {
+      throw new Error('Combined catalog policy capacity exceeds JavaScript safe integer range');
+    }
+    return next;
+  }, 0);
 
   const catalogPlans = {};
   const catalogMetadataByProvider = Object.fromEntries(
@@ -762,11 +757,8 @@ export function buildTargetPlan({
 
   const selectedNormal = [];
   const globalCatalogLimit = mode === 'offline'
-    ? Math.min(
-      PHASE3_MAX_NORMAL_TARGETS_PER_RUN,
-      Object.values(catalogPlans).reduce((total, plan) => total + plan.budget, 0),
-    )
-    : requestedCatalogTargetLimit;
+    ? policyCapacity
+    : Math.min(requestedCatalogTargetLimit, policyCapacity);
   const providerOrder = CATALOG_PROVIDER_IDS.filter((provider) => catalogPlans[provider]);
   // Preserve scheduler priority globally, then round-robin providers within
   // each bucket so a large catalog cannot starve a smaller provider.
@@ -839,9 +831,11 @@ export function buildTargetPlan({
     limits: {
       normalTargetsByProvider,
       catalogTargetsRequested: requestedCatalogTargetLimit,
+      catalogTargetsEffective: globalCatalogLimit,
+      combinedPolicyCapacity: policyCapacity,
       liveCatalogRequested,
-      normalTargetsHardMaximum: PHASE3_MAX_NORMAL_TARGETS_PER_RUN,
-      phase3HardMaximum: PHASE3_MAX_NORMAL_TARGETS_PER_RUN,
+      normalTargetsHardMaximum: null,
+      phase3HardMaximum: null,
       // Compatibility field retained for existing dashboards/tests.
       ashbyNormalTargets: normalTargetsByProvider.ashby,
     },

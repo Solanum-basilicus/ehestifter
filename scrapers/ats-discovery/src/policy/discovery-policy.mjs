@@ -1,4 +1,3 @@
-export const PHASE3_MAX_NORMAL_TARGETS_PER_RUN = 15000;
 export const CATALOG_POLICY_PROVIDERS = Object.freeze([
   'ashby', 'greenhouse', 'lever', 'workday',
 ]);
@@ -420,7 +419,7 @@ export function parseDiscoveryPolicy(raw) {
         value.max_normal_targets_per_run,
         providerId === 'ashby' ? 100 : 10,
         `${name}.max_normal_targets_per_run`,
-        { min: 1, max: PHASE3_MAX_NORMAL_TARGETS_PER_RUN },
+        { min: 1 },
       );
       merged.targetFullSweepDays = integer(
         value.target_full_sweep_days,

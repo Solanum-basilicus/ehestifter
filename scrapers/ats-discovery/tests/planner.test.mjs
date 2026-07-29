@@ -9,7 +9,6 @@ import { createEmptyTenantState } from '../src/state/tenant-state.mjs';
 import {
   buildTargetPlan,
   buildTargetPlanFromFiles,
-  PHASE3_MAX_NORMAL_TARGETS_PER_RUN,
 } from '../src/targets/planner.mjs';
 import ashbyProvider from '../src/providers/ashby.mjs';
 import greenhouseProvider from '../src/providers/greenhouse.mjs';
@@ -309,8 +308,9 @@ test('skipped samples are bounded while counts remain complete', () => {
   assert.equal(result.plan.skippedSamples.length, 50);
 });
 
-test('Phase 3 hard limit is exposed and enforced by policy parser', () => {
-  assert.equal(PHASE3_MAX_NORMAL_TARGETS_PER_RUN, 15000);
+test('provider target budgets are operator-owned', () => {
+  const policy = parseDiscoveryPolicy(rawPolicy({ max: 50000 }));
+  assert.equal(policy.providers.ashby.maxNormalTargetsPerRun, 50000);
 });
 
 test('file-backed planner loads state and avoids catalog read in preflight', async () => {
@@ -411,15 +411,17 @@ test('live catalog normals respect provider cooldown', () => {
   assert.ok(result.plan.counts.skippedProviderCooldown > 0);
 });
 
-test('live catalog target request cannot exceed discovery policy maximum', () => {
-  assert.throws(
-    () => build({
-      mode: 'preflight',
-      catalogTargetLimit: 4,
-      discoveryPolicy: rawPolicy({ max: 3 }),
-    }),
-    /exceeds combined policy capacity 3/,
-  );
+test('live catalog request above policy capacity is treated as an upper bound', () => {
+  const result = build({
+    mode: 'preflight',
+    catalogTargetLimit: 4,
+    discoveryPolicy: rawPolicy({ max: 3 }),
+  });
+
+  assert.equal(result.plan.counts.normal, 3);
+  assert.equal(result.plan.limits.catalogTargetsRequested, 4);
+  assert.equal(result.plan.limits.catalogTargetsEffective, 3);
+  assert.equal(result.plan.limits.combinedPolicyCapacity, 3);
 });
 
 test('live catalog request requires a readable valid catalog', () => {

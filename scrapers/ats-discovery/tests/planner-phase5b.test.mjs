@@ -169,16 +169,19 @@ test('catalog-disabled providers require neither a file nor a budget allocation'
   assert.equal(result.plan.targets.some((item) => item.provider === 'workday'), false);
 });
 
-test('live catalog target request is one global cap constrained by combined provider budgets', () => {
+test('live catalog target request is an upper bound capped by combined provider budgets', () => {
   const result = build({ mode: 'preflight', catalogTargetLimit: 4 });
   assert.equal(result.plan.counts.normal, 4);
   assert.equal(result.plan.targets.filter((item) => item.targetClass === 'normal').length, 4);
-  assert.throws(
-    () => build({ mode: 'preflight', catalogTargetLimit: 7 }),
-    /exceeds combined policy capacity 6/,
-  );
-});
+  assert.equal(result.plan.limits.catalogTargetsRequested, 4);
+  assert.equal(result.plan.limits.catalogTargetsEffective, 4);
 
+  const aboveCapacity = build({ mode: 'preflight', catalogTargetLimit: 7 });
+  assert.equal(aboveCapacity.plan.counts.normal, 6);
+  assert.equal(aboveCapacity.plan.limits.catalogTargetsRequested, 7);
+  assert.equal(aboveCapacity.plan.limits.catalogTargetsEffective, 6);
+  assert.equal(aboveCapacity.plan.limits.combinedPolicyCapacity, 6);
+});
 test('scheduler bucket priority is global before provider round-robin fairness', () => {
   const tenantState = createEmptyTenantState(NOW);
   tenantState.tenants.push({

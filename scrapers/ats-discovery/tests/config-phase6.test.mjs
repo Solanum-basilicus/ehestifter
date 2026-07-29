@@ -114,37 +114,39 @@ test('compatibility requests are import-only and require the Enrichment key', as
   });
 });
 
-test('Phase 6 limits and booleans are strictly bounded', async () => {
+test('Phase 6 workload ceilings are operator-owned positive integers', async () => {
   await withConfig({
-    usersApi: { baseUrl: 'https://users.example/api', maxUsersPerRun: 1001 },
+    usersApi: { baseUrl: 'https://users.example/api', maxUsersPerRun: 5000 },
+    multiUser: {
+      enabled: true,
+      compatibility: {
+        enabled: true,
+        concurrency: 12,
+        maxPairsPerRun: 5000,
+        maxRequestsPerRun: 3000,
+      },
+    },
+  }, async (configPath) => {
+    const config = await loadRuntimeConfig({
+      configPath,
+      operation: 'scan',
+      mode: 'offline',
+      env: { EHESTIFTER_USERS_FUNCTION_KEY: 'u' },
+    });
+    assert.equal(config.usersApi.maxUsersPerRun, 5000);
+    assert.equal(config.multiUser.compatibility.concurrency, 12);
+    assert.equal(config.multiUser.compatibility.maxPairsPerRun, 5000);
+    assert.equal(config.multiUser.compatibility.maxRequestsPerRun, 3000);
+  });
+  await withConfig({
+    usersApi: { baseUrl: 'https://users.example/api', maxUsersPerRun: 0 },
   }, async (configPath) => {
     await assert.rejects(
       loadRuntimeConfig({ configPath, operation: 'scan', mode: 'offline' }),
       /maxUsersPerRun/,
     );
   });
-  await withConfig({
-    multiUser: {
-      enabled: true,
-      compatibility: { enabled: true, maxRequestsPerRun: 201 },
-    },
-  }, async (configPath) => {
-    await assert.rejects(
-      loadRuntimeConfig({
-        configPath,
-        operation: 'scan',
-        mode: 'import',
-        env: {
-          EHESTIFTER_USERS_FUNCTION_KEY: 'u',
-          EHESTIFTER_JOBS_FUNCTION_KEY: 'j',
-          EHESTIFTER_ENRICHERS_FUNCTION_KEY: 'e',
-        },
-      }),
-      /maxRequestsPerRun/,
-    );
-  });
 });
-
 test('portal filter mode is conservative by default and validates explicit scope-only mode', async () => {
   await withConfig({}, async (configPath) => {
     const config = await loadRuntimeConfig({
