@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import yaml from 'js-yaml';
-
 import {
   CATALOG_PROVIDER_IDS,
   catalogItemKey,
@@ -22,7 +21,6 @@ import {
   tenantStateMaps,
 } from '../state/tenant-state.mjs';
 
-
 const MAX_SKIPPED_SAMPLES = 50;
 
 function requireObject(value, name) {
@@ -39,7 +37,6 @@ function requireSchemaVersion(value, name) {
   }
   return object;
 }
-
 function parseYaml(text, name) {
   let parsed;
   try {
@@ -57,7 +54,6 @@ function normalizeCatalogTargetLimit(value) {
   }
   return value;
 }
-
 function normalizeMode(mode) {
   if (!['offline', 'preflight', 'import'].includes(mode)) {
     throw new Error(`Unsupported scan mode: ${mode}`);
@@ -68,7 +64,6 @@ function normalizeMode(mode) {
 function normalizeOverrideItems(provider, value, name) {
   if (value == null) return [];
   if (!Array.isArray(value)) throw new Error(`${name} must be an array`);
-
   const items = [];
   const seen = new Set();
   for (let index = 0; index < value.length; index += 1) {
@@ -84,7 +79,6 @@ function normalizeOverrideItems(provider, value, name) {
   }
   return items;
 }
-
 function readOverrides(companyOverrides) {
   const overrides = requireSchemaVersion(companyOverrides, 'company overrides');
   const priority = requireObject(
@@ -111,7 +105,6 @@ function readOverrides(companyOverrides) {
   }
   return { priorityByProvider, disabledByProvider };
 }
-
 function parseCareersUrl(value, companyName) {
   if (typeof value !== 'string' || value.trim() === '') {
     throw new Error(`Tracked company ${companyName} has no careers_url`);
@@ -130,7 +123,6 @@ function parseCareersUrl(value, companyName) {
   }
   return parsed;
 }
-
 function deriveTrackedTenant(entry, provider) {
   if (typeof entry.provider_tenant === 'string' && entry.provider_tenant.trim()) {
     return entry.provider_tenant.trim();
@@ -154,7 +146,6 @@ function deriveTrackedTenant(entry, provider) {
   }
   return `${parsed.hostname.toLowerCase()}${parsed.pathname.replace(/\/$/, '')}`;
 }
-
 function targetKey(provider, tenant, providerVariant = null) {
   return tenantStateKey(provider, tenant, providerVariant);
 }
@@ -168,13 +159,11 @@ function hashCatalogTarget(provider, tenant) {
     .update(`${provider}\0${tenant.toLowerCase()}`)
     .digest('hex');
 }
-
 function compareNullableDates(left, right) {
   const leftValue = left == null ? Number.NEGATIVE_INFINITY : Date.parse(left);
   const rightValue = right == null ? Number.NEGATIVE_INFINITY : Date.parse(right);
   return leftValue - rightValue;
 }
-
 function compareScheduledTargets(left, right) {
   const due = compareNullableDates(
     left.state?.nextEligibleScanAtUtc,
@@ -192,7 +181,6 @@ function compareScheduledTargets(left, right) {
   if (leftHash > rightHash) return 1;
   return left.tenant.localeCompare(right.tenant);
 }
-
 function boundedInteger(value, fallback, name, { min = 0, max = 100000 } = {}) {
   const result = value == null ? fallback : value;
   if (!Number.isInteger(result) || result < min || result > max) {
@@ -200,7 +188,6 @@ function boundedInteger(value, fallback, name, { min = 0, max = 100000 } = {}) {
   }
   return result;
 }
-
 function canarySettings(entry, index) {
   const detailSampleSize = boundedInteger(
     entry.detail_sample_size ?? entry.detailSampleSize,
@@ -231,7 +218,6 @@ function canarySettings(entry, index) {
     ),
   };
 }
-
 function trackedTargets(portalConfig, providers) {
   const targets = [];
   const rejections = [];
@@ -251,7 +237,6 @@ function trackedTargets(portalConfig, providers) {
       healthOnly: true,
     }))
     : [];
-
   for (const descriptor of [...trackedEntries, ...canaryEntries]) {
     const {
       entry,
@@ -276,7 +261,6 @@ function trackedTargets(portalConfig, providers) {
       });
       continue;
     }
-
     const resolved = resolveProvider(entry, providers);
     if (!resolved) {
       rejections.push({
@@ -299,7 +283,6 @@ function trackedTargets(portalConfig, providers) {
       });
       continue;
     }
-
     try {
       const target = {
         ...entry,
@@ -334,7 +317,6 @@ function trackedTargets(portalConfig, providers) {
   }
   return { targets, rejections };
 }
-
 function providerCooldownActive(providerState, now) {
   return providerState?.health === 'cooldown'
     && providerState.cooldownUntilUtc != null
@@ -345,7 +327,6 @@ function tenantDue(state, now) {
   return state?.nextEligibleScanAtUtc == null
     || Date.parse(state.nextEligibleScanAtUtc) <= now.getTime();
 }
-
 function scheduleBucket(state) {
   switch (state?.health) {
     case 'active': return 'recent_activity';
@@ -365,7 +346,17 @@ const BUCKET_ORDER = Object.freeze([
   'long_empty',
   'healthy',
 ]);
+const MAINTENANCE_BUCKET_ORDER = Object.freeze([
+  'recovery',
+  'dead_reprobe',
+  'long_empty',
+]);
 
+function maintenanceStartIndex(provider, now) {
+  const day = Math.floor(now.getTime() / 86_400_000);
+  const providerOffset = Math.max(0, CATALOG_PROVIDER_IDS.indexOf(provider));
+  return (day + providerOffset) % MAINTENANCE_BUCKET_ORDER.length;
+}
 function lookbackWindow(state, providerPolicy, now) {
   if (
     providerPolicy.lookback.deadReprobeUnbounded
@@ -373,7 +364,6 @@ function lookbackWindow(state, providerPolicy, now) {
   ) {
     return { startUtc: null, unbounded: true };
   }
-
   const floor = now.getTime() - providerPolicy.lookback.maxHours * 3_600_000;
   let requested;
   if (state?.lastSuccessfulAtUtc) {
@@ -388,7 +378,6 @@ function lookbackWindow(state, providerPolicy, now) {
     unbounded: false,
   };
 }
-
 function targetWithSchedule(
   target,
   state,
@@ -409,7 +398,6 @@ function targetWithSchedule(
     lookbackUnbounded: lookback.unbounded,
   };
 }
-
 function serializableTarget(target) {
   return {
     sequence: target.sequence,
@@ -431,7 +419,6 @@ function serializableTarget(target) {
     canaryAttached: target.canaryAttached === true,
   };
 }
-
 function skippedSample(target, reason, state) {
   return {
     provider: target.provider,
@@ -444,7 +431,20 @@ function skippedSample(target, reason, state) {
     nextEligibleScanAtUtc: state?.nextEligibleScanAtUtc ?? null,
   };
 }
-
+function healthyReservationCapacity({
+  populationByBucket,
+  dueByBucket,
+  maxTargets,
+  targetDays,
+}) {
+  const recommended = populationByBucket.healthy === 0
+    ? 0
+    : Math.ceil(populationByBucket.healthy / targetDays);
+  return Math.min(
+    recommended,
+    Math.max(0, maxTargets - dueByBucket.recent_activity),
+  );
+}
 function catalogSweep({ populationByBucket, dueByBucket, maxTargets, targetDays }) {
   const healthyRotationTenants = populationByBucket.healthy;
   const promotedDailyTenants = populationByBucket.recent_activity;
@@ -457,10 +457,12 @@ function catalogSweep({ populationByBucket, dueByBucket, maxTargets, targetDays 
   const recommendedNormalTargetsPerRun = promotedDailyTenants
     + exceptionalDueTenants
     + recommendedHealthyTargetsPerRun;
-  const healthyBudget = Math.max(
-    0,
-    maxTargets - promotedDailyTenants - exceptionalDueTenants,
-  );
+  const healthyBudget = healthyReservationCapacity({
+    populationByBucket,
+    dueByBucket,
+    maxTargets,
+    targetDays,
+  });
   return {
     targetFullSweepDays: targetDays,
     healthyRotationTenants,
@@ -478,7 +480,6 @@ function catalogSweep({ populationByBucket, dueByBucket, maxTargets, targetDays 
       maxTargets >= recommendedNormalTargetsPerRun,
   };
 }
-
 function catalogMetadata(provider, catalog) {
   return {
     provider,
@@ -491,7 +492,6 @@ function catalogMetadata(provider, catalog) {
     plannedTargetCount: 0,
   };
 }
-
 function catalogTarget(provider, item, metadata, providerPlugin) {
   const entry = catalogItemToPortalEntry(provider, item);
   const target = {
@@ -508,7 +508,6 @@ function catalogTarget(provider, item, metadata, providerPlugin) {
   Object.assign(target, targetHealthIdentity(target));
   return target;
 }
-
 function operatorPriorityTarget(provider, item, providerPlugin) {
   const entry = catalogItemToPortalEntry(provider, item);
   const target = {
@@ -525,7 +524,6 @@ function operatorPriorityTarget(provider, item, providerPlugin) {
   Object.assign(target, targetHealthIdentity(target));
   return target;
 }
-
 function emptyBucketCounts() {
   return Object.fromEntries(BUCKET_ORDER.map((key) => [key, 0]));
 }
@@ -537,7 +535,6 @@ function aggregateBucketCounts(perProvider, field) {
   }
   return result;
 }
-
 export function buildTargetPlan({
   portalConfig,
   companyOverrides,
@@ -557,7 +554,6 @@ export function buildTargetPlan({
   if (mode === 'offline' && requestedCatalogTargetLimit > 0) {
     throw new Error('offline catalog target count must come from discovery policy');
   }
-
   const now = generatedAt instanceof Date ? generatedAt : new Date(generatedAt);
   if (Number.isNaN(now.getTime())) throw new Error('generatedAt must be a valid date');
   const policy = discoveryPolicy?.schemaVersion === 1
@@ -567,7 +563,6 @@ export function buildTargetPlan({
   const stateMaps = tenantStateMaps(tenantState);
   const catalogValues = { ...(catalogs ?? {}) };
   if (ashbyCatalog != null && catalogValues.ashby == null) catalogValues.ashby = ashbyCatalog;
-
   const disabledKeys = new Set();
   for (const provider of CATALOG_PROVIDER_IDS) {
     for (const item of overrides.disabledByProvider[provider]) {
@@ -581,7 +576,6 @@ export function buildTargetPlan({
   const seen = new Map();
   let deduplicated = 0;
   let disabledRemoved = 0;
-
   function addPriority(target) {
     const key = targetStateKey(target);
     if (disabledKeys.has(key)) {
@@ -600,7 +594,6 @@ export function buildTargetPlan({
     seen.set(key, target);
     rawPriority.push(target);
   }
-
   for (const target of tracked.targets) addPriority(target);
   for (const provider of CATALOG_PROVIDER_IDS) {
     const plugin = providers.get(provider);
@@ -610,7 +603,6 @@ export function buildTargetPlan({
     }
     for (const item of priorityItems) addPriority(operatorPriorityTarget(provider, item, plugin));
   }
-
   const skippedCounts = { notDue: 0, providerCooldown: 0, budget: 0 };
   const skippedSamples = [];
   const partitionStats = new Map();
@@ -640,7 +632,6 @@ export function buildTargetPlan({
       skippedSamples.push(skippedSample(target, reason, state));
     }
   }
-
   const selectedPriority = [];
   for (const target of rawPriority) {
     const providerPolicy = getProviderPolicy(policy, target.provider);
@@ -665,7 +656,6 @@ export function buildTargetPlan({
       mode === 'offline',
     ));
   }
-
   const liveCatalogRequested = mode !== 'offline' && requestedCatalogTargetLimit > 0;
   const enabledCatalogProviders = CATALOG_PROVIDER_IDS.filter(
     (provider) => getProviderPolicy(policy, provider).catalogEnabled,
@@ -683,7 +673,6 @@ export function buildTargetPlan({
     }
     return next;
   }, 0);
-
   const catalogPlans = {};
   const catalogMetadataByProvider = Object.fromEntries(
     CATALOG_PROVIDER_IDS.map((provider) => [provider, null]),
@@ -707,7 +696,6 @@ export function buildTargetPlan({
     const dueByBucket = emptyBucketCounts();
     const providerState = stateMaps.providers.get(provider);
     const providerBlocked = providerCooldownActive(providerState, now);
-
     for (const item of catalog.items) {
       const target = catalogTarget(provider, item, metadata, plugin);
       const key = targetStateKey(target);
@@ -751,34 +739,114 @@ export function buildTargetPlan({
       dueByBucket,
       queuesByBucket,
       budget: providerPolicy.maxNormalTargetsPerRun,
+      healthyQuota: Math.min(
+        dueByBucket.healthy,
+        healthyReservationCapacity({
+          populationByBucket,
+          dueByBucket,
+          maxTargets: providerPolicy.maxNormalTargetsPerRun,
+          targetDays: providerPolicy.targetFullSweepDays,
+        }),
+      ),
       selected: [],
+      selectedByBucket: Object.fromEntries(
+        BUCKET_ORDER.map((bucket) => [bucket, []]),
+      ),
+      maintenanceCursor: maintenanceStartIndex(provider, now),
     };
   }
-
-  const selectedNormal = [];
   const globalCatalogLimit = mode === 'offline'
     ? policyCapacity
     : Math.min(requestedCatalogTargetLimit, policyCapacity);
   const providerOrder = CATALOG_PROVIDER_IDS.filter((provider) => catalogPlans[provider]);
-  // Preserve scheduler priority globally, then round-robin providers within
-  // each bucket so a large catalog cannot starve a smaller provider.
-  for (const bucket of BUCKET_ORDER) {
+  let selectedNormalCount = 0;
+
+  function takeTarget(plan, bucket) {
+    if (
+      selectedNormalCount >= globalCatalogLimit
+      || plan.selected.length >= plan.budget
+    ) return false;
+    const queue = plan.queuesByBucket[bucket];
+    if (queue.length === 0) return false;
+    const target = queue.shift();
+    plan.selected.push(target);
+    plan.selectedByBucket[bucket].push(target);
+    plan.metadata.plannedTargetCount += 1;
+    selectedNormalCount += 1;
+    return true;
+  }
+
+  function drainBucket(bucket, quota = null) {
     let progress = true;
-    while (selectedNormal.length < globalCatalogLimit && progress) {
+    while (selectedNormalCount < globalCatalogLimit && progress) {
       progress = false;
       for (const provider of providerOrder) {
-        if (selectedNormal.length >= globalCatalogLimit) break;
+        if (selectedNormalCount >= globalCatalogLimit) break;
         const plan = catalogPlans[provider];
-        const queue = plan.queuesByBucket[bucket];
-        if (plan.selected.length >= plan.budget || queue.length === 0) continue;
-        const target = queue.shift();
-        plan.selected.push(target);
-        plan.metadata.plannedTargetCount += 1;
-        selectedNormal.push(target);
+        if (
+          quota != null
+          && plan.selectedByBucket[bucket].length >= quota(plan)
+        ) continue;
+        if (takeTarget(plan, bucket)) progress = true;
+      }
+    }
+  }
+
+  // Capacity composition is deliberate: preserve recent activity, reserve the
+  // configured healthy sweep, then spend the remainder on exceptional tenant
+  // maintenance. Any unused maintenance capacity is lent back to healthy work.
+  drainBucket('recent_activity');
+  drainBucket('healthy', (plan) => plan.healthyQuota);
+
+  let maintenanceProgress = true;
+  while (selectedNormalCount < globalCatalogLimit && maintenanceProgress) {
+    maintenanceProgress = false;
+    for (const provider of providerOrder) {
+      if (selectedNormalCount >= globalCatalogLimit) break;
+      const plan = catalogPlans[provider];
+      for (let offset = 0; offset < MAINTENANCE_BUCKET_ORDER.length; offset += 1) {
+        const index = (plan.maintenanceCursor + offset)
+          % MAINTENANCE_BUCKET_ORDER.length;
+        const bucket = MAINTENANCE_BUCKET_ORDER[index];
+        if (takeTarget(plan, bucket)) {
+          plan.maintenanceCursor = (index + 1) % MAINTENANCE_BUCKET_ORDER.length;
+          maintenanceProgress = true;
+          break;
+        }
+      }
+    }
+  }
+
+  drainBucket('healthy');
+
+  // Preserve the established execution order and cross-provider round-robin.
+  // Selection composition changed above; execution ordering remains stable so
+  // real provider failures in maintenance can still protect later healthy work.
+  const selectedQueues = Object.fromEntries(
+    providerOrder.map((provider) => [
+      provider,
+      Object.fromEntries(
+        BUCKET_ORDER.map((bucket) => [
+          bucket,
+          [...catalogPlans[provider].selectedByBucket[bucket]],
+        ]),
+      ),
+    ]),
+  );
+  const selectedNormal = [];
+  for (const bucket of BUCKET_ORDER) {
+    let progress = true;
+    while (progress) {
+      progress = false;
+      for (const provider of providerOrder) {
+        const queue = selectedQueues[provider][bucket];
+        if (queue.length === 0) continue;
+        selectedNormal.push(queue.shift());
         progress = true;
       }
     }
   }
+
   for (const plan of Object.values(catalogPlans)) {
     for (const bucket of BUCKET_ORDER) {
       for (const target of plan.queuesByBucket[bucket]) {
@@ -786,7 +854,6 @@ export function buildTargetPlan({
       }
     }
   }
-
   const runtimeTargets = [...selectedPriority, ...selectedNormal]
     .map((target, sequence) => ({ ...target, sequence }));
   for (const target of runtimeTargets) {
@@ -798,7 +865,6 @@ export function buildTargetPlan({
   const healthPartitions = Object.fromEntries(
     [...partitionStats.entries()].sort(([left], [right]) => left.localeCompare(right)),
   );
-
   const catalogSweeps = {};
   for (const [provider, plan] of Object.entries(catalogPlans)) {
     catalogSweeps[provider] = catalogSweep({
@@ -815,7 +881,6 @@ export function buildTargetPlan({
     globalCatalogLimit,
     targetDays: aggregateTargetDays,
   });
-
   const normalTargetsByProvider = Object.fromEntries(
     CATALOG_PROVIDER_IDS.map((provider) => [provider, catalogPlans[provider]?.selected.length ?? 0]),
   );
@@ -867,7 +932,6 @@ export function buildTargetPlan({
     skippedSamples,
     targets: runtimeTargets.map(serializableTarget),
   };
-
   return {
     plan,
     policy,
@@ -877,7 +941,6 @@ export function buildTargetPlan({
     runtimeTargets,
   };
 }
-
 export async function buildTargetPlanFromFiles({
   portalsPath,
   companyOverridesPath,

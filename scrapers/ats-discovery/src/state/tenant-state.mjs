@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { writeJsonAtomic } from '../io/atomic-json.mjs';
 import { getProviderPolicy } from '../policy/discovery-policy.mjs';
 import { providerHealthPartition } from '../providers/_variant.mjs';
+import { isDurableProviderResult } from '../scan/provider-errors.mjs';
 
 export const TENANT_HEALTH = Object.freeze([
   'healthy',
@@ -15,7 +16,6 @@ export const TENANT_HEALTH = Object.freeze([
 ]);
 
 const HEALTH_SET = new Set(TENANT_HEALTH);
-
 function validDateString(value, name, { nullable = true } = {}) {
   if (value == null && nullable) return null;
   if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) {
@@ -30,7 +30,6 @@ function nonNegativeInteger(value, name) {
   }
   return value;
 }
-
 function nullableNonNegativeInteger(value, name) {
   if (value == null) return null;
   return nonNegativeInteger(value, name);
@@ -43,7 +42,6 @@ function nullableFiniteNumber(value, name) {
   }
   return value;
 }
-
 function requireString(value, name) {
   if (typeof value !== 'string' || value.trim() === '') {
     throw new Error(`${name} must be a non-empty string`);
@@ -62,7 +60,6 @@ function addHours(date, hours) {
 function addMinutes(date, minutes) {
   return addMilliseconds(date, minutes * 60_000);
 }
-
 export function tenantStateKey(provider, tenant, providerVariant = null) {
   return `${providerHealthPartition(provider, providerVariant)}::${String(tenant).toLowerCase()}`;
 }
@@ -77,7 +74,6 @@ export function createEmptyTenantState(now = new Date()) {
     tenants: [],
   };
 }
-
 function validateProviderState(item, index) {
   if (!item || typeof item !== 'object' || Array.isArray(item)) {
     throw new Error(`tenant state.providers[${index}] must be an object`);
@@ -140,7 +136,6 @@ function validateProviderState(item, index) {
     ),
   };
 }
-
 function validateTenantEntry(item, index) {
   if (!item || typeof item !== 'object' || Array.isArray(item)) {
     throw new Error(`tenant state.tenants[${index}] must be an object`);
@@ -149,7 +144,6 @@ function validateTenantEntry(item, index) {
   if (!HEALTH_SET.has(health)) {
     throw new Error(`tenant state.tenants[${index}].health is invalid`);
   }
-
   const provider = requireString(
     item.provider,
     `tenant state.tenants[${index}].provider`,
@@ -175,7 +169,6 @@ function validateTenantEntry(item, index) {
     item.tenant,
     `tenant state.tenants[${index}].tenant`,
   );
-
   return {
     provider,
     providerVariant,
@@ -281,7 +274,6 @@ function validateTenantEntry(item, index) {
     ),
   };
 }
-
 export function validateTenantStateEnvelope(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('tenant state must be an object');
@@ -300,7 +292,6 @@ export function validateTenantStateEnvelope(value) {
   if (!Array.isArray(value.tenants)) {
     throw new Error('tenant state.tenants must be an array');
   }
-
   const providers = value.providers.map(validateProviderState);
   const tenants = value.tenants.map(validateTenantEntry);
   const providerKeys = new Set();
@@ -315,7 +306,6 @@ export function validateTenantStateEnvelope(value) {
     if (tenantKeys.has(key)) throw new Error(`Duplicate tenant state: ${key}`);
     tenantKeys.add(key);
   }
-
   providers.sort((left, right) => left.healthPartition.localeCompare(right.healthPartition));
   tenants.sort((left, right) => {
     const partition = left.healthPartition.localeCompare(right.healthPartition);
@@ -329,7 +319,6 @@ export function validateTenantStateEnvelope(value) {
     tenants,
   };
 }
-
 export async function loadTenantState(filePath, { now = new Date() } = {}) {
   let text;
   try {
@@ -338,7 +327,6 @@ export async function loadTenantState(filePath, { now = new Date() } = {}) {
     if (error?.code === 'ENOENT') return createEmptyTenantState(now);
     throw new Error(`Tenant state is not readable: ${filePath}`, { cause: error });
   }
-
   let parsed;
   try {
     parsed = JSON.parse(text);
@@ -353,7 +341,6 @@ export async function saveTenantState(filePath, state) {
   await writeJsonAtomic(filePath, validated);
   return validated;
 }
-
 export function tenantStateMaps(state) {
   const validated = validateTenantStateEnvelope(state);
   return {
@@ -368,17 +355,14 @@ export function tenantStateMaps(state) {
     ),
   };
 }
-
 export function isDurableTenantFailure(result) {
-  return result?.errorClass === 'http_4xx'
-    && [404, 410].includes(result.httpStatus);
+  return isDurableProviderResult(result);
 }
 
 function isRecent(dateString, now, windowHours) {
   if (!dateString) return false;
   return Date.parse(dateString) >= now.getTime() - windowHours * 3_600_000;
 }
-
 function median(values) {
   if (!Array.isArray(values) || values.length === 0) return 0;
   const sorted = [...values].sort((left, right) => left - right);
@@ -387,7 +371,6 @@ function median(values) {
     ? (sorted[middle - 1] + sorted[middle]) / 2
     : sorted[middle];
 }
-
 function transitionTenant(previous, target, result, providerPolicy, finishedAt) {
   const base = previous ?? {
     provider: target.provider,
@@ -420,9 +403,7 @@ function transitionTenant(previous, target, result, providerPolicy, finishedAt) 
     lastErrorClass: null,
     lastHttpStatus: null,
   };
-
   if (result.status === 'skipped') return base;
-
   const scheduling = providerPolicy.scheduling;
   const next = {
     ...base,
@@ -442,7 +423,6 @@ function transitionTenant(previous, target, result, providerPolicy, finishedAt) 
     lastHttpStatus: result.httpStatus,
     lastListingOutcome: result.listingOutcome ?? null,
   };
-
   if (result.status === 'ok') {
     const monitoring = providerPolicy.monitoring;
     const baseline = median(base.recentSuccessfulCounts);
@@ -471,7 +451,6 @@ function transitionTenant(previous, target, result, providerPolicy, finishedAt) 
       );
       return next;
     }
-
     next.lastSuccessfulAtUtc = finishedAt.toISOString();
     next.consecutiveFailures = 0;
     next.consecutiveDurableFailures = 0;
@@ -484,7 +463,6 @@ function transitionTenant(previous, target, result, providerPolicy, finishedAt) 
     if ((result.candidatesMatched ?? result.candidatesRetained ?? 0) > 0) {
       next.lastRelevantCandidateAtUtc = finishedAt.toISOString();
     }
-
     if (result.jobsReturned === 0) {
       next.consecutiveEmptySuccesses = base.consecutiveEmptySuccesses + 1;
       if (confirmedListingDrop) next.recentSuccessfulCounts = [0];
@@ -499,13 +477,11 @@ function transitionTenant(previous, target, result, providerPolicy, finishedAt) 
           result.jobsReturned,
         ].slice(-providerPolicy.monitoring.recentSuccessfulCountWindow);
     }
-
     const recent = isRecent(
       next.lastRelevantCandidateAtUtc,
       finishedAt,
       scheduling.recentActivityWindowHours,
     );
-
     let intervalHours;
     if (target.healthOnly && target.canary?.intervalHours) {
       next.health = 'healthy';
@@ -527,14 +503,12 @@ function transitionTenant(previous, target, result, providerPolicy, finishedAt) 
       next.health = 'healthy';
       intervalHours = scheduling.healthyIntervalHours;
     }
-
     next.nextEligibleScanAtUtc = addHours(finishedAt, intervalHours);
     return next;
   }
 
   next.consecutiveFailures = base.consecutiveFailures + 1;
   next.consecutiveEmptySuccesses = base.consecutiveEmptySuccesses;
-
   if (
     result.errorClass === 'provider_anomaly'
     && ['listing_empty_anomaly', 'listing_volume_anomaly'].includes(
@@ -551,13 +525,11 @@ function transitionTenant(previous, target, result, providerPolicy, finishedAt) 
     );
     return next;
   }
-
   if (isDurableTenantFailure(result)) {
     next.consecutiveDurableFailures = base.consecutiveDurableFailures + 1;
     next.consecutiveTransientFailures = 0;
     next.consecutiveSuspiciousEmptyResults = 0;
     next.cooldownUntilUtc = null;
-
     if (
       next.consecutiveDurableFailures >= scheduling.confirmedDeadAfterFailures
     ) {
@@ -583,7 +555,6 @@ function transitionTenant(previous, target, result, providerPolicy, finishedAt) 
     }
     return next;
   }
-
   next.consecutiveDurableFailures = 0;
   next.consecutiveTransientFailures = base.consecutiveTransientFailures + 1;
   const cooldownMinutes = result.errorClass === 'rate_limited'
@@ -596,7 +567,6 @@ function transitionTenant(previous, target, result, providerPolicy, finishedAt) 
   next.nextEligibleScanAtUtc = next.cooldownUntilUtc;
   return next;
 }
-
 function providerTransition(previous, observation, breakerEvent, policy, finishedAt) {
   const provider = observation?.provider ?? breakerEvent?.provider ?? previous?.provider;
   const providerVariant = observation?.providerVariant
@@ -630,7 +600,6 @@ function providerTransition(previous, observation, breakerEvent, policy, finishe
     next.lastRequestsAttempted = observation.requestsAttempted;
     next.lastRateLimited = observation.rateLimited;
   }
-
   if (breakerEvent) {
     next.health = 'cooldown';
     next.cooldownUntilUtc = addMinutes(
@@ -648,7 +617,6 @@ function providerTransition(previous, observation, breakerEvent, policy, finishe
   }
   return next;
 }
-
 function compactChange(previous, next) {
   return {
     provider: next.provider,
@@ -670,7 +638,6 @@ function compactChange(previous, next) {
     lastHttpStatus: next.lastHttpStatus,
   };
 }
-
 export function buildNextTenantState({
   previousState,
   targets,
@@ -685,12 +652,10 @@ export function buildNextTenantState({
   if (!Array.isArray(targets) || !Array.isArray(providerResults)) {
     throw new Error('targets and providerResults must be arrays');
   }
-
   const previous = tenantStateMaps(previousState);
   const targetBySequence = new Map(targets.map((target) => [target.sequence, target]));
   const nextTenants = new Map(previous.tenants);
   const changes = [];
-
   for (const result of providerResults) {
     if (result.status === 'skipped') continue;
     const target = targetBySequence.get(result.sequence);
@@ -717,7 +682,6 @@ export function buildNextTenantState({
     nextTenants.set(key, after);
     changes.push(compactChange(before, after));
   }
-
   const observationByProvider = new Map(
     (rateObservations?.providers ?? []).map((item) => [
       item.healthPartition ?? providerHealthPartition(item.provider, item.providerVariant),
@@ -776,7 +740,6 @@ export function buildNextTenantState({
       });
     }
   }
-
   const nextState = validateTenantStateEnvelope({
     schemaVersion: 1,
     updatedAtUtc: now.toISOString(),

@@ -4,7 +4,6 @@
 
 // @ts-check
 /** @typedef {import('./_types.js').Provider} Provider */
-
 // Workday provider — hits the public CXS jobs endpoint (POST, paginated).
 // Auto-detects from careers_url pattern
 // `https://<tenant>.<instance>.myworkdayjobs.com[/<locale>]/<site>`,
@@ -14,11 +13,9 @@
 // Workday only exposes a relative "postedOn" label ("Posted Today",
 // "Posted 5 Days Ago", "Posted 30+ Days Ago"); postedAt is derived from it
 // and omitted for the unbounded "30+ Days Ago" form.
-
 import { BROWSER_LIKE_USER_AGENT } from './_http.mjs';
 
 const PAGE_SIZE = 20;
-
 // Safety cap on pagination — applied regardless of what the upstream reports
 // as `total` (or, when `total` is absent, regardless of how many full pages
 // keep coming back), so a misbehaving/compromised API can't drive this into
@@ -30,7 +27,6 @@ const DEFAULT_MAX_PAGES = 100;
 // cvshealth: ~16,800) with headroom — not a completeness guarantee, since a
 // company directory this size has no fixed upper bound.
 const MAX_PAGES_CAP = 1500;
-
 // Retry policy for transient page failures (429 rate-limit, 5xx, timeouts/aborts).
 // Workday's CXS API is fronted by a WAF that rate-limits in bursts; without
 // retry, a single 429 silently truncates an entire tenant (e.g. a
@@ -40,7 +36,6 @@ const MAX_PAGES_CAP = 1500;
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 500;
 const RETRY_MAX_DELAY_MS = 8_000;
-
 // Delay between successive pages *within one tenant's own pagination loop*
 // (not between tenants — that's scan-ats-full.mjs's concurrency, a separate
 // knob). A burst of same-host requests with zero delay risks Workday's
@@ -48,7 +43,6 @@ const RETRY_MAX_DELAY_MS = 8_000;
 // (large boards like rollsroyce, sec, roche). Only tenants that loop past
 // page 1 pay this; no-date-skip and early-stopped tenants never do.
 const INTER_PAGE_DELAY_MS = 150;
-
 // Workday returns postings newest-first, so pagination can stop once a
 // page's oldest *dated* posting is well past --since — no point paying for
 // (and rate-limit-risking) pages that are entirely stale. Only unambiguous
@@ -62,7 +56,6 @@ const INTER_PAGE_DELAY_MS = 150;
 // margin only needs to clear that; 2 is double it as a plain safety factor,
 // not a second measurement.
 const EARLY_STOP_MARGIN_MS = 2 * 86_400_000;
-
 /** Resolve the page cap: a positive integer `max_pages` on the entry, capped. */
 function resolveMaxPages(entry) {
   const v = entry?.max_pages;
@@ -74,7 +67,6 @@ function sleep(ms, ctx) {
   if (typeof ctx?.sleep === 'function') return ctx.sleep(ms);
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-
 /** Parses a `Retry-After` header value (seconds, or an HTTP-date) to ms, or null. */
 function parseRetryAfterMs(value) {
   if (!value) return null;
@@ -83,7 +75,6 @@ function parseRetryAfterMs(value) {
   const dateMs = Date.parse(value);
   return Number.isFinite(dateMs) ? Math.max(0, dateMs - Date.now()) : null;
 }
-
 function isRetryableError(err) {
   const status = err?.status;
   if (status === 429) return true;
@@ -91,6 +82,35 @@ function isRetryableError(err) {
   return status === undefined; // network error / timeout / abort — no status set
 }
 
+// Workday's CXS API returns stable bounded JSON error codes for tenant-local
+// invalid/restricted career sites. Treat exact signatures as tenant failures
+// for normal/tracked targets. Canaries stay provider-health signals so a
+// provider-wide request-contract regression cannot be hidden as catalog rot.
+function annotateWorkdayTenantFailure(error, entry) {
+  if (!error || typeof error !== 'object' || typeof error.body !== 'string') {
+    return error;
+  }
+  let body;
+  try {
+    body = JSON.parse(error.body);
+  } catch {
+    return error;
+  }
+  const healthOnly = entry?.healthOnly === true || entry?.canary != null;
+  if (error.status === 422 && body?.errorCode === 'HTTP_422') {
+    error.code = healthOnly
+      ? 'WORKDAY_REQUEST_REJECTED'
+      : 'WORKDAY_TENANT_INVALID';
+  } else if (
+    !healthOnly
+    && [401, 403].includes(error.status)
+    && body?.errorCode === 'S22'
+    && /permission denied/i.test(String(body?.message ?? ''))
+  ) {
+    error.code = 'WORKDAY_TENANT_RESTRICTED';
+  }
+  return error;
+}
 /** Fetches a single page, retrying transient failures with backoff. */
 async function fetchPageWithRetry(ctx, api, opts) {
   let lastErr;
@@ -112,7 +132,6 @@ async function fetchPageWithRetry(ctx, api, opts) {
   }
   throw lastErr;
 }
-
 /** True once a page's oldest unambiguously-dated posting is past the --since window. */
 function pageIsPastWindow(pageJobs, sinceMs) {
   if (typeof sinceMs !== 'number') return false;
@@ -120,7 +139,6 @@ function pageIsPastWindow(pageJobs, sinceMs) {
   if (dated.length === 0) return false;
   return Math.min(...dated) < sinceMs - EARLY_STOP_MARGIN_MS;
 }
-
 function resolveEndpoint(entry) {
   // Try api: first, then careers_url (mirrors greenhouse/ashby), returning the
   // first that matches the Workday tenant pattern. This lets a branded page
@@ -143,7 +161,6 @@ function resolveEndpoint(entry) {
   }
   return null;
 }
-
 function parsePostedOn(label) {
   if (!label) return undefined;
   if (/posted\s+today/i.test(label)) return Date.now();
@@ -152,7 +169,6 @@ function parsePostedOn(label) {
   if (!m || m[2] === '+') return undefined; // "30+ Days Ago" — unbounded, no usable date
   return Date.now() - Number(m[1]) * 86_400_000;
 }
-
 // Workday URL path encodes location as /job/{Location-Slug}/{title-slug}.
 // Use it as fallback when locationsText is absent (common on some tenants).
 function locationFromPath(externalPath) {
@@ -162,7 +178,6 @@ function locationFromPath(externalPath) {
   try { segment = decodeURIComponent(m[1]); } catch { segment = m[1]; }
   return segment.replace(/-/g, ' ');
 }
-
 export function parseWorkdayResponse(json, entry) {
   const ep = resolveEndpoint(entry);
   const jobBase = ep?.jobBase || '';
@@ -181,7 +196,6 @@ export function parseWorkdayResponse(json, entry) {
   }
   return jobs;
 }
-
 /** @type {Provider} */
 export default {
   id: 'workday',
@@ -190,7 +204,6 @@ export default {
     const ep = resolveEndpoint(entry);
     return ep ? { url: ep.api } : null;
   },
-
   /**
    * Fetch all job postings for a Workday-backed entry, paginating through
    * the tenant's CXS API.
@@ -202,14 +215,13 @@ export default {
    * origin/referer clears it without needing per-tenant config (same fix
    * as providers/glints.mjs's firewall).
    *
-   * @param {{ name?: string, api?: string, careers_url?: string, max_pages?: number }} entry
+   * @param {{ name?: string, api?: string, careers_url?: string, max_pages?: number, healthOnly?: boolean, canary?: object | null }} entry
    * @param {{ fetchJson: (url: string, opts?: object) => Promise<any>, sinceMs?: number, maxPages?: number }} ctx
    * @returns {Promise<Array<{title: string, url: string, company: string, location: string, postedAt?: number}>>}
    */
   async fetch(entry, ctx) {
     const ep = resolveEndpoint(entry);
     if (!ep) throw new Error(`workday: cannot derive CXS endpoint for ${entry.name}`);
-
     const postOpts = {
       method: 'POST',
       redirect: 'error',
@@ -224,14 +236,17 @@ export default {
     };
     const makeBody = (offset) => JSON.stringify({ limit: PAGE_SIZE, offset, searchText: '', appliedFacets: {} });
     const sinceMs = typeof ctx?.sinceMs === 'number' ? ctx.sinceMs : null;
-
-    const first = await fetchPageWithRetry(ctx, ep.api, { ...postOpts, body: makeBody(0) });
+    let first;
+    try {
+      first = await fetchPageWithRetry(ctx, ep.api, { ...postOpts, body: makeBody(0) });
+    } catch (error) {
+      throw annotateWorkdayTenantFailure(error, entry);
+    }
     const jobs = parseWorkdayResponse(first, entry);
 
     const total = typeof first?.total === 'number' ? first.total : null;
     const firstPostings = Array.isArray(first?.jobPostings) ? first.jobPostings : [];
     const maxPages = resolveMaxPages(entry);
-
     // How many pages to fetch in total (including the first, already-fetched
     // one): bounded by `total` when the server reports it, always capped at
     // maxPages. When `total` is absent, only probe further pages if the first
@@ -239,7 +254,6 @@ export default {
     let pagesToFetch = total !== null
       ? Math.min(Math.ceil(total / PAGE_SIZE), maxPages)
       : (firstPostings.length >= PAGE_SIZE ? maxPages : 1);
-
     // Honor a context page cap — verify-portals' liveness probe sets
     // `ctx.maxPages: 1` so it only needs to know a board is live, not its full
     // count. Without this we'd fetch page 0, then request page 1 and trip the
@@ -252,7 +266,6 @@ export default {
     // which don't set ctx.maxPages.
     const ctxCap = Number.isInteger(ctx?.maxPages) && ctx.maxPages > 0 ? ctx.maxPages : Infinity;
     pagesToFetch = Math.min(pagesToFetch, ctxCap);
-
     // Why pagination stopped — drives which warning (if any) fires below.
     // 'fetch-error' must NOT produce the "raise max_pages" advice: that knob
     // does nothing for a tenant that died on a rate limit rather than hit the cap.
@@ -262,7 +275,6 @@ export default {
     // adventhealth, on every page). Early-stop can't apply then — there's
     // no dated posting to recognize as "past the window".
     const sawAnyDatedPosting = jobs.some((j) => typeof j.postedAt === 'number');
-
     // Zero dated postings on page 0, --include-undated off, --since-bounded
     // scan: further pagination is pure waste — every posting from this
     // tenant will be dropped downstream as undated regardless of page count
@@ -272,7 +284,6 @@ export default {
       && !sawAnyDatedPosting && jobs.length > 0) {
       stopReason = 'no-date-skip';
     }
-
     // Sequential, not concurrent (mirrors providers/4dayweek.mjs, thehub.mjs,
     // arbeitnow.mjs, jibeapply.mjs) — a single tenant's API has no reason to
     // receive a burst of parallel requests, and a mid-run failure stops
@@ -303,7 +314,6 @@ export default {
         stopReason = 'cap';
       }
     }
-
     // The cap is a safety net, not a working limit — silent by design, but a
     // tenant that actually hits it needs to be surfaced, in one short line
     // (a full-directory scan can hit this on dozens of tenants).
@@ -334,7 +344,6 @@ export default {
     // times, so tag the array instead; scan-ats-full.mjs aggregates it into
     // one summary line.
     if (stopReason === 'no-date-skip') jobs.workdayNoDateSkip = true;
-
     return jobs;
   },
 };

@@ -19,27 +19,26 @@ export function providerHttpStatus(error) {
     ))
     .find((value) => Number.isInteger(value)) ?? null;
 }
-
 export function classifyProviderError(error) {
   const chain = errorChain(error);
   if (chain.some((item) => item.name === 'AbortError')) return 'timeout';
-
   const codes = chain
     .map((item) => item.code)
     .filter((value) => typeof value === 'string');
   if (codes.includes('ETIMEDOUT')) return 'timeout';
   if (codes.includes('PROVIDER_CANARY_MINIMUM_JOBS')) return 'provider_anomaly';
+  if (codes.includes('WORKDAY_TENANT_INVALID')) return 'workday_tenant_invalid';
+  if (codes.includes('WORKDAY_TENANT_RESTRICTED')) return 'workday_tenant_restricted';
+  if (codes.includes('WORKDAY_REQUEST_REJECTED')) return 'provider_schema';
   if (codes.includes('CSB_LISTING_SCHEMA_MISMATCH')) return 'provider_schema';
   if (codes.some((code) => [
     'CSB_SESSION_REJECTED',
     'CSB_BOOTSTRAP_TOKEN_MISSING',
   ].includes(code))) return 'provider_auth';
-
   const status = providerHttpStatus(error);
   if (status === 429) return 'rate_limited';
   if (status != null && status >= 400 && status < 500) return 'http_4xx';
   if (status != null && status >= 500) return 'http_5xx';
-
   const networkCodes = new Set([
     'ECONNRESET',
     'ECONNREFUSED',
@@ -55,7 +54,6 @@ export function classifyProviderError(error) {
   )) return 'network';
   return 'provider_error';
 }
-
 export function providerErrorMessage(error, maxLength = 500) {
   const message = error instanceof Error ? error.message : String(error);
   return message.length <= maxLength
@@ -64,10 +62,12 @@ export function providerErrorMessage(error, maxLength = 500) {
 }
 
 export function isDurableProviderResult(result) {
+  if (['workday_tenant_invalid', 'workday_tenant_restricted'].includes(
+    result?.errorClass,
+  )) return true;
   return result?.errorClass === 'http_4xx'
     && [404, 410].includes(result.httpStatus);
 }
-
 export function isTransientProviderResult(result) {
   if (!result || result.status !== 'error') return false;
   if (isDurableProviderResult(result)) return false;

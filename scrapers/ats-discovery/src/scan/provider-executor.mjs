@@ -4,10 +4,28 @@ import { getProviderPolicy } from '../policy/discovery-policy.mjs';
 import { targetHealthIdentity } from '../providers/_variant.mjs';
 import {
   classifyProviderError,
+  isDurableProviderResult,
   isTransientProviderResult,
   providerErrorMessage,
   providerHttpStatus,
 } from './provider-errors.mjs';
+
+// Maintenance targets are intentionally expected to contain stale or
+// inaccessible tenants. Tenant-local 4xx responses must not consume the
+// provider-wide breaker sample. 408 and 429 remain provider-health signals.
+const MAINTENANCE_BUCKETS = new Set([
+  'recovery',
+  'dead_reprobe',
+  'long_empty',
+]);
+function isCircuitEligibleResult(target, result) {
+  if (isDurableProviderResult(result)) return false;
+  if (!MAINTENANCE_BUCKETS.has(target?.scheduleBucket)) return true;
+  if (result?.status !== 'error') return true;
+  const status = result.httpStatus;
+  if (!Number.isInteger(status) || status < 400 || status >= 500) return true;
+  return [408, 429].includes(status);
+}
 
 class Semaphore {
   constructor(limit) {
@@ -15,7 +33,6 @@ class Semaphore {
     this.active = 0;
     this.waiters = [];
   }
-
   async acquire() {
     if (this.active < this.limit) {
       this.active += 1;
@@ -31,7 +48,6 @@ class Semaphore {
     if (next) next();
   }
 }
-
 function cleanTelemetry(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   return {
@@ -46,7 +62,6 @@ function cleanTelemetry(value) {
       : null,
   };
 }
-
 function normalizedFetchValue(value) {
   if (Array.isArray(value)) return { jobs: value, telemetry: {} };
   if (
@@ -65,7 +80,6 @@ function normalizedFetchValue(value) {
   error.code = 'INVALID_PROVIDER_RESULT';
   throw error;
 }
-
 function resultIdentity(target) {
   const identity = target.healthPartition
     ? {
@@ -76,7 +90,6 @@ function resultIdentity(target) {
     : targetHealthIdentity(target);
   return identity;
 }
-
 function baseProviderResult(target) {
   const identity = resultIdentity(target);
   return {
@@ -89,7 +102,6 @@ function baseProviderResult(target) {
     healthOnly: target.healthOnly === true,
   };
 }
-
 class ProviderGuard {
   constructor({ identity, policy, monotonicNow, sleep }) {
     this.identity = identity;
@@ -105,7 +117,6 @@ class ProviderGuard {
     this.rateLimited = 0;
     this.transientErrors = 0;
   }
-
   async pace() {
     let release;
     const previous = this.pacingChain;
@@ -123,12 +134,11 @@ class ProviderGuard {
       release();
     }
   }
-
-  maybeOpen(result) {
+  maybeOpen(target, result) {
+    if (!isCircuitEligibleResult(target, result)) return;
     this.requestsAttempted += 1;
     if (result.errorClass === 'rate_limited') this.rateLimited += 1;
     if (isTransientProviderResult(result)) this.transientErrors += 1;
-
     const breaker = this.policy.execution.breaker;
     let reason = null;
     if (this.rateLimited >= breaker.rateLimitThreshold) {
@@ -142,7 +152,6 @@ class ProviderGuard {
     ) {
       reason = 'transient_error_ratio';
     }
-
     if (reason && !this.open) {
       this.open = true;
       this.breakerEvent = {
@@ -154,7 +163,6 @@ class ProviderGuard {
       };
     }
   }
-
   async execute(target, fetchTarget) {
     await this.semaphore.acquire();
     try {
@@ -163,7 +171,6 @@ class ProviderGuard {
       if (!allowed || this.open) {
         return skippedResult(target, 'provider_circuit_open');
       }
-
       const started = this.monotonicNow();
       let result;
       try {
@@ -250,14 +257,13 @@ class ProviderGuard {
           },
         };
       }
-      this.maybeOpen(result.providerResult);
+      this.maybeOpen(target, result.providerResult);
       return result;
     } finally {
       this.semaphore.release();
     }
   }
 }
-
 function skippedResult(target, reason) {
   return {
     target,
@@ -281,7 +287,6 @@ function skippedResult(target, reason) {
     },
   };
 }
-
 async function mapLimit(items, limit, worker) {
   if (!Number.isInteger(limit) || limit <= 0) {
     throw new Error('global provider concurrency must be a positive integer');
@@ -301,7 +306,6 @@ async function mapLimit(items, limit, worker) {
   );
   return results;
 }
-
 export async function executeProviderTargets({
   targets,
   policy,
@@ -316,7 +320,6 @@ export async function executeProviderTargets({
   if (onProgress != null && typeof onProgress !== 'function') {
     throw new Error('onProgress must be a function');
   }
-
   let completed = 0;
   function report(result) {
     completed += 1;
@@ -335,7 +338,6 @@ export async function executeProviderTargets({
       /* Progress reporting must never alter provider execution. */
     }
   }
-
   const guards = new Map();
   function guardFor(target) {
     const identity = resultIdentity(target);
@@ -349,7 +351,6 @@ export async function executeProviderTargets({
     }
     return guards.get(identity.healthPartition);
   }
-
   async function executeGroup(group) {
     return mapLimit(group, globalConcurrency, async (target) => {
       const result = await guardFor(target).execute(target, fetchTarget);
@@ -357,7 +358,6 @@ export async function executeProviderTargets({
       return result;
     });
   }
-
   const priority = targets.filter((target) => target.targetClass === 'priority');
   const normal = targets.filter((target) => target.targetClass !== 'priority');
   const priorityResults = await executeGroup(priority);
@@ -368,6 +368,5 @@ export async function executeProviderTargets({
     .map((guard) => guard.breakerEvent)
     .filter(Boolean)
     .sort((left, right) => left.healthPartition.localeCompare(right.healthPartition));
-
   return { batches, breakerEvents };
 }
