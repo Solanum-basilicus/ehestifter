@@ -1,5 +1,6 @@
 import { parseJobPostingJsonLd } from './jobposting-jsonld.mjs';
 import { htmlToPlainText } from './text.mjs';
+import { greenhouseHtmlToPlainText } from './greenhouse-text.mjs';
 import {
   createHttpSession,
   BROWSER_LIKE_USER_AGENT,
@@ -213,7 +214,7 @@ async function fetchGreenhouseDetails(candidate, context) {
     timeoutMs: context.timeoutMs,
   });
   return {
-    description: htmlToPlainText(payload.content),
+    description: greenhouseHtmlToPlainText(payload.content),
     descriptionStatus: 'greenhouse-detail-api',
     applyUrl: typeof payload.absolute_url === 'string'
       ? payload.absolute_url.trim()
