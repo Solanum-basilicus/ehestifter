@@ -21,6 +21,8 @@ import { requestCompatibilityForMatches } from './ehestifter/request-compatibili
 import { createUsersClient } from './ehestifter/users-client.mjs';
 import { normalizeCandidateLocations } from './locations/normalizer.mjs';
 import { loadProviders } from './providers/_registry.mjs';
+import { publishPrerequisiteFailureRun } from './prerequisite-failure-run.mjs';
+import { classifyPrerequisiteFailure } from './run-failure.mjs';
 import { buildRunSummary } from './run-summary.mjs';
 import { buildProviderCanaryResults } from './scan/provider-canaries.mjs';
 import { buildRateObservations } from './scan/rate-observations.mjs';
@@ -36,11 +38,6 @@ import {
   buildUserMatchArtifact,
   selectDiscoveryExecutionTargets,
 } from './users/discovery-matcher.mjs';
-
-function boundedDiagnostic(error) {
-  const raw = error instanceof Error ? error.message : String(error);
-  return raw.replace(/[\u0000-\u001f\u007f]+/gu, ' ').trim().slice(0, 500);
-}
 
 function assertCatalogTargetSafety(mode, runtimeTargets, requestedLimit) {
   const normalTargets = runtimeTargets.filter(
@@ -142,10 +139,25 @@ async function runScan(args) {
         discoveryUsersPayload = await usersClient.listDiscoveryEligible();
         discoveryMatcher = buildDiscoveryMatcher(discoveryUsersPayload);
       } catch (error) {
-        discoveryUsersError = boundedDiagnostic(error);
-      } finally {
         progress.update({ stage: 'users', current: 1, total: 1 });
+        const failure = classifyPrerequisiteFailure(error);
+        const published = await publishPrerequisiteFailureRun({
+          args,
+          config,
+          runId,
+          startedAt,
+          planning,
+          providers,
+          requestedCatalogTargets,
+          failure,
+        });
+        progress.clear();
+        progressCleared = true;
+        console.log(JSON.stringify(published, null, 2));
+        process.exitCode = failure.exitCode;
+        return;
       }
+      progress.update({ stage: 'users', current: 1, total: 1 });
     }
 
     if (discoveryMatcher) {

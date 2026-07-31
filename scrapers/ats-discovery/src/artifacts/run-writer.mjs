@@ -115,6 +115,7 @@ export async function writeRunArtifacts({
   dataPath,
   runId,
   metadata,
+  failure = null,
   targetPlan,
   providerResults,
   tenantStateChanges,
@@ -140,6 +141,9 @@ export async function writeRunArtifacts({
   await mkdir(stagingPath, { recursive: false });
   try {
     await writeJsonArtifact(stagingPath, 'metadata.json', metadata);
+    if (failure) {
+      await writeJsonArtifact(stagingPath, 'failure.json', failure);
+    }
     await writeJsonArtifact(stagingPath, 'target-plan.json', targetPlan);
     await writeArrayArtifact(
       stagingPath,

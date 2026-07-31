@@ -1620,7 +1620,7 @@ data/state/scheduler-state.json logical scheduler slots and outcomes
 data/backups/                  bounded operational backups
 ```
 
-Representative run artifacts include target plans, provider and canary results, candidates/rejections, user matches, Jobs preflight, detail/location/import results, tenant-state changes, rate observations, summary, and scheduler metadata.
+Representative run artifacts include target plans, provider and canary results, candidates/rejections, user matches, Jobs preflight, detail/location/import results, tenant-state changes, rate observations, summary, and scheduler metadata. A required-input abort also publishes `failure.json` with a bounded sanitized cause chain; it does not publish provider-health observations or mutate tenant/provider state.
 
 Artifacts and logs must not contain service keys, provider cookies/CSRF tokens, CV content, or full user profiles. Operator visibility comes from run summaries, provider/variant warnings, canary outcomes, `ats-ops status`, systemd unit state, and journal output.
 
@@ -1628,14 +1628,15 @@ Artifacts and logs must not contain service keys, provider cookies/CSRF tokens, 
 
 Phase 7 supplies independent system-level timers for daily discovery and weekly catalog refresh. Services run as the repository owner so Docker bind-mount ownership matches manual operation.
 
-The timer's `Persistent=true` activation is not treated as proof of completed work. The scheduler calculates a local logical slot and records it complete only after scanner exit `0`, scanner exit `2` (completed degraded), or an intentional minimum-spacing collapse.
+The timer's `Persistent=true` activation is not treated as proof of completed work. The scheduler calculates a local logical slot and records it complete only after scanner exit `0`, scanner exit `2` (completed degraded), or an intentional minimum-spacing collapse. A required Users-input failure exits `75` when retryable or `64` when operator correction is required; neither closes the logical slot.
 
 Rules:
 - only the latest due slot is processed; missed days are not replayed one by one;
 - a late boot follows the same catch-up logic with no late cutoff;
-- only the remaining configured boot grace is waited;
+- systemd-triggered work waits the larger of the remaining boot grace and a short activation grace so resume-time networking can settle;
 - `fcntl.flock` serializes discovery, catalog refresh, and wrapped manual scanner commands;
-- lock contention and launch failures use bounded retry behavior;
+- lock contention, launch failures, and retryable required-input aborts use bounded retry behavior;
+- required multi-user input failure aborts before provider execution or tenant/provider state mutation and still publishes diagnostic run artifacts;
 - malformed or timezone-mismatched state fails closed;
 - discovery can continue with the previous valid catalogs when refresh fails;
 - scheduler and tenant-state backups plus artifact retention are bounded.
@@ -1769,16 +1770,16 @@ Telegram analytics is intentionally deferred.
 ### 15.10 Scheduled ATS discovery flow
 
 1. The systemd timer activates the discovery oneshot service for the latest due local slot.
-2. The host scheduler waits only the remaining boot grace and obtains the global `flock`.
+2. The host scheduler waits the larger of remaining boot grace and activation grace, then obtains the global `flock`.
 3. ATS Discovery loads valid catalogs, operator policy, tenant/provider health, and bounded eligible-user profiles.
-4. The planner orders due canaries/priority targets and deterministic provider catalog shards.
+4. If required Users input is unavailable, the scanner publishes a sanitized failure run and exits before provider execution; otherwise the planner orders due canaries/priority targets and deterministic provider catalog shards.
 5. Each selected ATS target is fetched once and normalized.
 6. Cheap filters produce a matched-user set; candidates matching no user are rejected.
 7. Jobs canonical identity is checked once per retained candidate.
 8. Missing candidates receive bounded detail/location processing and guarded shared-job creation.
 9. Compatibility is requested for matched users without creating status.
 10. Run artifacts, tenant state, rate observations, and scheduler metadata are published.
-11. Exit `0` records normal completion; exit `2` records degraded completion; other outcomes remain due and visible for bounded retry/operator action.
+11. Exit `0` records normal completion; exit `2` records degraded completion; retryable prerequisite exit `75` remains due for bounded retry; prerequisite exit `64` remains due but stops the immediate systemd restart chain so operator correction can happen before a manual or later scheduled attempt.
 
 ---
 
@@ -2058,7 +2059,7 @@ Known limitations:
 
 ### 19.4 Runbooks
 
-ATS Discovery has a component runbook in `scrapers/ats-discovery/README.md`, including config validation, wrapper-based manual operation, timer installation/uninstallation, missed-slot semantics, tests, and artifact inspection.
+ATS Discovery has a component runbook in `scrapers/ats-discovery/README.md`, including config validation, wrapper-based manual operation, timer installation/uninstallation, missed-slot semantics, tests, artifact inspection, and degraded/aborted-run diagnostics.
 
 Still future work:
 - retrying failed enrichment dispatches;
@@ -2315,9 +2316,9 @@ Do not generalize this into a broader migration pattern without a separate miles
 
 ### 24.9 Local ATS Discovery scheduler
 
-ATS Discovery depends on a local node that may be powered off. Persistent timers plus logical-slot state catch up the latest due run after boot/resume, but discovery cannot happen while the node is unavailable.
+ATS Discovery depends on a local node that may be powered off. Persistent timers plus logical-slot state catch up the latest due run after boot/resume; activation grace and retryable prerequisite-abort semantics cover ordinary routing/DNS recovery, but discovery cannot happen while the node is unavailable.
 
-Direct Compose commands bypass the global host lock, timer units embed rendered paths/settings, and there is no external notification channel. These are accepted hobby-project compromises documented in the component runbook.
+Direct Compose commands bypass the global host lock, timer units embed rendered paths/settings, hard process or power loss before final atomic artifact publication does not checkpoint an in-progress scan, and there is no external notification channel. These are accepted hobby-project compromises documented in the component runbook.
 
 ---
 

@@ -11,6 +11,7 @@
     "tenantStateBackups": "data/state/backups/tenant-state"
   },
   "bootGraceMinutes": 10,
+  "activationGraceSeconds": 60,
   "minimumSpacingMinutes": 240,
   "retry": {
     "maxRetries": 3,

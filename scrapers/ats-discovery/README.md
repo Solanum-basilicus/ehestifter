@@ -120,7 +120,7 @@ systemctl list-timers 'ehestifter-ats-*'
 | Prioritize or disable a catalog tenant | `config/company-overrides.yml` | Operator-owned `priority` and `disabled` provider identities |
 | Change scan cadence, lookback, catalog shard sizes, pacing, or breakers | `config/discovery-policy.yml` | Provider planning and health policy |
 | Change API endpoints, import ceilings, live-catalog gates, or multi-user/compatibility behavior | `config/scanner.local.json` | Scanner runtime integration settings |
-| Move the daily/weekly times, change scheduled scanner arguments, retries, or retention | `config/scheduler.local.json` | Host scheduler policy and the values rendered into systemd units |
+| Move the daily/weekly times, change scheduled scanner arguments, activation grace, retries, or retention | `config/scheduler.local.json` | Host scheduler policy and the values rendered into systemd units |
 
 The `*.example.*` files are committed templates. The active files without
 `.example` are operator-owned local configuration and should not contain secrets
@@ -518,6 +518,7 @@ A normal run can emit:
 
 ```text
 metadata.json
+failure.json                  prerequisite failures only
 summary.json
 target-plan.json
 provider-results.json
@@ -534,6 +535,8 @@ rate-observations.json
 scheduler.json
 ```
 
+If required Users discovery input fails before provider execution, the scanner still publishes an atomic run directory. `failure.json` contains a bounded sanitized cause chain; provider/canary/state-change artifacts remain empty or absent because no provider health observation was made.
+
 Historical runs are retained as evidence. Product renames must not rewrite existing run artifacts or historical job provenance.
 
 ## Scheduling semantics
@@ -546,11 +549,13 @@ Key behavior:
 - `Persistent=true` supplies a missed calendar activation, while application state proves whether a logical slot completed;
 - one invocation processes only the latest due slot — missed days are not replayed one by one;
 - a late boot follows normal catch-up logic with no late-night cutoff;
-- only the remaining part of the configured boot grace is waited;
+- systemd-triggered runs wait the larger of remaining boot grace and `activationGraceSeconds`; wrapped manual runs do not wait;
 - `fcntl.flock` provides the shared scanner/catalog lock;
 - lock contention and launch failures participate in bounded retry behavior;
 - scanner exit `0` completes normally;
 - scanner exit `2` completes the slot as degraded and remains visible;
+- scanner exit `75` with a published run is `aborted_retryable`, leaves the slot due, and uses the existing bounded systemd retry policy;
+- scanner exit `64` with a published run is `failed_prerequisite`, leaves the slot due, and stops the immediate systemd restart chain;
 - malformed or timezone-mismatched scheduler state fails closed;
 - discovery may continue with the previous valid catalogs when refresh fails;
 - scheduler and tenant-state backups plus artifact retention are bounded.
@@ -636,8 +641,8 @@ docker compose run --rm \
 Accepted pre-Phase-9 baselines supplied by the completed milestone are:
 
 ```text
-scanner:   355 tests passing
-scheduler: 27 tests passing
+scanner:   418 tests passing
+scheduler: 34 tests passing
 ```
 
 Phase 9 changes naming, documentation, migration, and validation surfaces; it does not intentionally change provider, matching, Jobs, import, or scheduler algorithms. Any regression in those suites blocks commit.
@@ -653,6 +658,8 @@ Before trusting scheduled live operation:
 5. inspect `summary.json`, provider/variant warnings, canary outcomes, and state changes;
 6. install timers only after rendered units point to `scrapers/ats-discovery` and Compose service `ats-discovery`;
 7. inspect the next natural missed-slot catch-up after reboot/resume.
+
+For a degraded or aborted run, inspect `summary.json`, `failure.json` when present, `scheduler.json`, the systemd journal around the run, and owner-service telemetry. A missing owner-service request combined with host link/DNS events indicates failure before the request reached the service.
 
 Failure visibility is local: systemd unit state, journal output, scheduler state/status, and retained run artifacts. There is no external email/chat alert channel.
 

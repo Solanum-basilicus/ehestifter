@@ -172,6 +172,9 @@ def load_config(config_path: Path) -> dict[str, Any]:
     }
 
     boot_grace = _require_int(config.get("bootGraceMinutes"), "bootGraceMinutes", 0, 120)
+    activation_grace = _require_int(
+        config.get("activationGraceSeconds", 60), "activationGraceSeconds", 0, 3600
+    )
     minimum_spacing = _require_int(config.get("minimumSpacingMinutes"), "minimumSpacingMinutes", 0, 1440)
 
     retry = _require_mapping(config.get("retry"), "retry")
@@ -219,6 +222,7 @@ def load_config(config_path: Path) -> dict[str, Any]:
         "_paths": resolved_paths,
         "timezone": timezone_name,
         "bootGraceMinutes": boot_grace,
+        "activationGraceSeconds": activation_grace,
         "minimumSpacingMinutes": minimum_spacing,
         "retry": retry_validated,
         "compose": compose_validated,
@@ -519,6 +523,17 @@ def remaining_boot_grace_seconds(boot_grace_minutes: int, uptime_seconds: float 
     return max(0.0, boot_grace_minutes * 60.0 - uptime_seconds)
 
 
+def remaining_activation_grace_seconds(
+    boot_grace_minutes: int,
+    activation_grace_seconds: int,
+    uptime_seconds: float | None,
+) -> float:
+    return max(
+        remaining_boot_grace_seconds(boot_grace_minutes, uptime_seconds),
+        float(activation_grace_seconds),
+    )
+
+
 def build_scanner_command(config: Mapping[str, Any], task_key: str) -> list[str]:
     compose = config["compose"]
     task = config[task_key]
@@ -639,9 +654,16 @@ def run_scheduled_task(
         return 0
 
     if trigger == "systemd":
-        remaining = remaining_boot_grace_seconds(config["bootGraceMinutes"], uptime_fn())
+        remaining = remaining_activation_grace_seconds(
+            config["bootGraceMinutes"],
+            config["activationGraceSeconds"],
+            uptime_fn(),
+        )
         if remaining > 0:
-            print(f"[ats-scheduler] boot grace: sleeping {int(remaining)} seconds", flush=True)
+            print(
+                f"[ats-scheduler] activation grace: sleeping {int(remaining)} seconds",
+                flush=True,
+            )
             sleep_fn(remaining)
 
     now = now_fn()
@@ -738,15 +760,29 @@ def run_scheduled_task(
         finished = now_fn()
         run_path = find_new_run(runs_path, before) if task_key == "dailyDiscovery" else None
 
+        artifact_exit_codes = (
+            0,
+            EXIT_COMPLETED_DEGRADED,
+            EXIT_CONFIG,
+            EXIT_TEMPORARY,
+        )
         if launch_error is not None:
             outcome = "failed_launch"
-        elif task_key == "dailyDiscovery" and exit_code in (0, EXIT_COMPLETED_DEGRADED) and run_path is None:
+        elif (
+            task_key == "dailyDiscovery"
+            and exit_code in artifact_exit_codes
+            and run_path is None
+        ):
             exit_code = 1
             outcome = "failed_missing_run_artifact"
         elif exit_code == 0:
             outcome = "success"
         elif exit_code == EXIT_COMPLETED_DEGRADED:
             outcome = "completed_degraded"
+        elif task_key == "dailyDiscovery" and exit_code == EXIT_TEMPORARY:
+            outcome = "aborted_retryable"
+        elif task_key == "dailyDiscovery" and exit_code == EXIT_CONFIG:
+            outcome = "failed_prerequisite"
         else:
             outcome = "failed_transient"
 
@@ -796,6 +832,10 @@ def run_scheduled_task(
         )
         if outcome == "completed_degraded":
             return EXIT_COMPLETED_DEGRADED
+        if outcome == "aborted_retryable":
+            return EXIT_TEMPORARY
+        if outcome == "failed_prerequisite":
+            return EXIT_CONFIG
         if outcome.startswith("failed_"):
             return 1
         return 0
