@@ -105,6 +105,72 @@ export function createJobsClient(config, { fetchImpl = fetch } = {}) {
     };
   }
 
+  async function getJob(jobId) {
+    const normalizedId = typeof jobId === 'string' ? jobId.trim() : '';
+    if (!normalizedId) throw new Error('jobId must be a non-empty string');
+    const endpoint = new URL(
+      `${config.baseUrl}/jobs/${encodeURIComponent(normalizedId)}`,
+    );
+    return getJsonWithRetry({
+      fetchImpl,
+      url: endpoint,
+      headers,
+      timeoutMs: config.timeoutMs,
+      retryCount: config.retryCount,
+    });
+  }
+
+  async function updateJobDescription(jobId, description) {
+    const normalizedId = typeof jobId === 'string' ? jobId.trim() : '';
+    if (!normalizedId) throw new Error('jobId must be a non-empty string');
+    if (typeof description !== 'string' || description.trim() === '') {
+      throw new Error('description must be a non-empty string');
+    }
+
+    const endpoint = new URL(
+      `${config.baseUrl}/jobs/${encodeURIComponent(normalizedId)}`,
+    );
+    let lastError = null;
+    for (let attempt = 0; attempt <= config.retryCount; attempt += 1) {
+      let response = null;
+      try {
+        response = await fetchWithTimeout(
+          fetchImpl,
+          endpoint,
+          {
+            method: 'PUT',
+            headers: {
+              ...headers,
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify({ description }),
+          },
+          config.timeoutMs,
+        );
+      } catch (error) {
+        lastError = error;
+      }
+
+      if (response?.ok) {
+        return { responseStatus: response.status };
+      }
+      if (response) {
+        const body = await response.text().catch(() => '');
+        const error = new Error(
+          `Jobs API returned ${response.status}: ${body.slice(0, 500)}`,
+        );
+        error.status = response.status;
+        lastError = error;
+        if (!isRetryable(null, response)) throw error;
+      }
+      if (attempt === config.retryCount) {
+        throw lastError ?? new Error('Jobs update failed without an error');
+      }
+      await sleep(Math.min(500 * 2 ** attempt, 4000));
+    }
+    throw lastError ?? new Error('Jobs update failed without an error');
+  }
+
   async function createJob(payload, { reconcileUrl = payload.url } = {}) {
     const endpoint = new URL(`${config.baseUrl}/jobs`);
     let lastError = null;
@@ -176,7 +242,7 @@ export function createJobsClient(config, { fetchImpl = fetch } = {}) {
     throw lastError ?? new Error('Jobs create failed without an error');
   }
 
-  return { existsByUrl, createJob };
+  return { existsByUrl, getJob, updateJobDescription, createJob };
 }
 
 function safeProgress(onProgress, value) {

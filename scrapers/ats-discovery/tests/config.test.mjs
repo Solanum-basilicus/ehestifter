@@ -307,3 +307,19 @@ test('live catalog workload ceilings are operator-owned', async () => {
     assert.equal(config.liveCatalog.maxImportTargetsPerRun, operatorCeiling);
   });
 });
+
+test('maintenance loads Jobs credentials without requiring scan policy files', async () => {
+  await withTempDir(async (directory) => {
+    const configPath = path.join(directory, 'scanner.json');
+    await writeFile(configPath, JSON.stringify(configFor(directory)));
+
+    const config = await loadRuntimeConfig({
+      configPath,
+      operation: 'maintenance',
+      mode: 'maintenance',
+      env: { EHESTIFTER_JOBS_FUNCTION_KEY: 'maintenance-key' },
+    });
+    assert.equal(config.jobsApi.baseUrl, 'https://jobs.example/api');
+    assert.equal(config.jobsApi.functionKey, 'maintenance-key');
+  });
+});

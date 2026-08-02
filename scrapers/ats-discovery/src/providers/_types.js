@@ -25,8 +25,9 @@
  * @property {string} [description] Job description text, populated ONLY when the
  *                               provider's list payload carries it for free (no
  *                               extra per-job request — the scanner is zero-token).
- *                               Lever supplies it via `descriptionPlain`; most
- *                               providers omit it. Consumed by scan.mjs's
+ *                               Lever composes `descriptionPlain`, structured
+ *                               `lists`, and `additionalPlain`; most providers
+ *                               omit it. Consumed by scan.mjs's
  *                               content_filter; an empty/absent value always
  *                               passes the filter.
  * @property {number} [postedAt] Epoch ms when the posting was published.

@@ -357,7 +357,7 @@ export async function loadRuntimeConfig({
         'paths.discoveryPolicy',
       ),
     ]);
-  } else if (operation !== 'catalog-sync') {
+  } else if (!['catalog-sync', 'maintenance'].includes(operation)) {
     throw new Error(`Unknown config operation: ${operation}`);
   }
 
@@ -379,7 +379,7 @@ export async function loadRuntimeConfig({
     }
   }
 
-  if (mode === 'preflight' || mode === 'import') {
+  if (['preflight', 'import', 'maintenance'].includes(mode)) {
     config.jobsApi.baseUrl = requireString(
       config.jobsApi.baseUrl,
       'jobsApi.baseUrl',
@@ -390,8 +390,11 @@ export async function loadRuntimeConfig({
       fileEnvName: 'EHESTIFTER_JOBS_FUNCTION_KEY_FILE',
     });
     if (!config.jobsApi.functionKey) {
+      const operationLabel = mode === 'maintenance'
+        ? 'Maintenance'
+        : 'Preflight';
       throw new Error(
-        'Preflight requires EHESTIFTER_JOBS_FUNCTION_KEY '
+        `${operationLabel} requires EHESTIFTER_JOBS_FUNCTION_KEY `
         + 'or EHESTIFTER_JOBS_FUNCTION_KEY_FILE',
       );
     }

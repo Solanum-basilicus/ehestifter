@@ -5,11 +5,76 @@
 // @ts-check
 /** @typedef {import('./_types.js').Provider} Provider */
 
+import { htmlToPlainText } from '../text/html.mjs';
+
 // Lever provider — hits the public postings endpoint.
 // Auto-detects from careers_url via jobs.(eu.)?lever.co/<slug>.
 // Handles both explicit `api:` URLs and auto-detection from `careers_url`.
 
 const ALLOWED_LEVER_HOSTS = new Set(['api.lever.co', 'api.eu.lever.co']);
+
+/** @param {unknown} value */
+function nonEmptyString(value) {
+  return typeof value === 'string' && value.trim() !== ''
+    ? value.trim()
+    : '';
+}
+
+/** @param {...unknown} values */
+function joinSections(...values) {
+  return values
+    .map(nonEmptyString)
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+/** @param {unknown} value */
+function leverHtmlToPlainText(value) {
+  return htmlToPlainText(value)
+    .replace(/\n{2,}(?=- )/g, '\n')
+    .replace(/[ \t]+([,.;:!?])/g, '$1');
+}
+
+/** @param {unknown} plain @param {unknown} html */
+function preferPlainText(plain, html) {
+  return nonEmptyString(plain) || leverHtmlToPlainText(html);
+}
+
+/**
+ * Lever's list and single-posting APIs split the rendered posting across the
+ * combined opening/body, structured lists, and optional closing content.
+ * Compose those fields once at the provider boundary so all downstream scan,
+ * filtering, remote inference, and import paths see the complete plain text.
+ *
+ * @param {any} posting
+ */
+export function composeLeverDescription(posting) {
+  if (!posting || typeof posting !== 'object' || Array.isArray(posting)) {
+    return '';
+  }
+
+  const main = nonEmptyString(posting.descriptionPlain) || joinSections(
+    preferPlainText(posting.openingPlain, posting.opening),
+    preferPlainText(posting.descriptionBodyPlain, posting.descriptionBody),
+  );
+
+  const lists = Array.isArray(posting.lists)
+    ? posting.lists.map((list) => {
+      if (!list || typeof list !== 'object' || Array.isArray(list)) return '';
+      return joinSections(
+        leverHtmlToPlainText(list.text),
+        leverHtmlToPlainText(list.content),
+      );
+    })
+    : [];
+
+  const additional = preferPlainText(
+    posting.additionalPlain,
+    posting.additional,
+  );
+
+  return joinSections(main, ...lists, additional);
+}
 
 /** @param {string} url */
 function assertLeverUrl(url) {
@@ -71,9 +136,9 @@ export default {
       url: j.hostedUrl || '',
       company: entry.name,
       location: j.categories?.location || '',
-      // Lever's v0 postings list ships the full description for free (same
-      // payload, no per-job request) — enables scan.mjs content_filter.
-      description: typeof j.descriptionPlain === 'string' ? j.descriptionPlain : '',
+      // The list payload contains every rendered description segment, so no
+      // per-job request is required for complete Lever content.
+      description: composeLeverDescription(j),
       postedAt: typeof j.createdAt === 'number' ? j.createdAt : undefined,
     }));
   },

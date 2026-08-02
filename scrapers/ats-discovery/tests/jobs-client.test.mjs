@@ -121,3 +121,40 @@ test('preflightCandidates preserves scanner provenance and maps Jobs identity', 
     exists: false,
   });
 });
+
+test('getJob and updateJobDescription use authenticated system requests', async () => {
+  const calls = [];
+  const fetchImpl = async (url, options) => {
+    calls.push({ url: String(url), options });
+    if (options.method === 'GET') {
+      return new Response(JSON.stringify({ Id: 'job-guid', Description: '<p>Old</p>' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    return new Response('Job updated', { status: 200 });
+  };
+  const client = createJobsClient({
+    baseUrl: 'https://jobs.example/api',
+    functionKey: 'secret',
+    timeoutMs: 1000,
+    retryCount: 0,
+  }, { fetchImpl });
+
+  const job = await client.getJob('job-guid');
+  const update = await client.updateJobDescription(
+    'job-guid',
+    '<p>New</p>',
+  );
+
+  assert.equal(job.Description, '<p>Old</p>');
+  assert.equal(update.responseStatus, 200);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].options.method, 'GET');
+  assert.equal(calls[1].options.method, 'PUT');
+  assert.equal(calls[1].options.headers['x-functions-key'], 'secret');
+  assert.equal(calls[1].options.headers['x-actor-type'], 'system');
+  assert.deepEqual(JSON.parse(calls[1].options.body), {
+    description: '<p>New</p>',
+  });
+});

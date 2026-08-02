@@ -1,6 +1,7 @@
 export function usageText() {
   return `Usage:
   node src/cli.mjs catalog sync ashby|greenhouse|lever|workday|all
+  node src/cli.mjs repair lever-description <lever-job-url> [--apply]
   node src/cli.mjs scan tracked --offline [--no-progress]
   node src/cli.mjs scan tracked --preflight [--catalog-targets N] [--no-progress]
   node src/cli.mjs scan tracked --import --max-create N [--catalog-targets N] [--no-progress]
@@ -28,27 +29,49 @@ export function parseArgs(argv) {
     return { command: 'help' };
   }
 
-  const [command, subject, providerOrFlag, ...rest] = argv;
+  const [command, subject, providerOrValue, ...rest] = argv;
 
   if (command === 'catalog') {
     if (
       subject !== 'sync'
-      || !['ashby', 'greenhouse', 'lever', 'workday', 'all'].includes(providerOrFlag)
+      || !['ashby', 'greenhouse', 'lever', 'workday', 'all'].includes(providerOrValue)
       || rest.length > 0
     ) {
       throw new Error('Expected "catalog sync ashby|greenhouse|lever|workday|all"');
     }
     return {
       command: 'catalog-sync',
-      provider: providerOrFlag,
+      provider: providerOrValue,
+    };
+  }
+
+  if (command === 'repair') {
+    if (subject !== 'lever-description' || !providerOrValue) {
+      throw new Error(
+        'Expected "repair lever-description <lever-job-url> [--apply]"',
+      );
+    }
+    let apply = false;
+    for (const flag of rest) {
+      if (flag !== '--apply') throw new Error(`Unknown argument: ${flag}`);
+      if (apply) throw new Error('--apply may be supplied only once');
+      apply = true;
+    }
+    return {
+      command: 'repair-lever-description',
+      postingUrl: providerOrValue,
+      apply,
     };
   }
 
   if (command !== 'scan' || subject !== 'tracked') {
-    throw new Error('Expected "scan tracked" or "catalog sync <provider|all>"');
+    throw new Error(
+      'Expected "scan tracked" or "catalog sync <provider|all>"; '
+      + 'also supported: "repair lever-description <lever-job-url>"',
+    );
   }
 
-  const flags = [providerOrFlag, ...rest].filter((value) => value != null);
+  const flags = [providerOrValue, ...rest].filter((value) => value != null);
   let mode = null;
   let maxCreate = null;
   let catalogTargets = null;

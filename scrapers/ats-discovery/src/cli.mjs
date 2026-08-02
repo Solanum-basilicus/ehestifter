@@ -17,10 +17,12 @@ import { enrichCandidateDetails } from './details/fetchers.mjs';
 import { createEnrichmentClient } from './ehestifter/enrichment-client.mjs';
 import { importCandidates } from './ehestifter/import-jobs.mjs';
 import { createJobsClient, preflightCandidates } from './ehestifter/jobs-client.mjs';
+import { repairLeverDescription } from './maintenance/repair-lever-description.mjs';
 import { requestCompatibilityForMatches } from './ehestifter/request-compatibility.mjs';
 import { createUsersClient } from './ehestifter/users-client.mjs';
 import { normalizeCandidateLocations } from './locations/normalizer.mjs';
 import { loadProviders } from './providers/_registry.mjs';
+import { makeHttpCtx } from './providers/_http.mjs';
 import { publishPrerequisiteFailureRun } from './prerequisite-failure-run.mjs';
 import { classifyPrerequisiteFailure } from './run-failure.mjs';
 import { buildRunSummary } from './run-summary.mjs';
@@ -83,6 +85,25 @@ async function runCatalogSync(provider) {
     outputPath: config.catalogs.paths[provider],
     summary: catalogSyncSummary(catalog),
   }, null, 2));
+}
+
+async function runLeverDescriptionRepair(args) {
+  const config = await loadRuntimeConfig({
+    operation: 'maintenance',
+    mode: 'maintenance',
+  });
+  const jobsClient = createJobsClient(config.jobsApi);
+  const http = makeHttpCtx({
+    timeoutMs: config.scan.description.timeoutMs,
+    maxResponseBytes: 5_000_000,
+  });
+  const result = await repairLeverDescription({
+    postingUrl: args.postingUrl,
+    apply: args.apply,
+    jobsClient,
+    fetchJson: http.fetchJson,
+  });
+  console.log(JSON.stringify(result, null, 2));
 }
 
 async function runScan(args) {
@@ -516,6 +537,10 @@ async function main() {
   }
   if (args.command === 'catalog-sync') {
     await runCatalogSync(args.provider);
+    return;
+  }
+  if (args.command === 'repair-lever-description') {
+    await runLeverDescriptionRepair(args);
     return;
   }
   await runScan(args);

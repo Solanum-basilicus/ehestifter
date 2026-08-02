@@ -176,6 +176,41 @@ The installer overwrites the four ATS units, verifies them, runs
 scanner configuration, catalogs, scheduler state, tenant state, or run
 artifacts.
 
+### Repair an already imported Lever description
+
+Lever's public API splits a posting across the combined opening/body,
+structured lists, and optional closing content. New scans compose those fields
+automatically. Existing Jobs rows are not overwritten by normal discovery, so
+repair a known row explicitly.
+
+Rebuild after applying the code change:
+
+```bash
+docker compose build ats-discovery
+```
+
+First run the read-only dry-run. It fetches the Lever posting, resolves the
+existing Jobs identity, reads the stored job, and prints the before/after
+description lengths without issuing a PUT:
+
+```bash
+docker compose run --rm ats-discovery \
+  repair lever-description \
+  https://jobs.lever.co/360learning/7c97a721-9d46-4568-a803-a11a7f669a5b
+```
+
+Apply only after reviewing that output:
+
+```bash
+docker compose run --rm ats-discovery \
+  repair lever-description \
+  https://jobs.lever.co/360learning/7c97a721-9d46-4568-a803-a11a7f669a5b \
+  --apply
+```
+
+The apply path updates only the Jobs `description` field. It refuses missing
+Jobs rows and provider, tenant, or external-id identity mismatches.
+
 ### Add a tracked company
 
 1. Add an enabled item under `tracked_companies` in `config/portals.yml`:

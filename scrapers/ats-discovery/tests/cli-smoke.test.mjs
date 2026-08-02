@@ -301,3 +301,87 @@ test('CLI enforces mode-specific live catalog target ceilings', async () => {
     assert.match(importing.stderr, /exceeds import ceiling 3/);
   });
 });
+
+test('CLI Lever description repair is dry-run by default and needs no scan files', async () => {
+  await withTempDir(async (directory) => {
+    const configPath = path.join(directory, 'scanner.json');
+    const preloadPath = path.join(directory, 'fake-repair-fetch.mjs');
+    const postingUrl = 'https://jobs.lever.co/360learning/7c97a721-9d46-4568-a803-a11a7f669a5b';
+
+    await writeFile(configPath, JSON.stringify({
+      schemaVersion: 1,
+      careerOps: { upstreamRef: 'test-ref' },
+      paths: {
+        portals: path.join(directory, 'missing-portals.yml'),
+        companyOverrides: path.join(directory, 'missing-overrides.yml'),
+        discoveryPolicy: path.join(directory, 'missing-policy.yml'),
+        catalogs: path.join(directory, 'catalogs'),
+        data: path.join(directory, 'data'),
+      },
+      scan: { description: { timeoutMs: 1000 } },
+      jobsApi: {
+        baseUrl: 'https://jobs.example/api',
+        timeoutMs: 1000,
+        retryCount: 0,
+      },
+      imports: {},
+    }));
+
+    await writeFile(preloadPath, `
+      globalThis.fetch = async (url, options = {}) => {
+        const value = String(url);
+        if (value.startsWith('https://api.lever.co/')) {
+          return new Response(JSON.stringify({
+            text: 'Implementation Manager',
+            descriptionPlain: 'Full introduction.',
+            lists: [{
+              text: 'Responsibilities',
+              content: '<ul><li>Lead implementation</li></ul>',
+            }],
+            additionalPlain: 'Closing.',
+          }), { status: 200 });
+        }
+        if (value.includes('/jobs/exists?')) {
+          return new Response(JSON.stringify({
+            exists: true,
+            id: '11111111-1111-1111-1111-111111111111',
+            provider: 'lever',
+            providerTenant: '360learning',
+            externalId: '7c97a721-9d46-4568-a803-a11a7f669a5b',
+            identitySource: 'url',
+          }), { status: 200 });
+        }
+        if (
+          value.endsWith('/jobs/11111111-1111-1111-1111-111111111111')
+          && options.method === 'GET'
+        ) {
+          return new Response(JSON.stringify({ Description: '<p>Short.</p>' }), {
+            status: 200,
+          });
+        }
+        throw new Error('Unexpected fetch: ' + options.method + ' ' + value);
+      };
+    `);
+
+    const existingNodeOptions = process.env.NODE_OPTIONS?.trim() ?? '';
+    const importOption = `--import=${pathToFileURL(preloadPath).href}`;
+    const result = await runNode(
+      [cliPath, 'repair', 'lever-description', postingUrl],
+      {
+        env: {
+          SCANNER_CONFIG_PATH: configPath,
+          EHESTIFTER_JOBS_FUNCTION_KEY: 'secret',
+          NODE_OPTIONS: [existingNodeOptions, importOption]
+            .filter(Boolean)
+            .join(' '),
+        },
+      },
+    );
+
+    assert.equal(result.code, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.dryRun, true);
+    assert.equal(output.changed, true);
+    assert.equal(output.applied, false);
+  });
+});

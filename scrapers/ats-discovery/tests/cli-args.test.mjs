@@ -161,3 +161,45 @@ test('no-progress may be supplied once', () => {
     /only once/,
   );
 });
+
+test('parses Lever description repair as dry-run by default', () => {
+  assert.deepEqual(
+    parseArgs([
+      'repair',
+      'lever-description',
+      'https://jobs.lever.co/acme/posting-id',
+    ]),
+    {
+      command: 'repair-lever-description',
+      postingUrl: 'https://jobs.lever.co/acme/posting-id',
+      apply: false,
+    },
+  );
+});
+
+test('parses explicit Lever description repair apply intent', () => {
+  assert.deepEqual(
+    parseArgs([
+      'repair',
+      'lever-description',
+      'https://jobs.eu.lever.co/acme/posting-id',
+      '--apply',
+    ]),
+    {
+      command: 'repair-lever-description',
+      postingUrl: 'https://jobs.eu.lever.co/acme/posting-id',
+      apply: true,
+    },
+  );
+  assert.throws(
+    () => parseArgs(['repair', 'lever-description']),
+    /Expected "repair lever-description/,
+  );
+  assert.throws(
+    () => parseArgs([
+      'repair', 'lever-description',
+      'https://jobs.lever.co/acme/id', '--force',
+    ]),
+    /Unknown argument/,
+  );
+});
