@@ -44,7 +44,6 @@ const DEFAULTS = Object.freeze({
   monitoring: Object.freeze({
     suspiciousEmptyBaselineMinimumJobs: 10,
     suspiciousEmptyReprobeMinutes: 60,
-    suspiciousVolumeDropRatio: 0.9,
     recentSuccessfulCountWindow: 8,
     degradedMinimumAttempts: 2,
     degradedErrorRatio: 0.5,
@@ -331,12 +330,6 @@ function parseMonitoring(raw, base, name) {
       base.suspiciousEmptyReprobeMinutes,
       `${name}.suspicious_empty_reprobe_minutes`,
       { min: 1, max: 60 * 24 },
-    ),
-    suspiciousVolumeDropRatio: finiteNumber(
-      value.suspicious_volume_drop_ratio,
-      base.suspiciousVolumeDropRatio,
-      `${name}.suspicious_volume_drop_ratio`,
-      { min: 0.5, max: 1 },
     ),
     recentSuccessfulCountWindow: integer(
       value.recent_successful_count_window,

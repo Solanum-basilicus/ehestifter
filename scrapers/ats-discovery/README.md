@@ -327,6 +327,11 @@ Review active configuration before live traffic, especially:
 - selected discovery users and matching defaults;
 - scheduler timezone, slots, retry policy, retention, and Compose service.
 
+Tenant listing-volume history is used only to guard an explicit zero result from
+a historically non-empty tenant. Any nonzero listing result is accepted as the
+current provider observation, even when it is much smaller than earlier runs.
+Provider canaries may still enforce their own explicit minimum-job thresholds.
+
 Secrets are mounted/read by the existing scanner configuration path. Do not
 print function keys, tokens, cookies, CSRF values, CV data, or full user
 profiles into run artifacts.

@@ -429,22 +429,15 @@ function transitionTenant(previous, target, result, providerPolicy, finishedAt) 
     const baselineEstablished =
       baseline >= monitoring.suspiciousEmptyBaselineMinimumJobs;
     const zeroListing = result.jobsReturned === 0;
-    const volumeDrop = result.jobsReturned > 0
-      && baselineEstablished
-      && result.jobsReturned <= baseline * (1 - monitoring.suspiciousVolumeDropRatio);
-    const suspiciousListingOutcome = baselineEstablished
-      ? zeroListing
-        ? 'listing_empty_anomaly'
-        : volumeDrop
-          ? 'listing_volume_anomaly'
-          : null
+    const suspiciousEmptyOutcome = baselineEstablished && zeroListing
+      ? 'listing_empty_anomaly'
       : null;
-    const confirmedListingDrop = suspiciousListingOutcome != null
+    const confirmedEmptyResult = suspiciousEmptyOutcome != null
       && base.consecutiveSuspiciousEmptyResults >= 1;
-    if (suspiciousListingOutcome && !confirmedListingDrop) {
+    if (suspiciousEmptyOutcome && !confirmedEmptyResult) {
       next.health = 'temporarily_failed';
       next.consecutiveSuspiciousEmptyResults = 1;
-      next.lastListingOutcome = suspiciousListingOutcome;
+      next.lastListingOutcome = suspiciousEmptyOutcome;
       next.nextEligibleScanAtUtc = addMinutes(
         finishedAt,
         monitoring.suspiciousEmptyReprobeMinutes,
@@ -465,17 +458,15 @@ function transitionTenant(previous, target, result, providerPolicy, finishedAt) 
     }
     if (result.jobsReturned === 0) {
       next.consecutiveEmptySuccesses = base.consecutiveEmptySuccesses + 1;
-      if (confirmedListingDrop) next.recentSuccessfulCounts = [0];
+      if (confirmedEmptyResult) next.recentSuccessfulCounts = [0];
     } else {
       next.consecutiveEmptySuccesses = 0;
       next.lastNonEmptyAtUtc = finishedAt.toISOString();
       next.lastNonEmptyCount = result.jobsReturned;
-      next.recentSuccessfulCounts = confirmedListingDrop
-        ? [result.jobsReturned]
-        : [
-          ...base.recentSuccessfulCounts,
-          result.jobsReturned,
-        ].slice(-providerPolicy.monitoring.recentSuccessfulCountWindow);
+      next.recentSuccessfulCounts = [
+        ...base.recentSuccessfulCounts,
+        result.jobsReturned,
+      ].slice(-providerPolicy.monitoring.recentSuccessfulCountWindow);
     }
     const recent = isRecent(
       next.lastRelevantCandidateAtUtc,

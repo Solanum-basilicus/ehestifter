@@ -39,9 +39,6 @@ defaults:
     # before it is accepted as genuinely empty.
     suspicious_empty_baseline_minimum_jobs: 10
     suspicious_empty_reprobe_minutes: 60
-    # A nonzero result that falls by at least this ratio from the rolling
-    # median is also re-probed once before accepting the new volume.
-    suspicious_volume_drop_ratio: 0.9
     recent_successful_count_window: 8
     # Variant summaries become degraded only after a meaningful sample.
     degraded_minimum_attempts: 2

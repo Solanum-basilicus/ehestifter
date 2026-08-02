@@ -1554,7 +1554,7 @@ Priority targets and due provider canaries are processed before normal catalog s
 
 Provider-supported date constraints are used where useful. Otherwise posting age is filtered locally. Request pacing, concurrency, pagination, detail limits, rate observations, and live catalog target caps remain explicit configuration; autonomous rate tuning is not implemented.
 
-Provider canaries are filter-independent health probes. They never call Jobs and never become import candidates. High-risk protocols distinguish explicit empty, suspicious empty/volume collapse, schema/authentication failure, transport failure, and healthy nonempty outcomes.
+Provider canaries are filter-independent health probes. They never call Jobs and never become import candidates. High-risk protocols distinguish explicit empty, suspicious empty, configured canary minimum misses, schema/authentication failure, transport failure, and healthy nonempty outcomes. Ordinary nonzero tenant results are accepted even when they are much smaller than historical counts.
 
 ### 14.4 Multi-user discovery contract
 

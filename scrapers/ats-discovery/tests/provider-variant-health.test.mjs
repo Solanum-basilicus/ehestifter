@@ -241,13 +241,13 @@ test('historically nonempty explicit zero gets a short re-probe before empty acc
   assert.equal(thirdTenant.lastListingOutcome, 'listing_success_explicit_empty');
 });
 
-test('historical volume collapse gets one re-probe and then establishes a new baseline', () => {
+test('nonzero historical volume drops are accepted without a diagnostic re-probe', () => {
   const target = sfTarget(0, 'csb', 'volume-drop');
   const parsedPolicy = policy();
   const seeded = buildNextTenantState({
     previousState: createEmptyTenantState(NOW),
     targets: [target],
-    providerResults: [providerResult(target, { jobsReturned: 57, explicitTotal: 57 })],
+    providerResults: [providerResult(target, { jobsReturned: 15, explicitTotal: 15 })],
     rateObservations: { providers: [] },
     policy: parsedPolicy,
     finishedAt: NOW,
@@ -256,7 +256,7 @@ test('historical volume collapse gets one re-probe and then establishes a new ba
   const first = buildNextTenantState({
     previousState: seeded.state,
     targets: [target],
-    providerResults: [providerResult(target, { jobsReturned: 5, explicitTotal: 5 })],
+    providerResults: [providerResult(target, { jobsReturned: 1, explicitTotal: 1 })],
     rateObservations: { providers: [] },
     policy: parsedPolicy,
     finishedAt: new Date('2026-07-23T12:00:00.000Z'),
@@ -264,37 +264,58 @@ test('historical volume collapse gets one re-probe and then establishes a new ba
   const firstTenant = tenantStateMaps(first.state).tenants.get(
     'successfactors:csb::volume-drop',
   );
-  assert.equal(firstTenant.health, 'temporarily_failed');
-  assert.equal(firstTenant.lastListingOutcome, 'listing_volume_anomaly');
-  assert.deepEqual(firstTenant.recentSuccessfulCounts, [57]);
+  assert.equal(firstTenant.health, 'healthy');
+  assert.equal(firstTenant.lastListingOutcome, 'listing_success_nonempty');
+  assert.equal(firstTenant.consecutiveSuspiciousEmptyResults, 0);
+  assert.equal(firstTenant.nextEligibleScanAtUtc, '2026-07-24T12:00:00.000Z');
+  assert.deepEqual(firstTenant.recentSuccessfulCounts, [15, 1]);
 
-  const second = buildNextTenantState({
-    previousState: first.state,
-    targets: [target],
-    providerResults: [providerResult(target, { jobsReturned: 5, explicitTotal: 5 })],
-    rateObservations: { providers: [] },
+  const summary = buildRunSummary({
+    runId: 'nonzero-volume-drop',
+    mode: 'offline',
+    startedAt: new Date('2026-07-23T11:59:00.000Z'),
+    finishedAt: new Date('2026-07-23T12:00:00.000Z'),
+    targetPlan: {
+      targets: [target],
+      counts: {
+        priority: 1,
+        canary: 0,
+        normal: 0,
+        disabled: 0,
+        disabledRemoved: 0,
+        planningRejected: 0,
+        catalogEligible: 0,
+        skippedNotDue: 0,
+        skippedProviderCooldown: 0,
+        skippedNormalBudget: 0,
+        skippedTotal: 0,
+      },
+      limits: {},
+      catalogs: { ashby: null },
+      sweep: {
+        targetFullSweepDays: 3,
+        estimatedHealthySweepDays: 0,
+        recommendedHealthyTargetsPerRun: 0,
+        recommendedNormalTargetsPerRun: 0,
+        feasibleAtConfiguredBudget: true,
+      },
+    },
+    scanResult: {
+      providerResults: [providerResult(target, { jobsReturned: 1, explicitTotal: 1 })],
+      breakerEvents: [],
+      candidates: [],
+      rejected: [],
+      providerIds: ['successfactors'],
+    },
+    evaluated: [],
+    tenantStateChanges: first.changes,
     policy: parsedPolicy,
-    finishedAt: new Date('2026-07-23T13:00:00.000Z'),
   });
-  const secondTenant = tenantStateMaps(second.state).tenants.get(
-    'successfactors:csb::volume-drop',
-  );
-  assert.equal(secondTenant.health, 'healthy');
-  assert.deepEqual(secondTenant.recentSuccessfulCounts, [5]);
-
-  const third = buildNextTenantState({
-    previousState: second.state,
-    targets: [target],
-    providerResults: [providerResult(target, { jobsReturned: 5, explicitTotal: 5 })],
-    rateObservations: { providers: [] },
-    policy: parsedPolicy,
-    finishedAt: new Date('2026-07-24T13:00:00.000Z'),
-  });
-  const thirdTenant = tenantStateMaps(third.state).tenants.get(
-    'successfactors:csb::volume-drop',
-  );
-  assert.equal(thirdTenant.health, 'healthy');
-  assert.notEqual(thirdTenant.lastListingOutcome, 'listing_volume_anomaly');
+  const variant = summary.providerVariants['successfactors:csb'];
+  assert.equal(variant.status, 'healthy');
+  assert.equal(variant.listingVolumeAnomalies, 0);
+  assert.equal(summary.tenantsScheduledForListingReprobe, 0);
+  assert.deepEqual(summary.providerHealthWarnings, []);
 });
 
 test('provider state cooldown is persisted per SuccessFactors variant', () => {

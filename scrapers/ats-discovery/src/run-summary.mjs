@@ -114,7 +114,7 @@ function providerVariantHealth({
       itemWarnings.push(`${listingEmptyAnomalies} historical nonempty tenant(s) returned explicit zero and were scheduled for re-probe`);
     }
     if (listingVolumeAnomalies > 0) {
-      itemWarnings.push(`${listingVolumeAnomalies} tenant(s) had suspicious listing volume drops or canary threshold misses and were scheduled for re-probe`);
+      itemWarnings.push(`${listingVolumeAnomalies} provider canary target(s) missed the configured listing minimum and were made eligible for re-probe`);
     }
     if (degradedCanaries.length > 0) {
       itemWarnings.push(`${degradedCanaries.length}/${canaries.length} provider canary target(s) degraded`);
