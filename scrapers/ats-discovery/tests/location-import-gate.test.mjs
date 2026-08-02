@@ -72,3 +72,30 @@ test('existing records are returned before the location gate', async () => {
   });
   assert.equal(result.import.status, 'existing_preflight');
 });
+
+test('unresolved Hybrid location remains importable while inference matures', async () => {
+  const calls = [];
+  const [result] = await importCandidates([
+    candidate({
+      remoteType: 'Hybrid',
+      locations: [],
+      locationEligibility: {
+        status: 'unclear',
+        reason: 'insufficient_explicit_location_evidence',
+      },
+    }),
+  ], {
+    async createJob(payload) {
+      calls.push(payload);
+      return {
+        id: 'job-hybrid',
+        disposition: 'submitted',
+        reconciled: false,
+        responseStatus: 201,
+      };
+    },
+  }, { maxCreates: 1, requireDescription: true });
+
+  assert.equal(result.import.status, 'submitted');
+  assert.equal(calls.length, 1);
+});

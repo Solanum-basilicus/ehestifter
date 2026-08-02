@@ -389,6 +389,27 @@ observation. Only decisive incompatible evidence blocks import; unresolved,
 unsupported, and inconclusive conflicts are retained in artifacts and propagate
 to Jobs.
 
+The scanner also owns a small administrative-region dictionary separate from
+Web Core geography. It currently covers US states/DC and aliases, German
+federal states, and explicit German district forms such as `Landkreis ...` or
+`Kreis ...`. This lets deterministic parsing retain values such as
+`Austin, TX`, `local to Maryland`, and German district names in the Jobs
+`region` field without changing the Web UI geography source.
+
+High-signal description declarations can refine provider metadata without
+replacing it. Examples include `Location: Austin, TX`, explicit candidate
+residency/citizenship restrictions, and employer-country evidence used only to
+disambiguate a provider city such as `Berlin`. US-specific employment markers
+such as `401(k)` are weak country hints and are used only to disambiguate
+provider localities (for example a city or the US state/country name
+`Georgia`); they do not create a location by themselves.
+
+Explicit work-hours/timezone requirements are recorded in each normalized
+candidate as `workTimeConstraints`. The current import and discovery-profile
+filters do not act on this evidence yet. It is retained for a later compatibility
+filter that can compare required work-time regions with a user's feasible
+remote-work region.
+
 The scanner packages a generated copy of Web Core's geography data. Runtime
 containers do not mount or read the Web Core directory. Refresh the committed
 snapshot from a full checkout through the host-side Python entry point; Node.js

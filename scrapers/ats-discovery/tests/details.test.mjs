@@ -30,6 +30,7 @@ test('Greenhouse details populate description without changing scanner provenanc
     foundOn: 'ats-discovery',
     description: '',
     descriptionStatus: 'missing',
+    rawLocation: 'Remote',
     locations: [],
     remoteType: 'Unknown',
     canonicalIdentity: {
@@ -61,6 +62,9 @@ test('Greenhouse details populate description without changing scanner provenanc
               'https://job-boards.greenhouse.io/example/jobs/123',
             content:
               '<p>Build <strong>useful</strong> systems &amp; products.</p>',
+            location: {
+              name: 'Remote/Hybrid if local to Maryland',
+            },
           }),
           {
             status: 200,
@@ -88,6 +92,8 @@ test('Greenhouse details populate description without changing scanner provenanc
     'greenhouse-detail-api',
   );
   assert.equal(result.foundOn, 'ats-discovery');
+  assert.equal(result.rawLocation, 'Remote');
+  assert.equal(result.detailRawLocation, 'Remote/Hybrid if local to Maryland');
   assert.equal(result.detail.status, 'ok');
 });
 

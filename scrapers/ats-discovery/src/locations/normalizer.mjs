@@ -1,4 +1,9 @@
 import { getDefaultGeoDictionary, lookupKey } from './geo-dictionary.mjs';
+import {
+  findAdministrativeRegionMentions,
+  resolveAdministrativeRegion,
+} from './administrative-regions.mjs';
+import { extractWorkTimeConstraints } from './work-time-constraints.mjs';
 
 const NON_CITY_VALUES = new Set([
   'remote', 'fully remote', 'remote first', 'distributed', 'hybrid',
@@ -155,6 +160,62 @@ function locationFromCountry(country, cityName = null, region = null) {
   };
 }
 
+function locationFromRegion(region, dictionary, cityName = null) {
+  const country = dictionary.countryByCode(region.countryCode);
+  return country
+    ? locationFromCountry(country, cityName, region.regionName)
+    : null;
+}
+
+function parseCityRegionPair(parts, dictionary, source, raw) {
+  if (parts.length !== 2) return null;
+  const [cityPart, regionPart] = parts;
+  const region = resolveAdministrativeRegion(regionPart, { allowAmbiguous: true });
+  if (!region) return null;
+  const city = dictionary.resolveCity(cityPart, region.countryCode);
+  const location = locationFromRegion(region, dictionary, city?.cityName ?? null);
+  if (!location) return null;
+  const unresolved = city
+    ? []
+    : [{ source, raw: cityPart, reason: 'city_unresolved_for_region_country' }];
+  return {
+    observations: [{
+      source,
+      raw,
+      kind: city ? 'city_region_country' : 'region_country',
+      status: 'resolved',
+      location,
+    }],
+    locations: [location],
+    unresolved,
+  };
+}
+
+function parseRegionEvidence(value, dictionary, source, raw) {
+  const exact = resolveAdministrativeRegion(value);
+  const mentions = exact
+    ? [exact]
+    : findAdministrativeRegionMentions(value);
+  const unique = new Map(
+    mentions.map((item) => [`${item.countryCode}\u0000${item.regionName}`, item]),
+  );
+  if (unique.size !== 1) return null;
+  const [region] = unique.values();
+  const location = locationFromRegion(region, dictionary);
+  if (!location) return null;
+  return {
+    observations: [{
+      source,
+      raw,
+      kind: 'region_country',
+      status: 'resolved',
+      location,
+    }],
+    locations: [location],
+    unresolved: [],
+  };
+}
+
 function parseLocalities(values, country, dictionary, source, raw) {
   const observations = [];
   const locations = [];
@@ -262,6 +323,12 @@ function parseSegment(segment, dictionary, source) {
     };
   }
 
+  const cityRegion = parseCityRegionPair(commaParts, dictionary, source, raw);
+  if (cityRegion) return { ...cityRegion, arrangement };
+
+  const region = parseRegionEvidence(cleaned, dictionary, source, raw);
+  if (region) return { ...region, arrangement };
+
   const wordsCountry = dictionary.resolveCountry(cleaned.replace(/\b(?:remote|hybrid|on[- ]?site)\b/giu, ' '));
   if (wordsCountry) {
     const location = locationFromCountry(wordsCountry);
@@ -276,14 +343,20 @@ function parseSegment(segment, dictionary, source) {
   return { observations, locations, unresolved, arrangement };
 }
 
-export function normalizeRawLocation(rawLocation, { dictionary = getDefaultGeoDictionary() } = {}) {
+export function normalizeRawLocation(
+  rawLocation,
+  {
+    dictionary = getDefaultGeoDictionary(),
+    source = 'raw_location',
+  } = {},
+) {
   const raw = cleanText(rawLocation);
   if (raw === '') {
     return { status: 'missing', locations: [], observations: [], unresolved: [] };
   }
 
   const segments = splitLocationSegments(raw);
-  let parsed = segments.map((segment) => parseSegment(segment, dictionary, 'raw_location'));
+  let parsed = segments.map((segment) => parseSegment(segment, dictionary, source));
 
   // Explicit countries in the same provider field may qualify sibling city-only
   // segments. With one country this covers "Berlin · Munich, Germany". With
@@ -315,7 +388,7 @@ export function normalizeRawLocation(rawLocation, { dictionary = getDefaultGeoDi
       const location = locationFromCountry(country, city.cityName, null);
       return {
         observations: [{
-          source: 'raw_location',
+          source,
           raw: rawSegment,
           kind: resolvedCountryCodes.size === 1
             ? 'city_with_shared_country'
@@ -418,6 +491,12 @@ function mandatoryPresence(window) {
     || /\b(?:office|hq|headquarters|on[- ]?site|onsite|presence|attendance)\b.{0,120}\b(?:must|required|mandatory|expected|at least|once[- ]a[- ]week|weekly|\d+\s*(?:days?|times?)\s+(?:a|per)\s+week)\b/iu.test(window);
 }
 
+function explicitLocationDeclaration(window) {
+  return /^(?:[-*•]\s*)?(?:work\s+)?location\s*[:\-–—]/iu.test(window)
+    || /\b(?:role|position|job)\s+is\s+based\s+(?:in|at)\b/iu.test(window)
+    || /^(?:based|located)\s+(?:in|at)\b/iu.test(window);
+}
+
 function resolvedScopeLocations(terms, dictionary, source, context) {
   const locations = [];
   const observations = [];
@@ -514,6 +593,121 @@ function negatesRequirement(text) {
     || /\bwithout\b.{0,50}\brequir(?:e|ed|ement)\b/iu.test(text);
 }
 
+function employerCountryHints(window, dictionary) {
+  const employerContext = /\b(?:we\s+(?:are|'re)|our\s+(?:company|business|headquarters|hq)|company\s+(?:is|was)|headquartered|headquarters|hq)\b/iu.test(window)
+    && /\b(?:company|companies|business|employer|organisation|organization|fintech|headquartered|headquarters|hq|based)\b/iu.test(window);
+  const hints = employerContext
+    ? dictionary.findCountryMentions(window)
+    : [];
+
+  // These are deliberately high-signal US employment markers. They are not
+  // locations on their own; they may only disambiguate a provider locality.
+  if (/\b401\s*\(?k\)?\b/iu.test(window)
+    || /\b(?:public\s+trust|ofccp|federal\s+contractor|w-?2\s+employee)\b/iu.test(window)) {
+    const us = dictionary.countryByCode('US');
+    if (us) hints.push({ ...us, matchedTerm: 'us_employment_signal' });
+  }
+
+  return hints.map((country) => ({
+    countryName: country.countryName,
+    countryCode: country.countryCode,
+    matchedTerm: country.matchedTerm,
+    text: window,
+  }));
+}
+
+function citizenshipScope(window, dictionary, allowedTerm, blockedTerm) {
+  if (negatesRequirement(window)) return null;
+  if (!/\b(?:citizens?|citizenship)\b/iu.test(window)) return null;
+  if (!/\b(?:only|must|required|requirement|eligible|opportunity)\b/iu.test(window)) return null;
+  const mentionedCountries = dictionary.findCountryMentions(window);
+  const uniqueCountries = new Map(
+    mentionedCountries.map((item) => [item.countryCode, item]),
+  );
+  if (uniqueCountries.size !== 1) return null;
+  const [mention] = uniqueCountries.values();
+  const country = {
+    countryName: mention.countryName,
+    countryCode: mention.countryCode,
+  };
+  const term = blockedTerm ?? allowedTerm ?? mention.matchedTerm;
+  return {
+    country,
+    term,
+    disposition: blockedTerm && !allowedTerm
+      ? 'incompatible'
+      : allowedTerm
+        ? 'compatible'
+        : 'location_constraint',
+  };
+}
+
+function providerLocalityRefinement(candidate, countryHints, dictionary) {
+  const hintCodes = [...new Set(countryHints.map((item) => item.countryCode))];
+  if (hintCodes.length !== 1) {
+    return {
+      locations: [], observations: [], unresolved: [], supersededCountryCodes: [],
+    };
+  }
+  const [countryCode] = hintCodes;
+  const country = dictionary.countryByCode(countryCode);
+  if (!country) {
+    return {
+      locations: [], observations: [], unresolved: [], supersededCountryCodes: [],
+    };
+  }
+
+  const rawValues = [candidate.rawLocation, candidate.detailRawLocation]
+    .map(cleanText)
+    .filter(Boolean);
+  const locations = [];
+  const observations = [];
+  const unresolved = [];
+  const supersededCountryCodes = new Set();
+  for (const rawValue of rawValues) {
+    for (const segment of splitLocationSegments(rawValue)) {
+      const locality = stripLocalityQualifier(segment)
+        .replace(/^(?:location\s*[:\-–—]\s*|if\s+local\s+to\s+|local\s+to\s+)/iu, '')
+        .trim();
+      if (locality === '' || /[:,]/u.test(locality) || isNonCity(locality)) continue;
+      const namedCountry = dictionary.resolveCountry(locality);
+      const hintedRegion = resolveAdministrativeRegion(locality, { countryCode });
+      const regionDisambiguatesCountryName = namedCountry
+        && namedCountry.countryCode !== countryCode
+        && hintedRegion;
+      if (regionDisambiguatesCountryName) {
+        supersededCountryCodes.add(namedCountry.countryCode);
+      }
+      const city = regionDisambiguatesCountryName
+        ? null
+        : dictionary.resolveCity(locality, countryCode);
+      const location = city
+        ? locationFromCountry(country, city.cityName, null)
+        : hintedRegion
+          ? locationFromRegion(hintedRegion, dictionary)
+          : null;
+      if (!location) continue;
+      locations.push(location);
+      observations.push({
+        source: 'description',
+        raw: locality,
+        kind: city
+          ? 'provider_city_with_description_country_hint'
+          : 'provider_region_with_description_country_hint',
+        status: 'resolved',
+        location,
+        countryHints: countryHints.filter((item) => item.countryCode === countryCode),
+      });
+    }
+  }
+  return {
+    locations: dedupeLocations(locations),
+    observations,
+    unresolved,
+    supersededCountryCodes: [...supersededCountryCodes],
+  };
+}
+
 function descriptionEvidence(candidate, primaryLocations, dictionary, scopeFilter) {
   const allow = Array.isArray(scopeFilter?.allow) ? scopeFilter.allow : [];
   const block = Array.isArray(scopeFilter?.block) ? scopeFilter.block : [];
@@ -526,9 +720,11 @@ function descriptionEvidence(candidate, primaryLocations, dictionary, scopeFilte
   const unresolved = [];
   const eligibilityEvidence = [];
   const descriptionArrangements = [];
+  const countryHints = [];
   const primaryCountries = [...new Set(primaryLocations.map((item) => item.countryCode))];
 
   for (const window of windows) {
+    countryHints.push(...employerCountryHints(window, dictionary));
     const descriptionArrangement = workArrangementFromDescriptionPolicy(window);
     if (descriptionArrangement) {
       descriptionArrangements.push(descriptionArrangement);
@@ -549,7 +745,7 @@ function descriptionEvidence(candidate, primaryLocations, dictionary, scopeFilte
     const allowedTerm = matchingScopeTerm(window, allow, dictionary);
     const blockedTerm = matchingScopeTerm(window, block, dictionary);
     const effectiveAllowedTerm = effectiveAllowedScopeTerm(window, allowedTerm);
-    const explicitScope = /\b(?:open\s+to|eligible|hiring|candidates?|applicants?|remote|reside|residents?|work\s+authori[sz]ation|authori[sz](?:ed|ation)\s+to\s+work|right\s+to\s+work|work\s+permit|restricted)\b/iu.test(window);
+    const explicitScope = /\b(?:open\s+to|eligible|hiring|candidates?|applicants?|opportunity|remote|reside|residents?|citizens?|citizenship|work\s+authori[sz]ation|authori[sz](?:ed|ation)\s+to\s+work|right\s+to\s+work|work\s+permit|restricted)\b/iu.test(window);
     const roleConstraintContext = /\b(?:role|position|job|you|employee|must|required|mandatory|expected)\b/iu.test(window)
       || (/^based\s+in\b/iu.test(window) && window.length <= 120);
     const basedConstraintContext = /\bbased\b.{0,35}\b(?:candidates?|applicants?|employees?)\b/iu.test(window)
@@ -588,10 +784,37 @@ function descriptionEvidence(candidate, primaryLocations, dictionary, scopeFilte
         : true;
     const requirementNegated = negatesRequirement(window);
     const excludesGermany = /\b(?:excluding|exclude|except|not\s+available\s+in|not\s+hiring\s+in|outside|not\s+in)\s+(?:germany|deutschland)\b/iu.test(window);
+    const citizenship = citizenshipScope(
+      window,
+      dictionary,
+      effectiveAllowedTerm,
+      blockedTerm,
+    );
 
     if (excludesGermany) {
       eligibilityEvidence.push({
         source: 'description', kind: 'explicit_exclusion', disposition: 'incompatible', text: window,
+      });
+    } else if (citizenship) {
+      eligibilityEvidence.push({
+        source: 'description',
+        kind: 'citizenship_scope',
+        disposition: citizenship.disposition,
+        allowTerm: effectiveAllowedTerm,
+        blockTerm: blockedTerm,
+        marker: 'citizenship',
+        locations: [locationFromCountry(citizenship.country)],
+        text: window,
+      });
+      const location = locationFromCountry(citizenship.country);
+      locations.push(location);
+      observations.push({
+        source: 'description',
+        raw: citizenship.term,
+        kind: 'eligibility_scope_location',
+        status: 'resolved',
+        location,
+        context: window,
       });
     } else if (
       !requirementNegated
@@ -641,6 +864,20 @@ function descriptionEvidence(candidate, primaryLocations, dictionary, scopeFilte
     for (const location of parsed.locations) locations.push(location);
     for (const item of parsed.unresolved) unresolved.push({ ...item, source: 'description', context: window });
 
+    if (
+      !requirementNegated
+      && explicitLocationDeclaration(window)
+      && parsed.locations.length > 0
+    ) {
+      eligibilityEvidence.push({
+        source: 'description',
+        kind: 'declared_location',
+        disposition: 'location_constraint',
+        locations: parsed.locations,
+        text: window,
+      });
+    }
+
     if (!requirementNegated && mandatoryPresence(window)) {
       if (parsed.locations.length > 0) {
         eligibilityEvidence.push({
@@ -666,6 +903,7 @@ function descriptionEvidence(candidate, primaryLocations, dictionary, scopeFilte
       ? uniqueDescriptionArrangements[0]
       : null,
     arrangementConflict: uniqueDescriptionArrangements.length > 1,
+    countryHints,
   };
 }
 
@@ -751,6 +989,30 @@ function assessEligibility(candidate, locations, consistency, evidence, scopeFil
     }
   }
 
+  const explicitLocationConstraints = evidence.filter((item) => (
+    item.kind === 'declared_location'
+    || (
+      item.kind === 'citizenship_scope'
+      && item.disposition === 'location_constraint'
+    )
+  ));
+  for (const item of explicitLocationConstraints) {
+    const codes = item.locations?.map((location) => location.countryCode) ?? [];
+    if (
+      codes.length > 0
+      && codes.every((code) => blockedCountries.has(code))
+      && !codes.some((code) => compatibleCountries.has(code) || code === 'DE')
+    ) {
+      return {
+        schemaVersion: 1,
+        status: 'ineligible',
+        reason: 'declared_incompatible_location',
+        consistency,
+        evidence,
+      };
+    }
+  }
+
   const arrangement = workArrangementFromText(candidate.remoteType)
     ?? workArrangementFromText(candidate.rawLocation);
   const concreteCodes = locations
@@ -825,26 +1087,54 @@ export function normalizeCandidateLocations(
     : locationScopeFilter;
   return candidates.map((candidate) => {
     const hasStructured = Array.isArray(candidate.locations) && candidate.locations.length > 0;
-    const rawPrimary = normalizeRawLocation(candidate.rawLocation, { dictionary });
+    const rawPrimary = normalizeRawLocation(candidate.rawLocation, {
+      dictionary,
+      source: 'raw_location',
+    });
+    const detailRawPrimary = normalizeRawLocation(candidate.detailRawLocation, {
+      dictionary,
+      source: 'provider_detail_location',
+    });
+    const rawReconciliation = detailRawPrimary.status === 'missing'
+      ? { locations: rawPrimary.locations, consistency: 'insufficient' }
+      : reconcileLocations(rawPrimary.locations, detailRawPrimary.locations);
     const structuredPrimary = hasStructured
       ? normalizeStructuredLocations(candidate, dictionary)
       : null;
     const providerReconciliation = structuredPrimary
-      ? reconcileLocations(structuredPrimary.locations, rawPrimary.locations)
-      : { locations: rawPrimary.locations, consistency: 'insufficient' };
+      ? reconcileLocations(structuredPrimary.locations, rawReconciliation.locations)
+      : rawReconciliation;
     const primary = structuredPrimary ? {
       status: structuredPrimary.status,
       locations: providerReconciliation.locations,
       observations: [
         ...structuredPrimary.observations,
         ...rawPrimary.observations,
+        ...detailRawPrimary.observations,
       ],
       unresolved: [
         ...structuredPrimary.unresolved,
         ...rawPrimary.unresolved,
+        ...detailRawPrimary.unresolved,
       ],
-      arrangement: structuredPrimary.arrangement ?? rawPrimary.arrangement,
-    } : rawPrimary;
+      arrangement: structuredPrimary.arrangement
+        ?? rawPrimary.arrangement
+        ?? detailRawPrimary.arrangement,
+    } : {
+      status: rawPrimary.status !== 'missing'
+        ? rawPrimary.status
+        : detailRawPrimary.status,
+      locations: providerReconciliation.locations,
+      observations: [
+        ...rawPrimary.observations,
+        ...detailRawPrimary.observations,
+      ],
+      unresolved: [
+        ...rawPrimary.unresolved,
+        ...detailRawPrimary.unresolved,
+      ],
+      arrangement: rawPrimary.arrangement ?? detailRawPrimary.arrangement,
+    };
     const providerScope = providerScopeEvidence(
       candidate,
       dictionary,
@@ -860,9 +1150,17 @@ export function normalizeCandidateLocations(
       dictionary,
       activeScopeFilter,
     );
+    const providerLocality = providerLocalityRefinement(
+      candidate,
+      description.countryHints,
+      dictionary,
+    );
+    const refinementPrimaryLocations = primaryLocations.filter((location) => (
+      !providerLocality.supersededCountryCodes.includes(location.countryCode)
+    ));
     const descriptionReconciliation = reconcileLocations(
-      primaryLocations,
-      description.locations,
+      refinementPrimaryLocations,
+      [...description.locations, ...providerLocality.locations],
     );
     const explicitArrangement = workArrangementFromText(candidate.remoteType);
     const titleArrangement = workArrangementFromTitle(candidate.title);
@@ -882,6 +1180,7 @@ export function normalizeCandidateLocations(
       ...descriptionReconciliation,
       consistency: combineConsistency(
         providerReconciliation.consistency,
+        rawReconciliation.consistency,
         descriptionReconciliation.consistency,
         arrangementConsistency,
       ),
@@ -913,6 +1212,7 @@ export function normalizeCandidateLocations(
       activeScopeFilter,
       dictionary,
     );
+    const workTimeConstraints = extractWorkTimeConstraints(candidate.description);
 
     return {
       ...candidate,
@@ -923,15 +1223,22 @@ export function normalizeCandidateLocations(
         status: primary.status,
         consistency: reconciled.consistency,
         rawLocation: cleanText(candidate.rawLocation) || null,
+        detailRawLocation: cleanText(candidate.detailRawLocation) || null,
         observations: [
           ...primary.observations,
           ...titleObservations,
           ...providerScope.observations,
           ...description.observations,
+          ...providerLocality.observations,
         ],
-        unresolved: [...primary.unresolved, ...description.unresolved],
+        unresolved: [
+          ...primary.unresolved,
+          ...description.unresolved,
+          ...providerLocality.unresolved,
+        ],
       },
       locationEligibility: eligibility,
+      workTimeConstraints,
     };
   });
 }

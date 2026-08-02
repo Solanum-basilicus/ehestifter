@@ -1601,6 +1601,19 @@ silently overwrite them. Only decisive incompatible restrictions or mandatory
 presence outside the compatible scope block creation. Unresolved parsing and
 inconclusive conflicts fail open and remain visible in location artifacts.
 
+ATS Discovery owns a separate, small administrative-region dictionary for
+deterministic vacancy parsing. It covers US states/DC and aliases, German
+federal states, and explicit German district forms. The dictionary is not a Web
+Core UI geography dependency. Description evidence may use explicit location,
+residency, citizenship, or strong employer-country context to refine provider
+metadata, but the original provider observations remain in run artifacts.
+
+Explicit timezone/work-hours requirements are normalized into scanner artifact
+evidence (`workTimeConstraints`) using coarse work-time regions. They are not
+part of the Jobs create payload and do not currently change import eligibility;
+a later discovery-profile/compatibility contract may compare them with a user's
+feasible remote-work region.
+
 The geography snapshot is a scanner build input, not a runtime cross-domain
 filesystem dependency. `tools/refresh_ats_geo_snapshot.py` is the host entry
 point and runs the Node generator inside the scanner Docker image from a full

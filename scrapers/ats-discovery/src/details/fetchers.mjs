@@ -219,6 +219,9 @@ async function fetchGreenhouseDetails(candidate, context) {
     applyUrl: typeof payload.absolute_url === 'string'
       ? payload.absolute_url.trim()
       : null,
+    rawLocation: typeof payload.location?.name === 'string'
+      ? payload.location.name.trim() || null
+      : null,
     locations: [],
     remoteType: null,
   };
@@ -614,6 +617,18 @@ export async function enrichCandidateDetails(
         const description = typeof details.description === 'string'
           ? details.description.trim()
           : '';
+        const fetchedRawLocation = typeof details.rawLocation === 'string'
+          ? details.rawLocation.trim()
+          : '';
+        const existingRawLocation = typeof candidate.rawLocation === 'string'
+          ? candidate.rawLocation.trim()
+          : '';
+        const detailRawLocation = fetchedRawLocation
+          && fetchedRawLocation.localeCompare(existingRawLocation, undefined, {
+            sensitivity: 'accent',
+          }) !== 0
+          ? fetchedRawLocation
+          : candidate.detailRawLocation || null;
         return {
           index,
           candidate: {
@@ -621,6 +636,7 @@ export async function enrichCandidateDetails(
             applyUrl: safeApplyUrl(details.applyUrl) || candidate.applyUrl || candidate.url,
             description,
             descriptionStatus: description ? details.descriptionStatus : 'missing',
+            detailRawLocation,
             locations: Array.isArray(details.locations) && details.locations.length > 0
               ? details.locations
               : candidate.locations,
