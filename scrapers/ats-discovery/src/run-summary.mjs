@@ -482,6 +482,10 @@ export function buildRunSummary({
       evaluated,
       (job) => job.detail?.status === 'unsupported_provider',
     ),
+    detailUnavailable: count(
+      evaluated,
+      (job) => job.detail?.status === 'unavailable',
+    ),
     detailErrors: count(evaluated, (job) => job.detail?.status === 'error'),
 
     candidateDescriptionsMissing: count(
@@ -493,6 +497,7 @@ export function buildRunSummary({
       evaluated,
       (job) => job.preflight?.status === 'ok'
         && job.preflight.exists === false
+        && job.detail?.status !== 'unavailable'
         && (
           typeof job.description !== 'string'
           || job.description.trim() === ''
@@ -511,6 +516,10 @@ export function buildRunSummary({
     importReconciled: count(
       evaluated,
       (job) => job.import?.status === 'reconciled_after_ambiguous_post',
+    ),
+    importDetailUnavailableSkipped: count(
+      evaluated,
+      (job) => job.import?.status === 'skipped_detail_unavailable',
     ),
     importSkipped: count(
       evaluated,

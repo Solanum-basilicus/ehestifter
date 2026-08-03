@@ -3,8 +3,11 @@ function detailReady(job) {
 }
 
 function unavailable(job) {
-  return job?.detail?.status === 'error'
-    && /job is unavailable/i.test(job.detail.error ?? '');
+  return job?.detail?.status === 'unavailable'
+    || (
+      job?.detail?.status === 'error'
+      && /job is unavailable/i.test(job.detail.error ?? '')
+    );
 }
 
 function detailFailure(job) {

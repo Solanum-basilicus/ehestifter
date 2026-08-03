@@ -390,3 +390,55 @@ test('Phase 6 summary reports Users API failure without pretending multi-user is
   assert.equal(summary.discoveryUsersWithSavedFilters, 0);
   assert.equal(summary.targetsSkippedNoEligibleUsers, 12);
 });
+
+test('run summary separates unavailable details and their safe import skips', () => {
+  const evaluated = [{
+    sourceMode: 'priority',
+    sourceProvider: 'workday',
+    description: '',
+    preflight: { status: 'ok', exists: false },
+    detail: { status: 'unavailable', responseStatus: 404 },
+    import: { status: 'skipped_detail_unavailable', responseStatus: 404 },
+  }];
+  const summary = buildRunSummary({
+    runId: 'workday-unavailable',
+    mode: 'import',
+    requestedMaxCreates: 1,
+    startedAt: new Date('2026-08-03T12:00:00Z'),
+    finishedAt: new Date('2026-08-03T12:00:01Z'),
+    targetPlan: {
+      targets: [],
+      limits: { liveCatalogRequested: false, catalogTargetsRequested: 0 },
+      counts: {
+        priority: 0,
+        normal: 0,
+        disabled: 0,
+        disabledRemoved: 0,
+        planningRejected: 0,
+        catalogEligible: 0,
+        skippedNotDue: 0,
+        skippedProviderCooldown: 0,
+        skippedNormalBudget: 0,
+        skippedTotal: 0,
+      },
+      catalogs: {},
+      sweep: {},
+    },
+    scanResult: {
+      candidates: evaluated,
+      rejected: [],
+      providerIds: ['workday'],
+      breakerEvents: [],
+      providerResults: [],
+    },
+    evaluated,
+    tenantStateChanges: { tenantChanges: [], providerChanges: [] },
+    rateObservations: { providers: [] },
+  });
+
+  assert.equal(summary.detailUnavailable, 1);
+  assert.equal(summary.detailErrors, 0);
+  assert.equal(summary.missingDescriptionsForImport, 0);
+  assert.equal(summary.importDetailUnavailableSkipped, 1);
+  assert.equal(summary.importSkipped, 1);
+});

@@ -493,6 +493,6 @@ test('SuccessFactors unavailable shell is reported separately from parser failur
       );
     },
   });
-  assert.equal(result.detail.status, 'error');
+  assert.equal(result.detail.status, 'unavailable');
   assert.match(result.detail.error, /job is unavailable/);
 });

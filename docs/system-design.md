@@ -1537,6 +1537,16 @@ successfactors:csb
 
 Circuit breakers, cooldowns, state, summaries, and canaries use the health partition where a provider family contains materially different protocols. Tenant-local durable failures do not automatically degrade the entire partition.
 
+Workday listing acquisition preserves the provider-native CXS `externalPath`.
+Missing-detail acquisition derives the Workday detail route from the validated
+source origin, host/site tenant identity, and that native path. The public job
+URL is checked against the same identity but is not the authority used to choose
+the request origin. Workday detail requests are HTTPS-only, redirect-rejecting,
+timeout-bounded, response-size-bounded, and serialized per origin while retaining
+global concurrency across distinct origins. CXS is treated as an external public
+candidate-site protocol protected by fixtures and canaries, not as a product
+domain contract owned by Ehestifter.
+
 ### 14.3 Planning, cadence, and provider safety
 
 The target planner combines:
@@ -1571,9 +1581,17 @@ One scan plan compounds all eligible profiles. Each candidate records the users 
 For a retained candidate:
 1. Jobs canonical-identity preflight occurs once;
 2. detail is fetched once when the candidate is missing and detail is required;
-3. the shared job is created once through Jobs;
-4. compatibility is requested through Enrichment Core for each matched user when required;
-5. no application status is created or changed.
+3. a provider-confirmed unavailable posting is classified separately and skipped without a Jobs write;
+4. the shared job is created once through Jobs;
+5. compatibility is requested through Enrichment Core for each matched user when required;
+6. no application status is created or changed.
+
+Detail acquisition distinguishes `unavailable` from `error`. Workday `404`,
+`410`, and `canApply: false` responses, plus the recognized SuccessFactors
+withdrawn page, are unavailable observations. Unsafe identity, transport,
+timeout, response-bound, and parser/schema failures remain errors. Canaries do
+not count unavailable samples as parser failures; an all-unavailable sample set
+is inconclusive rather than degraded.
 
 ### 14.5 Jobs and Enrichment integration
 
@@ -1591,6 +1609,12 @@ foundOn = "ats-discovery"
 ```
 
 `foundOn` is the creation channel, not a complete observation history. Historical jobs and run artifacts created under the former product name remain unchanged as evidence.
+
+The guarded importer evaluates `detail.status = "unavailable"` before the
+required-description gate and records
+`import.status = "skipped_detail_unavailable"`; no create request is issued.
+Run summaries expose unavailable details and these safe skips independently from
+actual detail errors and missing-description skips.
 
 Before creating a Jobs record, ATS Discovery canonicalizes provider locations
 against a committed snapshot generated from Web Core's geography dictionary and

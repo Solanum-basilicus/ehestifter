@@ -14,7 +14,18 @@ const GREENHOUSE_HOST = 'boards-api.greenhouse.io';
 const ASHBY_HOST = 'api.ashbyhq.com';
 const SMARTRECRUITERS_HOST = 'api.smartrecruiters.com';
 const SOFTGARDEN_HOST_RE = /^(?:[a-z0-9-]+\.)*softgarden\.io$/;
+const WORKDAY_HOST_RE = /^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.(wd[a-z0-9-]+)\.myworkdayjobs\.com$/i;
+const WORKDAY_SITE_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._~-]*$/;
 const MAX_DETAIL_BYTES = 5_000_000;
+
+class DetailUnavailableError extends Error {
+  constructor(message, { responseStatus = null } = {}) {
+    super(message);
+    this.name = 'DetailUnavailableError';
+    this.code = 'DETAIL_UNAVAILABLE';
+    this.responseStatus = responseStatus;
+  }
+}
 
 function safeProgress(onProgress, value) {
   if (!onProgress) return;
@@ -85,11 +96,17 @@ async function fetchWithTimeout({
       try {
         body = (await responseBytes(response, 'Detail error response')).toString('utf8');
       } catch (error) {
-        throw new Error(`Detail endpoint returned ${response.status}: ${error.message}`);
+        const detailError = new Error(
+          `Detail endpoint returned ${response.status}: ${error.message}`,
+        );
+        detailError.status = response.status;
+        throw detailError;
       }
-      throw new Error(
+      const detailError = new Error(
         `Detail endpoint returned ${response.status}: ${body.slice(0, 500)}`,
       );
+      detailError.status = response.status;
+      throw detailError;
     }
     return response;
   } finally {
@@ -196,6 +213,292 @@ function sourceIdentity(candidate) {
       || candidate.canonicalIdentity?.externalId
       || null,
   };
+}
+
+function decodeWorkdayPath(value, label) {
+  try {
+    return decodeURIComponent(value);
+  } catch (error) {
+    throw new Error(`${label} contains invalid percent encoding`, { cause: error });
+  }
+}
+
+function validateWorkdaySite(rawSite) {
+  if (typeof rawSite !== 'string' || rawSite.trim() === '') {
+    throw new Error('Workday source tenant must include a career site');
+  }
+  const site = rawSite.replace(/^\/+|\/+$/g, '');
+  if (site.length > 400) throw new Error('Workday career site is too long');
+  const segments = site.split('/');
+  if (
+    segments.length > 8
+    || segments.some((segment) => !WORKDAY_SITE_SEGMENT_RE.test(segment))
+  ) {
+    throw new Error('Workday career site contains an unsafe path segment');
+  }
+  return segments.join('/');
+}
+
+function validateWorkdayExternalPath(rawPath) {
+  if (typeof rawPath !== 'string' || rawPath.trim() === '') {
+    throw new Error('Workday detail fetch requires provider-native externalPath');
+  }
+  const externalPath = rawPath.trim();
+  if (externalPath.length > 3_000) throw new Error('Workday externalPath is too long');
+  if (
+    !externalPath.startsWith('/job/')
+    || /[\\?#\s\u0000-\u001f\u007f]/.test(externalPath)
+    || /%2f|%5c/i.test(externalPath)
+    || externalPath.includes('://')
+  ) {
+    throw new Error('Workday externalPath is unsafe');
+  }
+  const decoded = decodeWorkdayPath(externalPath, 'Workday externalPath');
+  if (
+    !decoded.startsWith('/job/')
+    || decoded.split('/').some((segment) => segment === '.' || segment === '..')
+  ) {
+    throw new Error('Workday externalPath contains path traversal');
+  }
+  return externalPath;
+}
+
+function workdayPublicPathWithoutLocale(pathname) {
+  return pathname.replace(/^\/[a-z]{2}-[a-z]{2}(?=\/)/i, '');
+}
+
+export function buildWorkdayDetailEndpoint(candidate) {
+  const rawOrigin = candidate.provenance?.sourceOrigin;
+  if (typeof rawOrigin !== 'string' || rawOrigin.trim() === '') {
+    throw new Error('Workday detail fetch requires source origin');
+  }
+  const source = assertPublicHttpsUrl(rawOrigin, 'Workday source origin');
+  if (
+    source.username
+    || source.password
+    || source.pathname !== '/'
+    || source.search
+    || source.hash
+  ) {
+    throw new Error('Workday source origin must not contain a path, query, or fragment');
+  }
+  const hostMatch = source.hostname.match(WORKDAY_HOST_RE);
+  if (!hostMatch) {
+    throw new Error(`Unexpected Workday source host: ${source.hostname}`);
+  }
+
+  const { tenant: rawTenant } = sourceIdentity(candidate);
+  if (typeof rawTenant !== 'string' || rawTenant.trim() === '') {
+    throw new Error('Workday detail fetch requires structured source tenant');
+  }
+  const separator = rawTenant.indexOf('/');
+  if (separator <= 0) {
+    throw new Error('Workday source tenant must contain host and career site');
+  }
+  const tenantHost = rawTenant.slice(0, separator).toLowerCase();
+  if (tenantHost !== source.hostname.toLowerCase()) {
+    throw new Error('Workday source tenant host must match source origin');
+  }
+  const site = validateWorkdaySite(rawTenant.slice(separator + 1));
+  const externalPath = validateWorkdayExternalPath(
+    candidate.provenance?.providerNativeId,
+  );
+
+  const publicUrl = assertPublicHttpsUrl(candidate.url, 'Workday public job URL');
+  if (publicUrl.username || publicUrl.password) {
+    throw new Error('Workday public job URL must not contain credentials');
+  }
+  if (publicUrl.origin !== source.origin) {
+    throw new Error('Workday public job URL must match source origin');
+  }
+  const expectedPublicPath = decodeWorkdayPath(
+    `/${site}${externalPath}`,
+    'Workday expected public path',
+  );
+  const actualPublicPath = decodeWorkdayPath(
+    workdayPublicPathWithoutLocale(publicUrl.pathname),
+    'Workday public job path',
+  );
+  if (actualPublicPath !== expectedPublicPath) {
+    throw new Error('Workday public job URL does not match source site and externalPath');
+  }
+
+  const workdayTenant = hostMatch[1];
+  return new URL(
+    `/wday/cxs/${encodeURIComponent(workdayTenant)}/${site}${externalPath}`,
+    source.origin,
+  );
+}
+
+function workdayLocationString(value) {
+  if (typeof value === 'string') return value.trim();
+  if (!value || typeof value !== 'object') return '';
+  for (const key of ['name', 'displayName', 'location', 'value']) {
+    if (typeof value[key] === 'string' && value[key].trim()) {
+      return value[key].trim();
+    }
+  }
+  return '';
+}
+
+function workdayRawLocation(info) {
+  const values = [
+    workdayLocationString(info.location),
+    ...(Array.isArray(info.additionalLocations)
+      ? info.additionalLocations.map(workdayLocationString)
+      : []),
+  ].filter(Boolean);
+  return [...new Set(values)].join('; ');
+}
+
+function workdayStructuredLocation(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const countryName = workdayLocationString(
+    value.countryName ?? value.country ?? value.addressCountry,
+  );
+  if (!countryName) return null;
+  return {
+    countryName,
+    countryCode: typeof value.countryCode === 'string'
+      ? value.countryCode.trim() || null
+      : null,
+    cityName: workdayLocationString(
+      value.cityName ?? value.city ?? value.addressLocality,
+    ) || null,
+    region: workdayLocationString(
+      value.region ?? value.addressRegion,
+    ) || null,
+  };
+}
+
+function workdayStructuredLocations(info) {
+  const candidates = [
+    info.location,
+    ...(Array.isArray(info.additionalLocations) ? info.additionalLocations : []),
+    ...(Array.isArray(info.locations) ? info.locations : []),
+  ];
+  const locations = [];
+  const seen = new Set();
+  for (const value of candidates) {
+    const location = workdayStructuredLocation(value);
+    if (!location) continue;
+    const key = JSON.stringify(location);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    locations.push(location);
+  }
+  return locations;
+}
+
+function workdayRemoteType(info, rawLocation) {
+  if (info.remote === true || info.isRemote === true) return 'Remote';
+  for (const value of [
+    info.remoteType,
+    info.workplaceType,
+    info.jobLocationType,
+  ]) {
+    const normalized = normalizeRemoteType(value);
+    if (normalized) return normalized;
+  }
+  if (/\bhybrid\b/i.test(rawLocation)) return 'Hybrid';
+  if (/\bremote\b|\bwork from home\b/i.test(rawLocation)) return 'Remote';
+  if (/\bon[- ]?site\b|\bin office\b/i.test(rawLocation)) return 'On-site';
+  return null;
+}
+
+function sameOriginWorkdayUrl(value, endpoint) {
+  if (typeof value !== 'string' || value.trim() === '') return null;
+  try {
+    const parsed = new URL(value, endpoint.origin);
+    if (parsed.protocol !== 'https:' || parsed.origin !== endpoint.origin) return null;
+    const expectedMatch = endpoint.pathname.match(/^\/wday\/cxs\/[^/]+(\/.+)$/);
+    if (!expectedMatch) return null;
+    const expectedPath = decodeWorkdayPath(
+      expectedMatch[1],
+      'Workday expected apply path',
+    );
+    const actualPath = decodeWorkdayPath(
+      workdayPublicPathWithoutLocale(parsed.pathname),
+      'Workday apply path',
+    );
+    return actualPath === expectedPath ? parsed.href : null;
+  } catch {
+    return null;
+  }
+}
+
+export function parseWorkdayDetailPayload(payload, endpoint) {
+  const info = payload?.jobPostingInfo;
+  if (!info || typeof info !== 'object' || Array.isArray(info)) {
+    throw new Error('Workday detail response has no jobPostingInfo object');
+  }
+  if (info.canApply === false) {
+    throw new DetailUnavailableError(
+      'Workday detail reports that the posting is not accepting applications',
+    );
+  }
+  if (typeof info.jobDescription !== 'string') {
+    throw new Error('Workday detail response jobDescription must be a string');
+  }
+  const rawLocation = workdayRawLocation(info);
+  return {
+    description: htmlToPlainText(info.jobDescription),
+    descriptionStatus: 'workday-cxs-detail-api',
+    applyUrl: sameOriginWorkdayUrl(info.externalUrl, endpoint),
+    rawLocation: rawLocation || null,
+    locations: workdayStructuredLocations(info),
+    remoteType: workdayRemoteType(info, rawLocation),
+  };
+}
+
+async function serializeWorkdayOrigin(context, origin, task) {
+  const previous = context.workdayOriginQueues.get(origin) ?? Promise.resolve();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const tail = previous.catch(() => {}).then(() => gate);
+  context.workdayOriginQueues.set(origin, tail);
+  await previous.catch(() => {});
+  try {
+    return await task();
+  } finally {
+    release();
+    if (context.workdayOriginQueues.get(origin) === tail) {
+      context.workdayOriginQueues.delete(origin);
+    }
+  }
+}
+
+async function fetchWorkdayDetails(candidate, context) {
+  const endpoint = buildWorkdayDetailEndpoint(candidate);
+  let payload;
+  try {
+    payload = await serializeWorkdayOrigin(
+      context,
+      endpoint.origin,
+      () => fetchJsonWithTimeout({
+        fetchImpl: context.fetchImpl,
+        url: endpoint,
+        timeoutMs: context.timeoutMs,
+        options: {
+          redirect: 'error',
+          headers: {
+            'user-agent': BROWSER_LIKE_USER_AGENT,
+            'accept-language': 'en-US,en;q=0.9',
+            referer: candidate.url,
+          },
+        },
+      }),
+    );
+  } catch (error) {
+    if ([404, 410].includes(error?.status)) {
+      throw new DetailUnavailableError(
+        `Workday detail endpoint returned ${error.status}`,
+        { responseStatus: error.status },
+      );
+    }
+    throw error;
+  }
+  return parseWorkdayDetailPayload(payload, endpoint);
 }
 
 async function fetchGreenhouseDetails(candidate, context) {
@@ -516,7 +819,9 @@ async function fetchSuccessFactorsDetails(candidate, context) {
   const page = parseSuccessFactorsHtmlDetails(html, endpoint);
   if (!page) {
     if (/You can(?:'|’)t view this job because it(?:'|’)s not available at this time\./i.test(html)) {
-      throw new Error('SuccessFactors detail page reports that the job is unavailable');
+      throw new DetailUnavailableError(
+        'SuccessFactors detail page reports that the job is unavailable',
+      );
     }
     throw new Error('Detail page contains neither JobPosting JSON-LD nor a parseable SuccessFactors job description');
   }
@@ -541,6 +846,8 @@ async function fetchDetails(candidate, context) {
       return { supported: true, ...(await fetchJsonLdDetails(candidate, context)) };
     case 'successfactors':
       return { supported: true, ...(await fetchSuccessFactorsDetails(candidate, context)) };
+    case 'workday':
+      return { supported: true, ...(await fetchWorkdayDetails(candidate, context)) };
     case 'personio':
       return { supported: false, provider, reason: 'description_available_in_list_feed' };
     default:
@@ -563,6 +870,7 @@ export async function enrichCandidateDetails(
     timeoutMs,
     ashbyBoardCache: new Map(),
     successFactorsDetailSessions: new Map(),
+    workdayOriginQueues: new Map(),
   };
   const eligibleIndices = [];
   const output = candidates.map((candidate, index) => {
@@ -649,6 +957,22 @@ export async function enrichCandidateDetails(
           },
         };
       } catch (error) {
+        if (error?.code === 'DETAIL_UNAVAILABLE') {
+          return {
+            index,
+            candidate: {
+              ...candidate,
+              detail: {
+                status: 'unavailable',
+                provider,
+                error: error instanceof Error ? error.message : String(error),
+                responseStatus: Number.isInteger(error?.responseStatus)
+                  ? error.responseStatus
+                  : null,
+              },
+            },
+          };
+        }
         return {
           index,
           candidate: {

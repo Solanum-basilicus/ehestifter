@@ -498,6 +498,9 @@ function catalogTarget(provider, item, metadata, providerPlugin) {
     ...entry,
     enabled: true,
     tenant: entry.provider_tenant,
+    sourceOrigin: typeof providerPlugin.sourceOrigin === 'function'
+      ? providerPlugin.sourceOrigin(entry)
+      : null,
     targetClass: 'normal',
     reason: `${provider}_catalog`,
     healthOnly: false,
@@ -514,6 +517,9 @@ function operatorPriorityTarget(provider, item, providerPlugin) {
     ...entry,
     enabled: true,
     tenant: entry.provider_tenant,
+    sourceOrigin: typeof providerPlugin.sourceOrigin === 'function'
+      ? providerPlugin.sourceOrigin(entry)
+      : null,
     targetClass: 'priority',
     reason: 'operator_priority',
     healthOnly: false,

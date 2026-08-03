@@ -57,6 +57,21 @@ successfactors:csb
 
 A CSB authentication/schema failure must not open the RMK breaker. Provider canaries are health-only: they bypass user filters, never call Jobs, and never enter import candidates.
 
+Workday listing acquisition preserves the CXS `externalPath` as provider-native
+identity. When a Jobs-missing candidate requires a description, the detail stage
+derives a same-origin CXS detail endpoint from the validated Workday host, career
+site, and `externalPath`; it does not reconstruct that request from an arbitrary
+job URL. Workday detail GETs use the scanner's existing timeout and 5 MB response
+ceiling and are serialized per Workday origin. Different Workday origins can
+still use the configured global detail concurrency.
+
+A Workday detail `404`, `410`, or `canApply: false` result is recorded as
+`detail.status = "unavailable"`. Changed response shapes, unsafe identity,
+timeouts, and transport failures remain `detail.status = "error"`. The same
+explicit unavailable status is used for the recognized SuccessFactors withdrawn
+page. Provider canaries exclude unavailable samples from parser-error counts and
+report detail as inconclusive when every sampled posting disappeared.
+
 ## Shared multi-user scan
 
 The scanner requests bounded discovery profiles from:
@@ -387,6 +402,10 @@ What it adds on top of the provider scan:
 
 It does **not** create jobs and does not request compatibility.
 
+`detail-results.json` separates an unavailable posting from acquisition or
+parser failure. An unavailable result is a safe listing/detail race: it remains
+visible for diagnosis but does not count as a detail parser error.
+
 Description evidence is secondary. It may refine `Germany` to a confidently
 resolved city such as `Garching`, clarify an unqualified `Remote` scope, or mark
 a provider/description conflict. It never silently erases the provider
@@ -463,6 +482,9 @@ Import mode performs the preflight/detail/location stages and then:
 - stops at the mandatory `--max-create N` command-line cap and the lower/equal
   configured import ceiling;
 - reconciles ambiguous create responses;
+- skips `detail.status = "unavailable"` as
+  `import.status = "skipped_detail_unavailable"` before the missing-description
+  gate and performs no Jobs write;
 - requests compatibility for matched users only when multi-user compatibility
   is enabled;
 - never creates or changes application status.
@@ -597,6 +619,10 @@ scheduler.json
 ```
 
 If required Users discovery input fails before provider execution, the scanner still publishes an atomic run directory. `failure.json` contains a bounded sanitized cause chain; provider/canary/state-change artifacts remain empty or absent because no provider health observation was made.
+
+`summary.json` reports unavailable detail observations separately through
+`detailUnavailable` and reports their no-write import outcome through
+`importDetailUnavailableSkipped`.
 
 Historical runs are retained as evidence. Product renames must not rewrite existing run artifacts or historical job provenance.
 

@@ -17,6 +17,10 @@
  * Normalized job posting — the unit of currency throughout the scanner.
  *
  * @typedef {object} Job
+ * @property {string|number} [id] Provider-native acquisition identifier.
+ *                                Preserved as provenance.providerNativeId for
+ *                                detail enrichment and diagnostics; Jobs owns
+ *                                the canonical persisted identity.
  * @property {string} title    Required, non-empty after trim.
  * @property {string} url      Required, absolute URL — used as the dedup key.
  * @property {string} company  May be empty when the source can't expose it
@@ -120,6 +124,8 @@
  * @typedef {object} Provider
  * @property {string} id                                                       Unique across all loaded providers.
  * @property {((entry: PortalEntry) => (DetectHit | null))} [detect]           Optional auto-detection.
+ * @property {((entry: PortalEntry) => (string | null))} [tenant]              Optional provider-owned source identity.
+ * @property {((entry: PortalEntry) => (string | null))} [sourceOrigin]         Optional trusted acquisition origin.
  * @property {(entry: PortalEntry, ctx: Context) => Promise<Job[]>} fetch      Required.
  */
 

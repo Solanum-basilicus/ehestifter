@@ -16,6 +16,8 @@
 import { BROWSER_LIKE_USER_AGENT } from './_http.mjs';
 
 const PAGE_SIZE = 20;
+const WORKDAY_HOST_RE = /^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.(wd[a-z0-9-]+)\.myworkdayjobs\.com$/i;
+const WORKDAY_SITE_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._~-]*$/;
 // Safety cap on pagination — applied regardless of what the upstream reports
 // as `total` (or, when `total` is absent, regardless of how many full pages
 // keep coming back), so a misbehaving/compromised API can't drive this into
@@ -139,28 +141,64 @@ function pageIsPastWindow(pageJobs, sinceMs) {
   if (dated.length === 0) return false;
   return Math.min(...dated) < sinceMs - EARLY_STOP_MARGIN_MS;
 }
-function resolveEndpoint(entry) {
+function normalizeConfiguredWorkdaySite(value) {
+  if (typeof value !== 'string') return null;
+  const site = value.trim().replace(/^\/+|\/+$/g, '');
+  if (!site || site.length > 400) return null;
+  const segments = site.split('/');
+  if (
+    segments.length > 8
+    || segments.some((segment) => !WORKDAY_SITE_SEGMENT_RE.test(segment))
+  ) {
+    return null;
+  }
+  return segments.join('/');
+}
+
+export function resolveWorkdayEndpoint(entry) {
   // Try api: first, then careers_url (mirrors greenhouse/ashby), returning the
   // first that matches the Workday tenant pattern. This lets a branded page
   // (e.g. https://www.ptc.com/en/careers) stay as careers_url while the Workday
   // tenant URL is pinned via api: — and, because we fall through on a non-match,
   // a non-Workday api: value doesn't shadow a valid careers_url.
-  for (const url of [entry.api, entry.careers_url]) {
-    if (typeof url !== 'string' || !url) continue;
-    const m = url.match(/^https:\/\/([\w-]+)\.(wd[\w-]*)\.myworkdayjobs\.com\/(?:[a-z]{2}-[A-Z]{2}\/)?([^/?#]+)/);
-    if (!m) continue;
-    const [, tenant, instance, site] = m;
-    const origin = `https://${tenant}.${instance}.myworkdayjobs.com`;
+  for (const value of [entry.api, entry.careers_url]) {
+    if (typeof value !== 'string' || !value) continue;
+    let parsed;
+    try {
+      parsed = new URL(value);
+    } catch {
+      continue;
+    }
+    if (parsed.protocol !== 'https:') continue;
+    const hostMatch = parsed.hostname.match(WORKDAY_HOST_RE);
+    if (!hostMatch) continue;
+    const [, tenant, instance] = hostMatch;
+    const pathSegments = parsed.pathname.split('/').filter(Boolean);
+    if (/^[a-z]{2}-[a-z]{2}$/i.test(pathSegments[0] ?? '')) pathSegments.shift();
+    const site = normalizeConfiguredWorkdaySite(entry.workday_site)
+      // Preserve the established tracked-company behavior: when no structured
+      // site is supplied, the first path segment is the career site. Catalog
+      // entries carry workday_site and can therefore retain validated nested
+      // site paths without guessing from a public URL.
+      ?? normalizeConfiguredWorkdaySite(pathSegments[0]);
+    if (!site) continue;
+    const host = parsed.hostname.toLowerCase();
+    const origin = `https://${host}`;
     return {
       api: `${origin}/wday/cxs/${tenant}/${site}/jobs`,
       // externalPath is relative to the site, not the host root — without the
       // site segment the URL 404s.
       jobBase: `${origin}/${site}`,
       origin,
+      host,
+      tenant,
+      instance,
+      site,
     };
   }
   return null;
 }
+
 function parsePostedOn(label) {
   if (!label) return undefined;
   if (/posted\s+today/i.test(label)) return Date.now();
@@ -179,7 +217,7 @@ function locationFromPath(externalPath) {
   return segment.replace(/-/g, ' ');
 }
 export function parseWorkdayResponse(json, entry) {
-  const ep = resolveEndpoint(entry);
+  const ep = resolveWorkdayEndpoint(entry);
   const jobBase = ep?.jobBase || '';
   const postings = Array.isArray(json?.jobPostings) ? json.jobPostings : [];
   const jobs = [];
@@ -187,6 +225,7 @@ export function parseWorkdayResponse(json, entry) {
     if (j == null) continue;
     if (!j.externalPath || !String(j.title || '').trim()) continue;
     jobs.push({
+      id: String(j.externalPath),
       title: j.title || '',
       url: jobBase + j.externalPath,
       company: entry.name,
@@ -201,8 +240,15 @@ export default {
   id: 'workday',
 
   detect(entry) {
-    const ep = resolveEndpoint(entry);
+    const ep = resolveWorkdayEndpoint(entry);
     return ep ? { url: ep.api } : null;
+  },
+  tenant(entry) {
+    const ep = resolveWorkdayEndpoint(entry);
+    return ep ? `${ep.host}/${ep.site}` : null;
+  },
+  sourceOrigin(entry) {
+    return resolveWorkdayEndpoint(entry)?.origin ?? null;
   },
   /**
    * Fetch all job postings for a Workday-backed entry, paginating through
@@ -217,10 +263,10 @@ export default {
    *
    * @param {{ name?: string, api?: string, careers_url?: string, max_pages?: number, healthOnly?: boolean, canary?: object | null }} entry
    * @param {{ fetchJson: (url: string, opts?: object) => Promise<any>, sinceMs?: number, maxPages?: number }} ctx
-   * @returns {Promise<Array<{title: string, url: string, company: string, location: string, postedAt?: number}>>}
+   * @returns {Promise<Array<{id: string, title: string, url: string, company: string, location: string, postedAt?: number}>>}
    */
   async fetch(entry, ctx) {
-    const ep = resolveEndpoint(entry);
+    const ep = resolveWorkdayEndpoint(entry);
     if (!ep) throw new Error(`workday: cannot derive CXS endpoint for ${entry.name}`);
     const postOpts = {
       method: 'POST',

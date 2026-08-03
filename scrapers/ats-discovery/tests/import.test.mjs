@@ -220,3 +220,37 @@ test('importCandidates enforces the create cap', async () => {
     'skipped_create_limit',
   );
 });
+
+test('importCandidates safely skips detail-unavailable postings before description gating', async () => {
+  let createCalls = 0;
+  const client = {
+    async createJob() {
+      createCalls += 1;
+      throw new Error('createJob must not be called');
+    },
+  };
+
+  const [result] = await importCandidates(
+    [candidate({
+      description: '',
+      detail: {
+        status: 'unavailable',
+        provider: 'workday',
+        responseStatus: 404,
+      },
+      locationEligibility: {
+        status: 'ineligible',
+        reason: 'outside_scope',
+      },
+    })],
+    client,
+    {
+      maxCreates: 1,
+      requireDescription: true,
+    },
+  );
+
+  assert.equal(createCalls, 0);
+  assert.equal(result.import.status, 'skipped_detail_unavailable');
+  assert.equal(result.import.responseStatus, 404);
+});

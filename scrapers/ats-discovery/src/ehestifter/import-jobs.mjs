@@ -39,6 +39,15 @@ export async function importCandidates(
           jobId: candidate.existingJobId,
         },
       };
+    } else if (candidate.detail?.status === 'unavailable') {
+      output = {
+        ...candidate,
+        import: {
+          status: 'skipped_detail_unavailable',
+          jobId: null,
+          responseStatus: candidate.detail.responseStatus ?? null,
+        },
+      };
     } else if (candidate.locationEligibility?.status === 'ineligible') {
       output = {
         ...candidate,

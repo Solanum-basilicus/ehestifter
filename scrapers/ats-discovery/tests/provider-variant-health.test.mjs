@@ -754,7 +754,7 @@ test('withdrawn canary detail samples are separated from parser errors', () => {
   const detailResults = Array.from({ length: 3 }, () => ({
     provenance: { targetSequence: 9 },
     detail: {
-      status: 'error',
+      status: 'unavailable',
       error: 'SuccessFactors detail page reports that the job is unavailable',
     },
   }));
@@ -788,7 +788,7 @@ test('inconclusive canary detail remains visible without degrading a healthy lis
     detailResults: Array.from({ length: 2 }, () => ({
       provenance: { targetSequence: 11 },
       detail: {
-        status: 'error',
+        status: 'unavailable',
         error: 'SuccessFactors detail page reports that the job is unavailable',
       },
     })),

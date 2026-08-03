@@ -98,6 +98,7 @@ test('Workday catalog keeps structured host tenant and site identity', () => {
   const target = result.runtimeTargets.find((item) => item.provider === 'workday');
   assert.match(target.careers_url, /^https:\/\/[a-z0-9-]+\.wd\d+\.myworkdayjobs\.com\//);
   assert.match(target.tenant, /^[a-z0-9-]+\.wd\d+\.myworkdayjobs\.com\//);
+  assert.equal(target.sourceOrigin, new URL(target.careers_url).origin);
   assert.equal(target.workday_site.length > 0, true);
   const artifactTarget = result.plan.targets.find((item) => item.provider === 'workday');
   assert.equal(artifactTarget.catalogRef, 'workday');
