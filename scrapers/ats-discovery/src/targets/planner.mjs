@@ -22,6 +22,7 @@ import {
 } from '../state/tenant-state.mjs';
 
 const MAX_SKIPPED_SAMPLES = 50;
+const COMPANY_OVERRIDES_SCHEMA_VERSION = 1;
 
 function requireObject(value, name) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -30,10 +31,18 @@ function requireObject(value, name) {
   return value;
 }
 
+function displaySchemaVersion(value) {
+  if (value === undefined) return 'missing';
+  return JSON.stringify(value);
+}
+
 function requireSchemaVersion(value, name) {
   const object = requireObject(value, name);
-  if (object.schema_version !== 1) {
-    throw new Error(`${name}.schema_version must be 1`);
+  if (object.schema_version !== COMPANY_OVERRIDES_SCHEMA_VERSION) {
+    throw new Error(
+      `${name}.schema_version must be ${COMPANY_OVERRIDES_SCHEMA_VERSION}; `
+      + `received ${displaySchemaVersion(object.schema_version)}`,
+    );
   }
   return object;
 }
@@ -79,8 +88,8 @@ function normalizeOverrideItems(provider, value, name) {
   }
   return items;
 }
-function readOverrides(companyOverrides) {
-  const overrides = requireSchemaVersion(companyOverrides, 'company overrides');
+function readOverrides(companyOverrides, name = 'company overrides') {
+  const overrides = requireSchemaVersion(companyOverrides, name);
   const priority = requireObject(
     overrides.priority ?? {},
     'company overrides.priority',
@@ -544,6 +553,7 @@ function aggregateBucketCounts(perProvider, field) {
 export function buildTargetPlan({
   portalConfig,
   companyOverrides,
+  companyOverridesName = 'company overrides',
   discoveryPolicy,
   catalogs = null,
   ashbyCatalog = null,
@@ -565,7 +575,7 @@ export function buildTargetPlan({
   const policy = discoveryPolicy?.schemaVersion === 1
     ? discoveryPolicy
     : parseDiscoveryPolicy(discoveryPolicy);
-  const overrides = readOverrides(companyOverrides);
+  const overrides = readOverrides(companyOverrides, companyOverridesName);
   const stateMaps = tenantStateMaps(tenantState);
   const catalogValues = { ...(catalogs ?? {}) };
   if (ashbyCatalog != null && catalogValues.ashby == null) catalogValues.ashby = ashbyCatalog;
@@ -965,9 +975,12 @@ export async function buildTargetPlanFromFiles({
     readFile(discoveryPolicyPath, 'utf8'),
     loadTenantState(tenantStatePath, { now: generatedAt }),
   ]);
-  const portalConfig = parseYaml(portalsText, 'portals config');
-  const companyOverrides = parseYaml(overridesText, 'company overrides');
-  const rawPolicy = parseYaml(policyText, 'discovery policy');
+  const portalConfig = parseYaml(portalsText, `portals config (${portalsPath})`);
+  const companyOverrides = parseYaml(
+    overridesText,
+    `company overrides (${companyOverridesPath})`,
+  );
+  const rawPolicy = parseYaml(policyText, `discovery policy (${discoveryPolicyPath})`);
   const policy = parseDiscoveryPolicy(rawPolicy);
   const resolvedPaths = {
     ...(catalogPaths ?? {}),
@@ -1002,6 +1015,7 @@ export async function buildTargetPlanFromFiles({
   return buildTargetPlan({
     portalConfig,
     companyOverrides,
+    companyOverridesName: `company overrides (${companyOverridesPath})`,
     discoveryPolicy: policy,
     catalogs: loadedCatalogs,
     tenantState,

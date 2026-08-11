@@ -3,6 +3,8 @@ import { access, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { CATALOG_PROVIDER_IDS } from './catalogs/provider-catalog.mjs';
 
+const SCANNER_CONFIG_SCHEMA_VERSION = 1;
+
 function requireObject(value, name) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`${name} must be a JSON object`);
@@ -118,8 +120,14 @@ export async function loadRuntimeConfig({
     );
   }
   requireObject(raw, 'scanner config');
-  if (raw.schemaVersion !== 1) {
-    throw new Error('scanner config schemaVersion must be 1');
+  if (raw.schemaVersion !== SCANNER_CONFIG_SCHEMA_VERSION) {
+    const received = raw.schemaVersion === undefined
+      ? 'missing'
+      : JSON.stringify(raw.schemaVersion);
+    throw new Error(
+      `scanner config schemaVersion must be ${SCANNER_CONFIG_SCHEMA_VERSION}; `
+      + `received ${received}: ${resolvedConfigPath}`,
+    );
   }
 
   const paths = requireObject(raw.paths, 'paths');

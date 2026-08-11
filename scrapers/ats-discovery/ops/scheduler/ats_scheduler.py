@@ -990,33 +990,135 @@ def default_config_path(script_path: Path) -> Path:
     return (script_path.resolve().parents[2] / "config" / "scheduler.local.json").resolve()
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Ehestifter ATS Discovery local operations scheduler")
-    parser.add_argument("--config", type=Path, help="scheduler config path")
-    sub = parser.add_subparsers(dest="command", required=True)
+class HelpOnErrorArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        self.print_help(sys.stderr)
+        self.exit(2, f"\n{self.prog}: error: {message}\n")
 
-    run = sub.add_parser("run", help="run a configured scheduled task")
-    run.add_argument("task", choices=sorted(TASK_KEYS))
-    run.add_argument("--trigger", choices=["systemd", "manual", "retry"], default="manual")
+
+SCANNER_HELP = """
+Scanner command forms (arguments after -- are passed unchanged):
+  scan tracked --offline [--no-progress]
+      Run due tracked/catalog targets without Jobs preflight or import.
+
+  scan tracked --preflight [--catalog-targets N] [--no-progress]
+      Run Jobs identity preflight; optionally add a bounded catalog shard.
+
+  scan tracked --import --max-create N [--catalog-targets N] [--no-progress]
+      Preflight and import, bounded by both --max-create and runtime config.
+
+  catalog sync <provider|all>
+      Refresh one machine-managed provider catalog, or all catalogs.
+
+  repair lever-description <lever-job-url> [--apply]
+      Inspect or apply the focused Lever description repair workflow.
+
+Examples:
+  ./ops/scheduler/ats-ops scanner -- scan tracked --preflight --catalog-targets 1
+  ./ops/scheduler/ats-ops scanner -- catalog sync all
+  ./ops/scheduler/ats-ops scanner -- --help
+
+The final example asks the scanner container for its exact current CLI usage.
+"""
+
+
+ROOT_HELP = """
+Examples:
+  ./ops/scheduler/ats-ops status
+  ./ops/scheduler/ats-ops run daily-discovery
+  ./ops/scheduler/ats-ops run catalog-refresh --force
+  ./ops/scheduler/ats-ops scanner -h
+  ./ops/scheduler/ats-ops scanner -- scan tracked --preflight --catalog-targets 1
+
+Use '<command> -h' for command-specific help.
+"""
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = HelpOnErrorArgumentParser(
+        prog="ats-ops",
+        description=(
+            "Ehestifter ATS Discovery host-side operations wrapper. "
+            "Scheduled tasks and manual scanner commands share one global lock."
+        ),
+        epilog=ROOT_HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--config", type=Path, help="scheduler config path")
+    sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
+
+    run = sub.add_parser(
+        "run",
+        help="run one scheduler-defined task",
+        description=(
+            "Run a task defined in scheduler.local.json under scheduler slot/retry rules. "
+            "Use --force for a deliberate manual rerun of an already completed/too-recent slot."
+        ),
+        epilog=(
+            "Tasks:\n"
+            "  daily-discovery  Run configured dailyDiscovery.scannerArgs.\n"
+            "  catalog-refresh  Run configured catalogRefresh.scannerArgs.\n\n"
+            "Examples:\n"
+            "  ./ops/scheduler/ats-ops run daily-discovery\n"
+            "  ./ops/scheduler/ats-ops run catalog-refresh --force"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    run.add_argument("task", choices=sorted(TASK_KEYS), metavar="TASK", help="configured task name")
+    run.add_argument(
+        "--trigger",
+        choices=["systemd", "manual", "retry"],
+        default="manual",
+        help="recorded trigger type (default: manual)",
+    )
     run.add_argument("--force", action="store_true", help="ignore completed-slot and minimum-spacing checks")
 
-    status = sub.add_parser("status", help="show scheduler state")
+    status = sub.add_parser("status", help="show scheduler state and next slots")
     status.add_argument("--json", action="store_true", dest="as_json")
 
-    scanner = sub.add_parser("scanner", help="run arbitrary scanner arguments under the global lock")
-    scanner.add_argument("--label", default="manual-scanner")
-    scanner.add_argument("scanner_args", nargs=argparse.REMAINDER)
+    scanner = sub.add_parser(
+        "scanner",
+        help="run the scanner CLI directly under the global lock",
+        description=(
+            "Pass ATS Discovery scanner arguments through to the Compose service while "
+            "still honoring the scheduler global lock. Use -- before the scanner command "
+            "to make the wrapper/scanner boundary explicit."
+        ),
+        epilog=SCANNER_HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    scanner.add_argument(
+        "--label",
+        default="manual-scanner",
+        help="operation label written to lock-owner metadata (default: manual-scanner)",
+    )
+    scanner.add_argument(
+        "scanner_args",
+        nargs=argparse.REMAINDER,
+        metavar="SCANNER_ARG",
+        help="scanner CLI arguments passed unchanged after an optional -- separator",
+    )
+    scanner.set_defaults(_command_parser=scanner)
 
-    prune = sub.add_parser("prune", help="apply retention now")
+    prune = sub.add_parser("prune", help="apply configured artifact/state retention now")
     prune.add_argument("--json", action="store_true", dest="as_json")
 
-    sub.add_parser("validate-config", help="validate scheduler configuration")
+    sub.add_parser("validate-config", help="validate scheduler.local.json and resolved scheduler paths")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    scanner_args: list[str] | None = None
+    if args.command == "scanner":
+        scanner_args = list(args.scanner_args)
+        if scanner_args and scanner_args[0] == "--":
+            scanner_args = scanner_args[1:]
+        if not scanner_args:
+            args._command_parser.error("scanner requires arguments after --")
+
     config_path = args.config.resolve() if args.config else default_config_path(Path(__file__))
     try:
         config = load_config(config_path)
@@ -1039,11 +1141,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 for outcome in outcomes
             ) else 0
         if args.command == "scanner":
-            scanner_args = list(args.scanner_args)
-            if scanner_args and scanner_args[0] == "--":
-                scanner_args = scanner_args[1:]
-            if not scanner_args:
-                parser.error("scanner requires arguments after --")
+            assert scanner_args is not None
             return run_locked_scanner(config, scanner_args, args.label)
         if args.command == "prune":
             result = apply_retention(config, utc_now())

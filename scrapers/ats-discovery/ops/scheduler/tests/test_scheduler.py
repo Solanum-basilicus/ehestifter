@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -76,6 +78,54 @@ def write_config(root: Path, **overrides):
 
 
 class SchedulerTests(unittest.TestCase):
+    def test_root_cli_error_prints_discoverable_help(self):
+        parser = scheduler.build_parser()
+        stderr = io.StringIO()
+        with self.assertRaises(SystemExit) as raised, redirect_stderr(stderr):
+            parser.parse_args([])
+        self.assertEqual(raised.exception.code, 2)
+        output = stderr.getvalue()
+        self.assertIn("Ehestifter ATS Discovery host-side operations wrapper", output)
+        self.assertIn("scanner", output)
+        self.assertIn("run", output)
+        self.assertIn("Use '<command> -h'", output)
+
+    def test_run_missing_task_prints_task_help(self):
+        parser = scheduler.build_parser()
+        stderr = io.StringIO()
+        with self.assertRaises(SystemExit) as raised, redirect_stderr(stderr):
+            parser.parse_args(["run"])
+        self.assertEqual(raised.exception.code, 2)
+        output = stderr.getvalue()
+        self.assertIn("daily-discovery", output)
+        self.assertIn("catalog-refresh", output)
+        self.assertIn("configured task name", output)
+
+    def test_scanner_missing_arguments_prints_scanner_help_before_config_load(self):
+        stderr = io.StringIO()
+        with self.assertRaises(SystemExit) as raised, redirect_stderr(stderr):
+            scheduler.main(["scanner"])
+        self.assertEqual(raised.exception.code, 2)
+        output = stderr.getvalue()
+        self.assertIn("scan tracked --offline", output)
+        self.assertIn("catalog sync <provider|all>", output)
+        self.assertIn("scanner requires arguments after --", output)
+        self.assertNotIn("config error", output)
+
+    def test_scanner_help_explains_passthrough_cli(self):
+        parser = scheduler.build_parser()
+        stdout = io.StringIO()
+        with self.assertRaises(SystemExit) as raised, redirect_stdout(stdout):
+            parser.parse_args(["scanner", "-h"])
+        self.assertEqual(raised.exception.code, 0)
+        output = stdout.getvalue()
+        self.assertIn("arguments after -- are passed unchanged", output)
+        self.assertIn("scan tracked --offline", output)
+        self.assertIn("scan tracked --preflight [--catalog-targets N]", output)
+        self.assertIn("scan tracked --import --max-create N", output)
+        self.assertIn("catalog sync <provider|all>", output)
+        self.assertIn("scanner -- --help", output)
+
     def test_config_loads_and_resolves_paths(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

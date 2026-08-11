@@ -340,6 +340,18 @@ config/company-overrides.example.yml
 config/discovery-policy.example.yml
 ```
 
+Configuration schemas are independent contracts; their version numbers are not
+a global release number. The current operator-owned scanner files use
+`scanner.local.json` `schemaVersion: 1`, `company-overrides.yml`
+`schema_version: 1`, and `discovery-policy.yml` `schema_version: 1`. Machine
+catalog envelopes currently use `schemaVersion: 2`. Do not copy a catalog's
+version into an operator configuration file. Missing provider arrays in
+`company-overrides.yml` mean no overrides for that provider, so adding a new
+catalog provider does not require bumping that file's schema version. If a scan
+reports a company-overrides schema mismatch, inspect the active path configured
+by `scanner.local.json`; the key is exactly `schema_version` and the value is the
+numeric YAML value `1`, not `schemaVersion`, `"1"`, or the catalog version.
+
 Review active configuration before live traffic, especially:
 
 - provider enablement and request bounds;
@@ -524,6 +536,13 @@ host-wide `flock` used by systemd.
 ```text
 ./ops/scheduler/ats-ops [--config PATH] COMMAND ...
 ```
+
+Run `./ops/scheduler/ats-ops -h` for the command overview and
+`./ops/scheduler/ats-ops <command> -h` for command-specific help. In
+particular, `scanner -h` lists the scanner command forms and explains the `--`
+passthrough boundary; `scanner -- --help` asks the current scanner container for
+its exact CLI usage. Parse errors print the relevant help instead of only a
+one-line usage string.
 
 ### `validate-config`
 

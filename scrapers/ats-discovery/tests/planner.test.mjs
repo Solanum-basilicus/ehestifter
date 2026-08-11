@@ -339,6 +339,41 @@ test('file-backed planner loads state and avoids catalog read in preflight', asy
   }
 });
 
+test('file-backed planner reports company-overrides path and received schema version', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'phase3-planner-schema-'));
+  try {
+    const files = {
+      portalsPath: path.join(directory, 'portals.yml'),
+      companyOverridesPath: path.join(directory, 'company-overrides.yml'),
+      discoveryPolicyPath: path.join(directory, 'policy.yml'),
+      tenantStatePath: path.join(directory, 'missing-state.json'),
+    };
+    await writeFile(files.portalsPath, JSON.stringify(portalConfig()));
+    await writeFile(files.companyOverridesPath, JSON.stringify({
+      schema_version: 2,
+      priority: {},
+      disabled: {},
+    }));
+    await writeFile(files.discoveryPolicyPath, JSON.stringify(rawPolicy({ catalogEnabled: false })));
+
+    await assert.rejects(
+      () => buildTargetPlanFromFiles({
+        ...files,
+        providers: providers(),
+        mode: 'preflight',
+        generatedAt: NOW,
+      }),
+      (error) => {
+        assert.match(error.message, /company overrides/);
+        assert.match(error.message, /company-overrides\.yml/);
+        assert.match(error.message, /schema_version must be 1; received 2/);
+        return true;
+      },
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test('live preflight includes an explicit bounded due catalog shard', () => {
   const result = build({

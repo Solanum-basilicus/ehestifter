@@ -1,6 +1,7 @@
 import { CATALOG_PROVIDER_IDS } from '../catalogs/provider-catalog.mjs';
 
 export const CATALOG_POLICY_PROVIDERS = CATALOG_PROVIDER_IDS;
+const DISCOVERY_POLICY_SCHEMA_VERSION = 1;
 
 const DEFAULTS = Object.freeze({
   scheduling: Object.freeze({
@@ -355,8 +356,14 @@ function parseMonitoring(raw, base, name) {
 
 export function parseDiscoveryPolicy(raw) {
   const root = requireObject(raw, 'discovery policy');
-  if (root.schema_version !== 1) {
-    throw new Error('discovery policy.schema_version must be 1');
+  if (root.schema_version !== DISCOVERY_POLICY_SCHEMA_VERSION) {
+    const received = root.schema_version === undefined
+      ? 'missing'
+      : JSON.stringify(root.schema_version);
+    throw new Error(
+      `discovery policy.schema_version must be ${DISCOVERY_POLICY_SCHEMA_VERSION}; `
+      + `received ${received}`,
+    );
   }
 
   const rawDefaults = optionalObject(root.defaults, 'discovery policy.defaults');
