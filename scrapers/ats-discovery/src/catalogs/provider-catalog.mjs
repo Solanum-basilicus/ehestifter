@@ -1,10 +1,16 @@
 import { createHash } from 'node:crypto';
+import { parseStrictCsv } from './csv.mjs';
+import { assertPublicHttpsUrl } from '../providers/_url-safety.mjs';
 
 export const CATALOG_PROVIDER_IDS = Object.freeze([
   'ashby',
   'greenhouse',
   'lever',
   'workday',
+  'personio',
+  'smartrecruiters',
+  'softgarden',
+  'successfactors',
 ]);
 
 export const CATALOG_SOURCES = Object.freeze({
@@ -14,6 +20,7 @@ export const CATALOG_SOURCES = Object.freeze({
     url: 'https://raw.githubusercontent.com/Feashliaa/job-board-aggregator/main/data/ashby_companies.json',
     ref: 'main',
     license: 'CC BY-NC 4.0',
+    format: 'json',
   }),
   greenhouse: Object.freeze({
     repository: 'Feashliaa/job-board-aggregator',
@@ -21,6 +28,7 @@ export const CATALOG_SOURCES = Object.freeze({
     url: 'https://raw.githubusercontent.com/Feashliaa/job-board-aggregator/main/data/greenhouse_companies.json',
     ref: 'main',
     license: 'CC BY-NC 4.0',
+    format: 'json',
   }),
   lever: Object.freeze({
     repository: 'Feashliaa/job-board-aggregator',
@@ -28,6 +36,7 @@ export const CATALOG_SOURCES = Object.freeze({
     url: 'https://raw.githubusercontent.com/Feashliaa/job-board-aggregator/main/data/lever_companies.json',
     ref: 'main',
     license: 'CC BY-NC 4.0',
+    format: 'json',
   }),
   workday: Object.freeze({
     repository: 'Feashliaa/job-board-aggregator',
@@ -35,7 +44,50 @@ export const CATALOG_SOURCES = Object.freeze({
     url: 'https://raw.githubusercontent.com/Feashliaa/job-board-aggregator/main/data/workday_companies.json',
     ref: 'main',
     license: 'CC BY-NC 4.0',
+    format: 'json',
   }),
+  personio: Object.freeze({
+    repository: 'kalil0321/ats-scrapers',
+    path: 'ats-companies/personio.csv',
+    url: 'https://raw.githubusercontent.com/kalil0321/ats-scrapers/main/ats-companies/personio.csv',
+    ref: 'main',
+    license: 'MIT',
+    format: 'csv',
+  }),
+  smartrecruiters: Object.freeze({
+    repository: 'kalil0321/ats-scrapers',
+    path: 'ats-companies/smartrecruiters.csv',
+    url: 'https://raw.githubusercontent.com/kalil0321/ats-scrapers/main/ats-companies/smartrecruiters.csv',
+    ref: 'main',
+    license: 'MIT',
+    format: 'csv',
+  }),
+  softgarden: Object.freeze({
+    repository: 'kalil0321/ats-scrapers',
+    path: 'ats-companies/softgarden.csv',
+    url: 'https://raw.githubusercontent.com/kalil0321/ats-scrapers/main/ats-companies/softgarden.csv',
+    ref: 'main',
+    license: 'MIT',
+    format: 'csv',
+  }),
+  successfactors: Object.freeze({
+    repository: 'kalil0321/ats-scrapers',
+    path: 'ats-companies/successfactors.csv',
+    url: 'https://raw.githubusercontent.com/kalil0321/ats-scrapers/main/ats-companies/successfactors.csv',
+    ref: 'main',
+    license: 'MIT',
+    format: 'csv',
+  }),
+});
+
+export const CATALOG_SOURCE_QUALITY = Object.freeze({
+  personio: Object.freeze({ minimumSourceItems: 1000, minimumAcceptanceRatio: 0.98 }),
+  smartrecruiters: Object.freeze({ minimumSourceItems: 1000, minimumAcceptanceRatio: 0.98 }),
+  softgarden: Object.freeze({ minimumSourceItems: 100, minimumAcceptanceRatio: 0.98 }),
+  // The upstream inventory currently contains legacy ?company= RMK URLs.
+  // The current provider deliberately drops query parameters, so those rows
+  // are rejected rather than collapsed into an unsafe hostname/path identity.
+  successfactors: Object.freeze({ minimumSourceItems: 1000, minimumAcceptanceRatio: 0.85 }),
 });
 
 const MAX_COMPONENT_LENGTH = 200;
@@ -43,6 +95,7 @@ const MAX_OPTIONAL_NAME_LENGTH = 300;
 const SAFE_SLUG = /^[A-Za-z0-9][A-Za-z0-9._~-]*$/;
 const SAFE_HOST_LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
 const SAFE_SITE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._~-]*$/;
+const SAFE_SMARTRECRUITERS_TENANT = /^[A-Za-z0-9._-]+$/;
 
 function requireProvider(provider) {
   if (!CATALOG_PROVIDER_IDS.includes(provider)) {
@@ -95,6 +148,9 @@ export function validateCatalogSlug(provider, value) {
   if (provider === 'workday') {
     return { ok: false, reason: 'workday_requires_structured_identity' };
   }
+  if (provider === 'successfactors') {
+    return { ok: false, reason: 'successfactors_requires_url_identity' };
+  }
   return validateSlug(value, { name: 'tenant' });
 }
 
@@ -104,6 +160,22 @@ function validateWorkdayHostLabel(value, name) {
   if (label.length > 63) return { ok: false, reason: `${name}_too_long` };
   if (!SAFE_HOST_LABEL.test(label)) return { ok: false, reason: `${name}_unsafe` };
   return { ok: true, value: label };
+}
+
+function validateCatalogHostLabel(value, name = 'tenant') {
+  const label = normalizeString(value);
+  if (!label) return { ok: false, reason: `${name}_empty` };
+  if (label.length > 63) return { ok: false, reason: `${name}_too_long` };
+  if (!SAFE_HOST_LABEL.test(label)) return { ok: false, reason: `${name}_unsafe` };
+  return { ok: true, value: label };
+}
+
+function validateSmartRecruitersTenant(value) {
+  const tenant = normalizeString(value);
+  if (!tenant) return { ok: false, reason: 'empty' };
+  if (tenant.length > MAX_COMPONENT_LENGTH) return { ok: false, reason: 'too_long' };
+  if (!SAFE_SMARTRECRUITERS_TENANT.test(tenant)) return { ok: false, reason: 'unsafe_character' };
+  return { ok: true, tenant };
 }
 
 function validateWorkdaySite(value) {
@@ -198,12 +270,159 @@ function slugInput(value) {
   return {
     tenant: value.slug ?? value.tenant,
     name: normalizeOptionalName(value.name),
+    sourceUrl: normalizeString(value.url),
+    careersUrl: normalizeString(value.careersUrl),
   };
+}
+
+function parsePublicCatalogUrl(value, label) {
+  if (typeof value !== 'string' || value.trim() === '') {
+    return { ok: false, reason: 'url_missing' };
+  }
+  let parsed;
+  try {
+    parsed = assertPublicHttpsUrl(value.trim(), label);
+  } catch {
+    return { ok: false, reason: 'url_invalid' };
+  }
+  if (parsed.username || parsed.password) return { ok: false, reason: 'url_credentials' };
+  if (parsed.port) return { ok: false, reason: 'url_port' };
+  return { ok: true, parsed };
+}
+
+function withoutSearchOrHash(parsed) {
+  const normalized = new URL(parsed);
+  normalized.search = '';
+  normalized.hash = '';
+  return normalized;
+}
+
+function normalizePersonioItem(value) {
+  const input = slugInput(value);
+  if (!input) return { ok: false, reason: 'not_string_or_object' };
+  const validated = validateCatalogHostLabel(input.tenant);
+  if (!validated.ok) return validated;
+  const expectedTenant = validated.value.toLowerCase();
+  let careersUrl = `https://${expectedTenant}.jobs.personio.com`;
+  const rawUrl = input.sourceUrl || input.careersUrl;
+  if (rawUrl) {
+    const result = parsePublicCatalogUrl(rawUrl, 'Personio catalog URL');
+    if (!result.ok) return result;
+    const parsed = result.parsed;
+    const match = parsed.hostname.toLowerCase().match(/^([a-z0-9][a-z0-9-]*)\.jobs\.personio\.(de|com)$/);
+    if (!match) return { ok: false, reason: 'personio_host' };
+    if (match[1] !== expectedTenant) return { ok: false, reason: 'tenant_url_mismatch' };
+    if (!['', '/'].includes(parsed.pathname) || parsed.search || parsed.hash) {
+      return { ok: false, reason: 'personio_url_shape' };
+    }
+    careersUrl = `https://${parsed.hostname.toLowerCase()}`;
+  }
+  const item = { tenant: expectedTenant, careersUrl };
+  if (input.name) item.name = input.name;
+  return { ok: true, reason: null, item };
+}
+
+function normalizeSmartRecruitersItem(value) {
+  const input = slugInput(value);
+  if (!input) return { ok: false, reason: 'not_string_or_object' };
+  const validated = validateSmartRecruitersTenant(input.tenant);
+  if (!validated.ok) return validated;
+  let tenant = validated.tenant;
+  const rawUrl = input.sourceUrl || input.careersUrl;
+  if (rawUrl) {
+    const result = parsePublicCatalogUrl(rawUrl, 'SmartRecruiters catalog URL');
+    if (!result.ok) return result;
+    const parsed = result.parsed;
+    if (!['careers.smartrecruiters.com', 'jobs.smartrecruiters.com'].includes(parsed.hostname.toLowerCase())) {
+      return { ok: false, reason: 'smartrecruiters_host' };
+    }
+    if (parsed.search || parsed.hash) return { ok: false, reason: 'smartrecruiters_url_shape' };
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    if (segments.length === 0 || !SAFE_SMARTRECRUITERS_TENANT.test(segments[0])) {
+      return { ok: false, reason: 'smartrecruiters_path' };
+    }
+    if (segments[0].toLowerCase() !== tenant.toLowerCase()) {
+      return { ok: false, reason: 'tenant_url_mismatch' };
+    }
+    tenant = segments[0];
+  }
+  const item = {
+    tenant,
+    careersUrl: `https://careers.smartrecruiters.com/${tenant}`,
+  };
+  if (input.name) item.name = input.name;
+  return { ok: true, reason: null, item };
+}
+
+function normalizeSoftgardenItem(value) {
+  const input = slugInput(value);
+  if (!input) return { ok: false, reason: 'not_string_or_object' };
+  const validated = validateCatalogHostLabel(input.tenant);
+  if (!validated.ok) return validated;
+  const tenant = validated.value.toLowerCase();
+  const rawUrl = input.sourceUrl || input.careersUrl;
+  if (rawUrl) {
+    const result = parsePublicCatalogUrl(rawUrl, 'Softgarden catalog URL');
+    if (!result.ok) return result;
+    const parsed = result.parsed;
+    const hostname = parsed.hostname.toLowerCase();
+    const sourceMatch = hostname.match(/^([a-z0-9][a-z0-9-]*)\.career\.softgarden\.de$/);
+    const providerMatch = hostname.match(/^([a-z0-9][a-z0-9-]*)\.softgarden\.io$/);
+    const urlTenant = sourceMatch?.[1] ?? providerMatch?.[1] ?? null;
+    if (!urlTenant) return { ok: false, reason: 'softgarden_host' };
+    if (urlTenant !== tenant) return { ok: false, reason: 'tenant_url_mismatch' };
+    if (!['', '/'].includes(parsed.pathname) || parsed.search || parsed.hash) {
+      return { ok: false, reason: 'softgarden_url_shape' };
+    }
+  }
+  const item = { tenant, careersUrl: `https://${tenant}.softgarden.io/` };
+  if (input.name) item.name = input.name;
+  return { ok: true, reason: null, item };
+}
+
+function normalizeSuccessFactorsItem(value) {
+  let rawUrl;
+  let name = null;
+  let explicitTenant = '';
+  if (typeof value === 'string') {
+    rawUrl = value;
+  } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+    rawUrl = value.url ?? value.careersUrl;
+    name = normalizeOptionalName(value.name);
+    explicitTenant = normalizeString(value.tenant);
+  } else {
+    return { ok: false, reason: 'not_string_or_object' };
+  }
+  const result = parsePublicCatalogUrl(rawUrl, 'SuccessFactors catalog URL');
+  if (!result.ok) return result;
+  const parsed = result.parsed;
+  // The provider canonicalizer intentionally discards search/hash. Importing
+  // query-qualified tenants would therefore merge distinct upstream companies.
+  if (parsed.search || parsed.hash) return { ok: false, reason: 'query_identity_unsupported' };
+  const normalized = withoutSearchOrHash(parsed);
+  const path = normalized.pathname
+    .replace(/\/(?:search|tile-search-results|services\/recruiting\/v1\/jobs)\/?$/i, '')
+    .replace(/\/+$/, '');
+  const tenant = `${normalized.hostname.toLowerCase()}${path}`;
+  if (tenant.length > 600) return { ok: false, reason: 'tenant_too_long' };
+  if (explicitTenant && explicitTenant !== tenant) {
+    return { ok: false, reason: 'tenant_url_mismatch' };
+  }
+  const item = {
+    tenant,
+    careersUrl: `${normalized.origin}${path}`,
+  };
+  if (name) item.name = name;
+  return { ok: true, reason: null, item };
 }
 
 export function normalizeCatalogItem(provider, value) {
   requireProvider(provider);
   if (provider === 'workday') return validateWorkdayCatalogItem(value);
+  if (provider === 'personio') return normalizePersonioItem(value);
+  if (provider === 'smartrecruiters') return normalizeSmartRecruitersItem(value);
+  if (provider === 'softgarden') return normalizeSoftgardenItem(value);
+  if (provider === 'successfactors') return normalizeSuccessFactorsItem(value);
   const input = slugInput(value);
   if (!input) return { ok: false, reason: 'not_string_or_object' };
   const validated = validateCatalogSlug(provider, input.tenant);
@@ -250,19 +469,47 @@ export function catalogItemToPortalEntry(provider, item) {
   };
 }
 
+function parseCatalogSource(provider, bytes) {
+  const format = CATALOG_SOURCES[provider]?.format ?? 'json';
+  if (format === 'json') {
+    let parsed;
+    try {
+      parsed = JSON.parse(bytes.toString('utf8'));
+    } catch (error) {
+      throw new Error(`${provider} catalog is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (!Array.isArray(parsed)) throw new Error(`${provider} catalog root must be a JSON array`);
+    return parsed;
+  }
+  if (format === 'csv') {
+    let records;
+    try {
+      records = parseStrictCsv(bytes.toString('utf8'), {
+        expectedHeader: ['name', 'slug', 'url'],
+        label: `${provider} catalog CSV`,
+      });
+    } catch (error) {
+      throw new Error(`${provider} catalog is not valid CSV: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return records.slice(1).map(([name, slug, url], index) => {
+      const row = { name, slug, url };
+      Object.defineProperty(row, '_csvColumnCount', {
+        value: records[index + 1].length,
+        enumerable: false,
+      });
+      return row;
+    });
+  }
+  throw new Error(`${provider} catalog source format is unsupported: ${format}`);
+}
+
 export function buildProviderCatalogEnvelope(provider, rawBytes, {
   fetchedAt = new Date(),
   sourceUrl = CATALOG_SOURCES[provider]?.url,
 } = {}) {
   requireProvider(provider);
   const bytes = Buffer.isBuffer(rawBytes) ? rawBytes : Buffer.from(String(rawBytes), 'utf8');
-  let parsed;
-  try {
-    parsed = JSON.parse(bytes.toString('utf8'));
-  } catch (error) {
-    throw new Error(`${provider} catalog is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
-  }
-  if (!Array.isArray(parsed)) throw new Error(`${provider} catalog root must be a JSON array`);
+  const parsed = parseCatalogSource(provider, bytes);
   const date = fetchedAt instanceof Date ? fetchedAt : new Date(fetchedAt);
   if (Number.isNaN(date.getTime())) throw new Error(`${provider} catalog fetchedAt must be a valid date`);
 
@@ -271,6 +518,10 @@ export function buildProviderCatalogEnvelope(provider, rawBytes, {
   const rejections = [];
   let duplicateItemCount = 0;
   for (let index = 0; index < parsed.length; index += 1) {
+    if (parsed[index]?._csvColumnCount != null && parsed[index]._csvColumnCount !== 3) {
+      rejections.push({ index, reason: 'csv_column_count', valuePreview: previewValue(parsed[index]) });
+      continue;
+    }
     const result = normalizeCatalogItem(provider, parsed[index]);
     if (!result.ok) {
       rejections.push({ index, reason: result.reason, valuePreview: previewValue(parsed[index]) });
@@ -303,6 +554,40 @@ export function buildProviderCatalogEnvelope(provider, rawBytes, {
     rejections,
     items,
   };
+}
+
+export function validateCatalogSourceQuality(provider, catalog, quality = CATALOG_SOURCE_QUALITY[provider]) {
+  requireProvider(provider);
+  if (quality == null || quality === false) return catalog;
+  const minimumSourceItems = quality.minimumSourceItems;
+  const minimumAcceptanceRatio = quality.minimumAcceptanceRatio;
+  if (!Number.isInteger(minimumSourceItems) || minimumSourceItems <= 0) {
+    throw new Error(`${provider} catalog quality minimumSourceItems must be a positive integer`);
+  }
+  if (
+    typeof minimumAcceptanceRatio !== 'number'
+    || !Number.isFinite(minimumAcceptanceRatio)
+    || minimumAcceptanceRatio <= 0
+    || minimumAcceptanceRatio > 1
+  ) {
+    throw new Error(`${provider} catalog quality minimumAcceptanceRatio must be in (0, 1]`);
+  }
+  if (catalog.sourceItemCount < minimumSourceItems) {
+    throw new Error(
+      `${provider} catalog source quality check failed: ${catalog.sourceItemCount} rows `
+      + `is below minimum ${minimumSourceItems}`,
+    );
+  }
+  const acceptanceRatio = catalog.sourceItemCount === 0
+    ? 0
+    : catalog.acceptedItemCount / catalog.sourceItemCount;
+  if (acceptanceRatio < minimumAcceptanceRatio) {
+    throw new Error(
+      `${provider} catalog source quality check failed: acceptance ratio `
+      + `${acceptanceRatio.toFixed(4)} is below minimum ${minimumAcceptanceRatio.toFixed(4)}`,
+    );
+  }
+  return catalog;
 }
 
 function legacyAshbyToV2(value) {

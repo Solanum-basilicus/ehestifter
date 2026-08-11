@@ -9,6 +9,10 @@ import ashby from '../src/providers/ashby.mjs';
 import greenhouse from '../src/providers/greenhouse.mjs';
 import lever from '../src/providers/lever.mjs';
 import workday from '../src/providers/workday.mjs';
+import personio from '../src/providers/personio.mjs';
+import smartrecruiters from '../src/providers/smartrecruiters.mjs';
+import softgarden from '../src/providers/softgarden.mjs';
+import successfactors from '../src/providers/successfactors.mjs';
 
 const NOW = new Date('2026-07-24T12:00:00.000Z');
 
@@ -25,6 +29,14 @@ function allCatalogs() {
     lever: catalog('lever', ['lv-a', 'lv-b', 'lv-c']),
     workday: catalog('workday', ['wdco|wd1|External', 'other|wd3|jobs', 'third|wd5|careers']),
   };
+}
+
+function csvCatalog(provider, rows) {
+  return buildProviderCatalogEnvelope(
+    provider,
+    Buffer.from(`name,slug,url\n${rows.join('\n')}\n`),
+    { fetchedAt: new Date('2026-07-24T00:00:00.000Z') },
+  );
 }
 
 function policy(budgets = { ashby: 1, greenhouse: 2, lever: 2, workday: 1 }) {
@@ -72,8 +84,65 @@ test('offline planner applies independent provider budgets', () => {
     greenhouse: 2,
     lever: 2,
     workday: 1,
+    personio: 0,
+    smartrecruiters: 0,
+    softgarden: 0,
+    successfactors: 0,
   });
   assert.equal(result.plan.counts.normal, 6);
+});
+
+test('new catalog providers enter the existing planner path when explicitly enabled', () => {
+  const discoveryPolicy = parseDiscoveryPolicy({
+    schema_version: 1,
+    providers: {
+      ashby: { catalog_enabled: false },
+      personio: { catalog_enabled: true, max_normal_targets_per_run: 1, target_full_sweep_days: 3 },
+      smartrecruiters: { catalog_enabled: true, max_normal_targets_per_run: 1, target_full_sweep_days: 3 },
+      softgarden: { catalog_enabled: true, max_normal_targets_per_run: 1, target_full_sweep_days: 3 },
+      successfactors: { catalog_enabled: true, max_normal_targets_per_run: 1, target_full_sweep_days: 3 },
+    },
+  });
+  const result = buildTargetPlan({
+    portalConfig: { tracked_companies: [] },
+    companyOverrides: { schema_version: 1, priority: {}, disabled: {} },
+    discoveryPolicy,
+    catalogs: {
+      personio: csvCatalog('personio', ['Acme,acme,https://acme.jobs.personio.com']),
+      smartrecruiters: csvCatalog(
+        'smartrecruiters',
+        ['IOTA,iota,https://careers.smartrecruiters.com/iota'],
+      ),
+      softgarden: csvCatalog(
+        'softgarden',
+        ['ABEKING,abeking,https://abeking.career.softgarden.de/'],
+      ),
+      successfactors: csvCatalog(
+        'successfactors',
+        ['Company,careers,https://careers.company.example'],
+      ),
+    },
+    tenantState: createEmptyTenantState(NOW),
+    providers: new Map([
+      ['ashby', ashby],
+      ['personio', personio],
+      ['smartrecruiters', smartrecruiters],
+      ['softgarden', softgarden],
+      ['successfactors', successfactors],
+    ]),
+    mode: 'offline',
+    generatedAt: NOW,
+    catalogTargetLimit: 0,
+  });
+  assert.deepEqual(
+    result.plan.targets.map(({ provider, tenant, targetClass }) => ({ provider, tenant, targetClass })),
+    [
+      { provider: 'personio', tenant: 'acme', targetClass: 'normal' },
+      { provider: 'smartrecruiters', tenant: 'iota', targetClass: 'normal' },
+      { provider: 'softgarden', tenant: 'abeking', targetClass: 'normal' },
+      { provider: 'successfactors', tenant: 'careers.company.example', targetClass: 'normal' },
+    ],
+  );
 });
 
 test('deterministic round-robin allocation prevents large catalogs starving smaller providers', () => {

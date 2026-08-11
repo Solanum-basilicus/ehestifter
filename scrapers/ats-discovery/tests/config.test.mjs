@@ -92,6 +92,16 @@ test('loadRuntimeConfig returns Phase 3 paths and derived state path', async () 
     assert.equal(config.paths.discoveryPolicy, path.join(directory, 'discovery-policy.yml'));
     assert.equal(config.paths.catalogs, path.join(directory, 'catalogs'));
     assert.equal(config.catalogs.ashbyPath, path.join(directory, 'catalogs', 'ashby.json'));
+    assert.deepEqual(Object.keys(config.catalogs.paths), [
+      'ashby',
+      'greenhouse',
+      'lever',
+      'workday',
+      'personio',
+      'smartrecruiters',
+      'softgarden',
+      'successfactors',
+    ]);
     assert.equal(config.paths.state, path.join(directory, 'state'));
     assert.equal(config.state.tenantStatePath, path.join(directory, 'state', 'tenant-state.json'));
     assert.equal(config.scan.providerConcurrency, 3);

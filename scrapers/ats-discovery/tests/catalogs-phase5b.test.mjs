@@ -10,7 +10,16 @@ import {
 } from '../src/catalogs/provider-catalog.mjs';
 
 test('Phase 5B catalog providers are explicit and bounded', () => {
-  assert.deepEqual(CATALOG_PROVIDER_IDS, ['ashby', 'greenhouse', 'lever', 'workday']);
+  assert.deepEqual(CATALOG_PROVIDER_IDS, [
+    'ashby',
+    'greenhouse',
+    'lever',
+    'workday',
+    'personio',
+    'smartrecruiters',
+    'softgarden',
+    'successfactors',
+  ]);
 });
 
 test('Greenhouse and Lever accept compact slugs and richer objects', () => {

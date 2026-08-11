@@ -1,3 +1,4 @@
+import { CATALOG_PROVIDER_IDS } from './catalogs/provider-catalog.mjs';
 import { getProviderPolicy } from './policy/discovery-policy.mjs';
 import { isDurableProviderResult, isTransientProviderResult } from './scan/provider-errors.mjs';
 
@@ -233,8 +234,7 @@ export function buildRunSummary({
     plannedHealthPartitions: targetPlan.healthPartitions,
     policy,
   });
-  const catalogProviders = ['ashby', 'greenhouse', 'lever', 'workday'];
-  const catalogMetrics = Object.fromEntries(catalogProviders.map((provider) => {
+  const catalogMetrics = Object.fromEntries(CATALOG_PROVIDER_IDS.map((provider) => {
     const metadata = targetPlan.catalogs?.[provider] ?? null;
     const providerEvaluated = catalogEvaluated.filter(
       (job) => job.sourceProvider === provider,

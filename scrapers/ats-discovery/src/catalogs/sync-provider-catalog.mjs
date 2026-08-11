@@ -1,7 +1,9 @@
 import {
   CATALOG_PROVIDER_IDS,
+  CATALOG_SOURCE_QUALITY,
   CATALOG_SOURCES,
   buildProviderCatalogEnvelope,
+  validateCatalogSourceQuality,
 } from './provider-catalog.mjs';
 import { writeJsonAtomic } from '../io/atomic-json.mjs';
 
@@ -17,6 +19,7 @@ export async function syncProviderCatalog(provider, {
   now = () => new Date(),
   timeoutMs = 30_000,
   maxBytes = 20 * 1024 * 1024,
+  sourceQuality = CATALOG_SOURCE_QUALITY[provider],
   writeCatalog = writeJsonAtomic,
 } = {}) {
   if (!CATALOG_PROVIDER_IDS.includes(provider)) throw new Error(`Unsupported catalog provider: ${provider}`);
@@ -43,8 +46,10 @@ export async function syncProviderCatalog(provider, {
     const response = await fetchImpl(sourceUrl, {
       signal: controller.signal,
       headers: {
-        accept: 'application/json',
-        'user-agent': 'Ehestifter-ATS-Discovery/phase-5b',
+        accept: CATALOG_SOURCES[provider]?.format === 'csv'
+          ? 'text/csv,text/plain;q=0.9'
+          : 'application/json',
+        'user-agent': 'Ehestifter-ATS-Discovery/catalog-sync',
       },
       redirect: 'error',
     });
@@ -59,6 +64,7 @@ export async function syncProviderCatalog(provider, {
     const bytes = Buffer.from(await response.arrayBuffer());
     if (bytes.length > maxBytes) throw new Error(`${provider} catalog exceeds maximum size of ${maxBytes} bytes`);
     const catalog = buildProviderCatalogEnvelope(provider, bytes, { fetchedAt: now(), sourceUrl });
+    validateCatalogSourceQuality(provider, catalog, sourceQuality);
     await writeCatalog(outputPath, catalog);
     return catalog;
   } finally {

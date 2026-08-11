@@ -2,6 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { parseArgs, usageText } from '../src/cli-args.mjs';
+import { CATALOG_PROVIDER_IDS } from '../src/catalogs/provider-catalog.mjs';
+
+const catalogUsage = new RegExp(
+  `Expected "catalog sync ${[...CATALOG_PROVIDER_IDS, 'all'].join('\\|')}"`,
+);
 
 test('parses catalog sync ashby independently from scan commands', () => {
   assert.deepEqual(parseArgs(['catalog', 'sync', 'ashby']), {
@@ -11,18 +16,18 @@ test('parses catalog sync ashby independently from scan commands', () => {
 });
 
 test('parses all supported catalog providers and rejects unsupported commands', () => {
-  for (const provider of ['greenhouse', 'lever', 'workday', 'all']) {
+  for (const provider of [...CATALOG_PROVIDER_IDS.filter((item) => item !== 'ashby'), 'all']) {
     assert.deepEqual(parseArgs(['catalog', 'sync', provider]), {
       command: 'catalog-sync', provider,
     });
   }
   assert.throws(
     () => parseArgs(['catalog', 'refresh', 'ashby']),
-    /Expected "catalog sync ashby\|greenhouse\|lever\|workday\|all"/g,
+    catalogUsage,
   );
   assert.throws(
     () => parseArgs(['catalog', 'sync', 'ashby', '--offline']),
-    /Expected "catalog sync ashby\|greenhouse\|lever\|workday\|all"/g,
+    catalogUsage,
   );
 });
 

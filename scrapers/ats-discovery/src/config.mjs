@@ -1,6 +1,7 @@
 import { constants as fsConstants } from 'node:fs';
 import { access, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { CATALOG_PROVIDER_IDS } from './catalogs/provider-catalog.mjs';
 
 function requireObject(value, name) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -166,7 +167,7 @@ export async function loadRuntimeConfig({
     catalogs: {
       directory: catalogsPath,
       paths: Object.fromEntries(
-        ['ashby', 'greenhouse', 'lever', 'workday']
+        CATALOG_PROVIDER_IDS
           .map((provider) => [provider, path.join(catalogsPath, `${provider}.json`)]),
       ),
       // Compatibility alias for existing callers and operator scripts.

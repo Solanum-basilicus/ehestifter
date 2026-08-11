@@ -8,6 +8,10 @@ import {
   syncAllProviderCatalogs,
   syncProviderCatalog,
 } from '../src/catalogs/sync-provider-catalog.mjs';
+import {
+  CATALOG_PROVIDER_IDS,
+  CATALOG_SOURCES,
+} from '../src/catalogs/provider-catalog.mjs';
 
 function response(body) {
   const bytes = Buffer.from(body);
@@ -48,19 +52,24 @@ test('catalog sync all uses provider-specific source URLs and output files', asy
       greenhouse: '["celonis"]',
       lever: '["rainfocus"]',
       workday: '["tsys|wd1|TSYS"]',
+      personio: 'name,slug,url\nAcme,acme,https://acme.jobs.personio.com\n',
+      smartrecruiters: 'name,slug,url\nAcme,acme,https://careers.smartrecruiters.com/acme\n',
+      softgarden: 'name,slug,url\nAcme,acme,https://acme.career.softgarden.de/\n',
+      successfactors: 'name,slug,url\nAcme,careers,https://careers.acme.example\n',
     };
     const outputPaths = Object.fromEntries(
       Object.keys(bodies).map((provider) => [provider, path.join(directory, `${provider}.json`)]),
     );
     const results = await syncAllProviderCatalogs({
       outputPaths,
+      sourceQuality: false,
       fetchImpl: async (url) => {
-        const provider = Object.keys(bodies).find((item) => url.includes(`/${item}_companies.json`));
+        const provider = CATALOG_PROVIDER_IDS.find((item) => CATALOG_SOURCES[item].url === url);
         requested.push(provider);
         return response(bodies[provider]);
       },
     });
-    assert.deepEqual(requested, ['ashby', 'greenhouse', 'lever', 'workday']);
+    assert.deepEqual(requested, CATALOG_PROVIDER_IDS);
     assert.deepEqual(results.map((item) => item.provider), requested);
     for (const provider of requested) {
       const persisted = JSON.parse(await readFile(outputPaths[provider], 'utf8'));

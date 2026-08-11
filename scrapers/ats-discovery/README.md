@@ -44,9 +44,17 @@ Machine-managed catalogs currently exist for:
 - Ashby;
 - Greenhouse;
 - Lever;
-- Workday.
+- Workday;
+- Personio;
+- SmartRecruiters;
+- Softgarden;
+- SuccessFactors.
 
-Catalog data and operator policy remain separate. Catalog synchronizers record source provenance, fetch time, item count, and SHA-256 and use atomic replacement so a failed refresh does not destroy the previous valid catalog.
+Catalog data and operator policy remain separate. Catalog synchronizers record source provenance, fetch time, item count, rejection count, and SHA-256 and use atomic replacement so a failed refresh does not destroy the previous valid catalog. Ashby, Greenhouse, Lever, and Workday use the existing `Feashliaa/job-board-aggregator` JSON inventories. Personio, SmartRecruiters, Softgarden, and SuccessFactors use the MIT-licensed `kalil0321/ats-scrapers` CSV inventories under `ats-companies/`.
+
+The CSV ingestion boundary is strict: the header must be exactly `name,slug,url`, malformed CSV fails the refresh, provider-specific URL/tenant mismatches are rejected, and each new source has a minimum plausible row count plus a minimum normalization acceptance ratio. These are catastrophe guards for upstream truncation/schema drift, not completeness claims.
+
+SuccessFactors is intentionally URL-identified. Its upstream `slug` values are not unique across branded career domains. Rows whose identity depends on query parameters such as legacy `?company=...` RMK URLs are rejected because the current provider canonicalizer deliberately strips query parameters; importing them would merge distinct companies. The accepted catalog therefore has fewer rows than the upstream CSV until that legacy URL shape is supported explicitly.
 
 SuccessFactors has independent health partitions:
 
@@ -106,7 +114,7 @@ New imported jobs use:
 foundOn = "ats-discovery"
 ```
 
-Career-Ops remains the attributed upstream for selected provider code and design ideas. job-board-aggregator remains the attributed source/reference for selected machine-managed tenant catalogs and resilience ideas. Product renaming must not remove source repository, pinned revision, license, or Ehestifter-change notices.
+Career-Ops remains the attributed upstream for selected provider code and design ideas. job-board-aggregator remains the attributed source/reference for selected Ashby/Greenhouse/Lever/Workday catalogs and resilience ideas. `kalil0321/ats-scrapers` is the attributed source for Personio/SmartRecruiters/Softgarden/SuccessFactors tenant inventories. Product renaming must not remove source repository, recorded ref, license, or Ehestifter-change notices.
 
 The script `scripts/copy-upstream-providers.sh` is bootstrap/reproducibility tooling only. It can overwrite locally adapted provider files and must not be used as an unattended update mechanism. Review upstream changes, apply selectively, and rerun provider fixtures/canaries.
 
@@ -498,9 +506,11 @@ preceding run artifacts have been inspected.
 ./ops/scheduler/ats-ops scanner -- catalog sync all
 ```
 
-This refreshes machine-managed Ashby, Greenhouse, Lever, and Workday catalogs
-using atomic replacement. It does not scan vacancies, call Jobs, import jobs, or
-request compatibility.
+This refreshes all eight machine-managed provider catalogs using atomic
+replacement. It does not scan vacancies, call Jobs, import jobs, or request
+compatibility. Existing active discovery policy is not modified by catalog
+sync; the four newly catalog-backed providers remain catalog-disabled unless
+the operator enables them in `config/discovery-policy.yml`.
 
 `--no-progress` may be added to any scan mode when machine-readable or quiet
 output is preferable.

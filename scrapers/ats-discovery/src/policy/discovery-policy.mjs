@@ -1,6 +1,6 @@
-export const CATALOG_POLICY_PROVIDERS = Object.freeze([
-  'ashby', 'greenhouse', 'lever', 'workday',
-]);
+import { CATALOG_PROVIDER_IDS } from '../catalogs/provider-catalog.mjs';
+
+export const CATALOG_POLICY_PROVIDERS = CATALOG_PROVIDER_IDS;
 
 const DEFAULTS = Object.freeze({
   scheduling: Object.freeze({

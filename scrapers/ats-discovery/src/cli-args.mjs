@@ -1,6 +1,11 @@
+import { CATALOG_PROVIDER_IDS } from './catalogs/provider-catalog.mjs';
+
+const CATALOG_SYNC_TARGETS = Object.freeze([...CATALOG_PROVIDER_IDS, 'all']);
+const CATALOG_SYNC_USAGE = CATALOG_SYNC_TARGETS.join('|');
+
 export function usageText() {
   return `Usage:
-  node src/cli.mjs catalog sync ashby|greenhouse|lever|workday|all
+  node src/cli.mjs catalog sync ${CATALOG_SYNC_USAGE}
   node src/cli.mjs repair lever-description <lever-job-url> [--apply]
   node src/cli.mjs scan tracked --offline [--no-progress]
   node src/cli.mjs scan tracked --preflight [--catalog-targets N] [--no-progress]
@@ -34,10 +39,10 @@ export function parseArgs(argv) {
   if (command === 'catalog') {
     if (
       subject !== 'sync'
-      || !['ashby', 'greenhouse', 'lever', 'workday', 'all'].includes(providerOrValue)
+      || !CATALOG_SYNC_TARGETS.includes(providerOrValue)
       || rest.length > 0
     ) {
-      throw new Error('Expected "catalog sync ashby|greenhouse|lever|workday|all"');
+      throw new Error(`Expected "catalog sync ${CATALOG_SYNC_USAGE}"`);
     }
     return {
       command: 'catalog-sync',

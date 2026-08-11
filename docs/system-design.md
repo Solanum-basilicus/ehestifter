@@ -1535,7 +1535,24 @@ Accepted provider paths:
 - SuccessFactors RMK;
 - SuccessFactors CSB.
 
-Machine-managed catalogs exist for Ashby, Greenhouse, Lever, and Workday. Catalog artifacts record source, license, fetch time, item count, and SHA-256 and are atomically replaced only after validation. Operator priority, disabled, and provider-patch policy remains separate from machine-managed catalogs.
+Machine-managed catalogs exist for Ashby, Greenhouse, Lever, Workday, Personio,
+SmartRecruiters, Softgarden, and SuccessFactors. Ashby/Greenhouse/Lever/Workday
+consume the existing job-board-aggregator JSON inventories;
+Personio/SmartRecruiters/Softgarden/SuccessFactors consume the MIT-licensed
+`kalil0321/ats-scrapers` `ats-companies/*.csv` inventories. Catalog artifacts
+record source, license, fetch time, source/accepted/rejected/duplicate counts,
+and SHA-256 and are atomically replaced only after validation. The external CSV
+sources also have conservative minimum-row and normalization-acceptance gates
+so an upstream truncation or schema drift cannot replace a healthy snapshot.
+Operator priority, disabled, and provider-patch policy remains separate from
+machine-managed catalogs.
+
+SuccessFactors catalog identity follows the provider's branded hostname/path
+identity rather than the upstream CSV `slug`, which is not unique. Legacy RMK
+rows whose company identity exists only in a query parameter are rejected by
+catalog normalization because the current SuccessFactors provider deliberately
+drops query parameters. Supporting those rows requires an explicit provider
+identity/acquisition design; silently collapsing them is forbidden.
 
 SuccessFactors uses independent operational partitions:
 
@@ -1697,7 +1714,7 @@ Direct `docker compose run` remains possible for controlled validation but bypas
 
 ### 14.8 Attribution and maintenance
 
-Selected provider implementations are derived from pinned Career-Ops sources under their recorded license. Selected catalogs and resilience ideas are attributed to job-board-aggregator under the recorded license/non-commercial constraint.
+Selected provider implementations are derived from pinned Career-Ops sources under their recorded license. Ashby/Greenhouse/Lever/Workday catalogs and selected resilience ideas are attributed to job-board-aggregator under the recorded license/non-commercial constraint. Personio/SmartRecruiters/Softgarden/SuccessFactors catalog inventories are attributed to `kalil0321/ats-scrapers` under MIT.
 
 `scripts/copy-upstream-providers.sh` is bootstrap/reproducibility tooling only. It may overwrite adapted provider files and must not be used as an unattended update path. Upstream improvements are inspected, selectively ported, attributed, and validated through fixtures and live canaries where appropriate.
 
@@ -1708,7 +1725,7 @@ Selected provider implementations are derived from pinned Career-Ops sources und
 - Timers catch up after resume but do not wake sleeping hardware.
 - Rootless Docker needs explicit operator adaptation.
 - Scheduler timing/retry changes require unit reinstall.
-- Unsupported provider ingestion and missing tenant catalogs remain deferred issues.
+- Unsupported provider ingestion and catalog-completeness/self-maintenance remain deferred issues.
 - The local node can delay discovery until its next boot/resume; latest-slot catch-up avoids waiting a full additional day but cannot discover while powered off.
 
 ---

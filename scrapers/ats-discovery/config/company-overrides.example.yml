@@ -1,20 +1,32 @@
 schema_version: 1
 
-# Compact catalog identities may be used for Ashby, Greenhouse, and Lever.
-# Workday uses tenant|instance|site so its provider identity stays structured.
+# Compact catalog identities may be used for Ashby, Greenhouse, Lever,
+# Personio, SmartRecruiters, and Softgarden. Workday uses
+# tenant|instance|site. SuccessFactors uses the full public HTTPS careers URL
+# because branded host/path identity cannot be represented by a short slug.
 priority:
   ashby: []
   greenhouse: []
   lever: []
   workday: []
+  personio: []
+  smartrecruiters: []
+  softgarden: []
+  successfactors: []
   # Example:
   # greenhouse:
   #   - celonis
   # workday:
   #   - example|wd3|External
+  # successfactors:
+  #   - https://careers.example.com/Brand
 
 disabled:
   ashby: []
   greenhouse: []
   lever: []
   workday: []
+  personio: []
+  smartrecruiters: []
+  softgarden: []
+  successfactors: []
