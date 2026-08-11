@@ -340,6 +340,29 @@ def deduce_from_url(raw_url: str) -> dict:
             posting_company_name=posting_company_name,
         )
 
+    # SuccessFactors Career Site Builder (CSB):
+    # <tenant>.jobs.hr.cloud.sap/job/<slug>/<numeric-id>-<locale>
+    # <tenant>.jobs.hr.sapcloud.cn/job/<slug>/<numeric-id>-<locale>
+    #
+    # Only claim CSB identity when both host and path shape are recognized.
+    # Malformed/unrelated URLs deliberately continue into the existing generic
+    # corporate-site fallback below.
+    csb_suffixes = ("jobs.hr.cloud.sap", "jobs.hr.sapcloud.cn")
+    if any(host.endswith("." + suffix) for suffix in csb_suffixes):
+        parts = _path_parts(path)
+        final_segment = parts[-1] if parts else ""
+        match = re.fullmatch(r"([0-9]+)-[a-z]{2}_[A-Z]{2}", final_segment)
+        if len(parts) >= 3 and parts[-3].lower() == "job" and match:
+            tenant = host.split(".", 1)[0]
+            return _result(
+                provider="successfactors",
+                provider_tenant=host,
+                external_id=match.group(1),
+                found_on=ats_found_on(),
+                hiring_company_name=tenant or None,
+                posting_company_name=posting_company_name,
+            )
+
     # Workday:
     # tenant.wd*.myworkdayjobs.com/.../{slug_or_requisition}
     if _host_matches(host, "myworkdayjobs.com"):

@@ -76,3 +76,21 @@ def test_jobs_exists_negative(base_url, auth_headers, shared_state):
     r2 = requests.head(url, headers=auth_headers)
     print("HEAD /jobs/exists (negative) status:", r2.status_code, end=" ")
     assert r2.status_code == 404
+
+
+def test_jobs_exists_successfactors_csb_url_identity(base_url, auth_headers):
+    job_url = (
+        "https://wlgore.jobs.hr.cloud.sap/job/"
+        "Maschinen-und-Anlagenf%C3%BChrer-%28wmd%29/1910-de_DE"
+    )
+    url = f"{base_url}/api/jobs/exists?url={requests.utils.quote(job_url, safe='')}"
+
+    r = requests.get(url, headers=auth_headers)
+    print("GET /jobs/exists (SuccessFactors CSB) response:", r.text, " status:", r.status_code, end=" ")
+    assert r.status_code == 200, r.text
+
+    body = r.json()
+    assert body["provider"] == "successfactors"
+    assert body["providerTenant"] == "wlgore.jobs.hr.cloud.sap"
+    assert body["externalId"] == "1910"
+    assert body["identitySource"] == "url"

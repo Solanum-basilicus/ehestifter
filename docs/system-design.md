@@ -880,6 +880,15 @@ Create-path behavior:
   - `provider`
   - `providerTenant`
   - `externalId`
+- recognized SuccessFactors Career Site Builder URLs under
+  `*.jobs.hr.cloud.sap` and `*.jobs.hr.sapcloud.cn` with a path ending in
+  `/job/<slug>/<numeric-id>-<locale>` use:
+  - `Provider = successfactors`,
+  - `ProviderTenant = <full lower-case CSB hostname>`,
+  - `ExternalId = <numeric requisition id>`;
+- SuccessFactors CSB URLs that do not match the recognized path shape continue
+  through the existing generic corporate-site fallback rather than receiving a
+  partially inferred ATS identity;
 - defaults such as `corporate-site` are used where appropriate,
 - request is rejected with `400` if required canonical identity still cannot be resolved.
 
