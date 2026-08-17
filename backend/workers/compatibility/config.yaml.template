@@ -8,7 +8,8 @@ compatibility:
   repetition_penalty: 1.0
   max_tokens: 2000
 
-  # llama.cpp/Qwen3.5-specific request controls
+  # llama.cpp/Qwen3.5-specific request controls.
+  # The worker enforces thinking_budget_tokens with streaming reasoning control.
   enable_thinking: true
   thinking_budget_tokens: 600
   reasoning_format: "deepseek"

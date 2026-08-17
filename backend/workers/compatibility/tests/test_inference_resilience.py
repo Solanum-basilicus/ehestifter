@@ -174,6 +174,29 @@ class InferenceResilienceTests(unittest.TestCase):
         self.assertEqual(result.raw, {"ok": True})
         self.assertEqual(result.recovery_cycles, 1)
 
+    def test_unknown_request_error_is_terminal_without_outage_loop(self):
+        release = Mock()
+
+        def invoke():
+            raise requests.RequestException("bad stream protocol")
+
+        with self.assertRaises(InferenceFatal) as caught:
+            run_with_outage_recovery(
+                initial_lease_token="lease-1",
+                primary_call=invoke,
+                fallback_call=invoke,
+                release_unavailable=release,
+                reacquire_lease=lambda: "unused",
+                health_check=lambda: True,
+                retry_delays_seconds=(0, 0),
+                outage_cooldown_seconds=600,
+                sleep=lambda _: None,
+            )
+
+        self.assertEqual(caught.exception.code, "INFERENCE_REQUEST_FAILED")
+        self.assertEqual(caught.exception.attempts, 1)
+        release.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

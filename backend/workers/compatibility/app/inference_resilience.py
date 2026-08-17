@@ -4,7 +4,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable
 
-from requests import ConnectionError, HTTPError, Timeout
+from requests import ConnectionError, RequestException, Timeout
 
 # A first 400/500 may be caused by the thinking/output shape and is allowed to
 # use the existing no-thinking fallback. A repeated 400 is configuration/input
@@ -87,7 +87,7 @@ def _attempt_batch(
         call = fallback_call if used_fallback else primary_call
         try:
             return call(), attempt, used_fallback, degraded_reason
-        except (HTTPError, Timeout, ConnectionError) as exc:
+        except RequestException as exc:
             status = http_status(exc)
             temporary_kind = _temporary_kind(exc)
             first_fallback_candidate = (

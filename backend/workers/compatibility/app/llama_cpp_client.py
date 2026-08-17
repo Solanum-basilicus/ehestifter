@@ -4,7 +4,11 @@ import re
 import hashlib
 import logging
 import requests
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Iterator, Optional, Tuple
+
+
+class LlamaCppProtocolError(requests.RequestException):
+    """The llama.cpp response stream did not follow the expected protocol."""
 
 
 class LlamaCppClient:
@@ -154,6 +158,267 @@ class LlamaCppClient:
         diag["cleaned_snippet"] = clean_s[:2000]
         return None, diag
 
+    @staticmethod
+    def _iter_sse_data(response: requests.Response) -> Iterator[str]:
+        """Yield complete SSE data fields from a llama.cpp response."""
+        data_lines: list[str] = []
+
+        # Use one-byte chunks so requests does not wait for a larger buffer.
+        for raw_line in response.iter_lines(chunk_size=1, decode_unicode=True):
+            if isinstance(raw_line, bytes):
+                line = raw_line.decode("utf-8", errors="strict")
+            else:
+                line = str(raw_line)
+
+            if line == "":
+                if data_lines:
+                    yield "\n".join(data_lines)
+                    data_lines = []
+                continue
+
+            if line.startswith(":"):
+                continue
+            if line.startswith("data:"):
+                value = line[5:]
+                if value.startswith(" "):
+                    value = value[1:]
+                data_lines.append(value)
+                continue
+            if line.startswith(("event:", "id:", "retry:")):
+                continue
+
+            # Ignore extension fields. JSON data still must use the data field.
+            continue
+
+        if data_lines:
+            yield "\n".join(data_lines)
+
+    def _send_reasoning_end(self, *, completion_id: str, model: str) -> Optional[str]:
+        """Send one reasoning-end control request and return an error message."""
+        control_url = f"{self.base_url}/v1/chat/completions/control"
+        try:
+            response = self.session.post(
+                control_url,
+                json={
+                    "id": completion_id,
+                    "action": "reasoning_end",
+                    "model": model,
+                },
+                headers={"Content-Type": "application/json", "Accept": "application/json"},
+                timeout=(2, min(10, self.timeout_s)),
+            )
+            response.raise_for_status()
+            data = response.json()
+            if not isinstance(data, dict):
+                return "control response was not a JSON object"
+            if data.get("success") is not True:
+                message = data.get("message")
+                return f"control response reported failure: {message or 'no message'}"
+            return None
+        except requests.RequestException as exc:
+            return f"control request failed: {type(exc).__name__}: {exc}"
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            return f"control response was invalid: {type(exc).__name__}: {exc}"
+        except Exception as exc:
+            return f"control request failed: {type(exc).__name__}: {exc}"
+
+    def _read_budgeted_stream(
+        self,
+        *,
+        response: requests.Response,
+        model: str,
+        budget_tokens: int,
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Read one chat SSE stream and apply the reasoning budget."""
+        completion_id: Optional[str] = None
+        response_model: Optional[str] = None
+        created: Any = None
+        finish_reason: Any = None
+        usage: Any = None
+        timings: Any = None
+        content_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        final_content_started = False
+        saw_finish_reason = False
+        reasoning_control_attempted = False
+        reasoning_control_error: Optional[str] = None
+        last_predicted_n: Optional[int] = None
+
+        for event_data in self._iter_sse_data(response):
+            if event_data.strip() == "[DONE]":
+                break
+
+            try:
+                chunk = json.loads(event_data)
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise LlamaCppProtocolError(f"invalid SSE JSON: {exc}") from exc
+            if not isinstance(chunk, dict):
+                raise LlamaCppProtocolError("SSE data was not a JSON object")
+
+            chunk_id = chunk.get("id")
+            if chunk_id:
+                if completion_id is not None and chunk_id != completion_id:
+                    raise LlamaCppProtocolError("completion id changed in the SSE stream")
+                completion_id = str(chunk_id)
+
+            if chunk.get("model") is not None:
+                response_model = str(chunk.get("model"))
+            if created is None and chunk.get("created") is not None:
+                created = chunk.get("created")
+            if chunk.get("usage") is not None:
+                usage = chunk.get("usage")
+            if chunk.get("timings") is not None:
+                timings = chunk.get("timings")
+
+            choices = chunk.get("choices")
+            if not isinstance(choices, list) or not choices:
+                continue
+            choice0 = choices[0]
+            if not isinstance(choice0, dict):
+                raise LlamaCppProtocolError("SSE choice was not a JSON object")
+
+            delta = choice0.get("delta") or {}
+            if not isinstance(delta, dict):
+                raise LlamaCppProtocolError("SSE delta was not a JSON object")
+
+            reasoning_delta = delta.get("reasoning_content")
+            if reasoning_delta is not None:
+                reasoning_s = str(reasoning_delta)
+                if reasoning_s:
+                    reasoning_parts.append(reasoning_s)
+
+            content_delta = delta.get("content")
+            if content_delta is not None:
+                content_s = str(content_delta)
+                if content_s:
+                    final_content_started = True
+                    content_parts.append(content_s)
+
+            if choice0.get("finish_reason") is not None:
+                finish_reason = choice0.get("finish_reason")
+                saw_finish_reason = True
+
+            predicted_n = None
+            chunk_timings = chunk.get("timings")
+            if isinstance(chunk_timings, dict):
+                try:
+                    predicted_n = int(chunk_timings.get("predicted_n"))
+                except (TypeError, ValueError):
+                    predicted_n = None
+            if predicted_n is not None:
+                last_predicted_n = predicted_n
+
+            should_end_reasoning = (
+                not reasoning_control_attempted
+                and not final_content_started
+                and bool(reasoning_parts)
+                and completion_id is not None
+                and predicted_n is not None
+                and predicted_n >= budget_tokens
+            )
+            if should_end_reasoning:
+                reasoning_control_attempted = True
+                reasoning_control_error = self._send_reasoning_end(
+                    completion_id=completion_id,
+                    model=model,
+                )
+                if reasoning_control_error:
+                    self.log.warning(
+                        "llama.cpp reasoning control failed id=%s error=%s",
+                        completion_id,
+                        reasoning_control_error,
+                    )
+                else:
+                    self.log.info(
+                        "llama.cpp reasoning control sent id=%s predicted_n=%s budget=%s",
+                        completion_id,
+                        predicted_n,
+                        budget_tokens,
+                    )
+
+        if not saw_finish_reason:
+            raise LlamaCppProtocolError("SSE stream ended before a finish reason")
+
+        data: Dict[str, Any] = {
+            "id": completion_id,
+            "model": response_model or model,
+            "created": created,
+            "choices": [
+                {
+                    "message": {
+                        "content": "".join(content_parts),
+                        "reasoning_content": "".join(reasoning_parts),
+                    },
+                    "finish_reason": finish_reason,
+                }
+            ],
+            "usage": usage,
+            "timings": timings,
+        }
+        stream_diag: Dict[str, Any] = {
+            "reasoning_budget_tokens": budget_tokens,
+            "reasoning_control_attempted": reasoning_control_attempted,
+            "reasoning_control_error": reasoning_control_error,
+            "predicted_n": last_predicted_n,
+        }
+        return data, stream_diag
+
+    def _parse_response_data(
+        self,
+        data: Dict[str, Any],
+        *,
+        extra_diag: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        msg: Dict[str, Any] = {}
+        choices0: Dict[str, Any] = {}
+
+        try:
+            choices0 = (data.get("choices") or [{}])[0]
+            msg = (choices0.get("message", {}) or {})
+        except Exception:
+            choices0 = {}
+            msg = {}
+
+        content = msg.get("content", "")
+        reasoning_content = msg.get("reasoning_content", "")
+
+        self.log.info(
+            "llama.cpp response finish_reason=%s content_len=%s reasoning_len=%s usage=%s",
+            choices0.get("finish_reason"),
+            len(str(content or "")),
+            len(str(reasoning_content or "")),
+            data.get("usage"),
+        )
+
+        content_s = "" if content is None else str(content)
+        envelope = self._build_envelope(data, content_s)
+        envelope["__llama_cpp"]["reasoning_len"] = len(str(reasoning_content or ""))
+        envelope["__llama_cpp"]["had_reasoning_content"] = bool(reasoning_content)
+        if extra_diag:
+            envelope["__llama_cpp"].update(extra_diag)
+
+        if not content_s.strip():
+            return {
+                "__parse_error": "empty_response",
+                "__raw": content_s,
+                "__llama_cpp": envelope["__llama_cpp"],
+                "__server_debug": {
+                    "choices0": (data.get("choices") or [{}])[0],
+                },
+            }
+
+        obj, parse_diag = self._parse_json_from_content(content_s)
+        if obj is not None:
+            obj.update(envelope)
+            obj["__parse_diag"] = parse_diag
+            return obj
+
+        return {
+            "__parse_error": "json_loads_failed",
+            "__raw": content_s,
+            "__parse_diag": parse_diag,
+            **envelope,
+        }
 
     def is_healthy(self, timeout_s: int = 5) -> bool:
         """Return True only when llama.cpp reports its model ready."""
@@ -194,12 +459,17 @@ class LlamaCppClient:
             messages.append({"role": "system", "content": system_s})
         messages.append({"role": "user", "content": prompt_s})
 
+        budget_tokens = None
+        if thinking_budget_tokens is not None:
+            budget_tokens = int(thinking_budget_tokens)
+        use_reasoning_control = budget_tokens is not None and budget_tokens > 0
+
         payload: Dict[str, Any] = {
             "model": model,
             "messages": messages,
             "temperature": float(temperature),
             "top_p": float(top_p),
-            "stream": False,
+            "stream": use_reasoning_control,
         }
 
         if num_predict is not None:
@@ -222,11 +492,11 @@ class LlamaCppClient:
                 "enable_thinking": bool(enable_thinking)
             }
 
-        if thinking_budget_tokens is not None:
-            payload["thinking_budget_tokens"] = int(thinking_budget_tokens)
-
         if reasoning_format:
             payload["reasoning_format"] = reasoning_format
+
+        if use_reasoning_control:
+            payload["reasoning_control"] = True
 
         if format is not None:
             if format == "json":
@@ -264,27 +534,46 @@ class LlamaCppClient:
             except Exception as log_exc:
                 self.log.debug("llama.cpp request logging failed: %s", log_exc)
 
-        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream" if use_reasoning_control else "application/json",
+        }
 
         self.log.info(
             "llama.cpp controls model=%s max_tokens=%s thinking_budget_tokens=%s "
-            "reasoning_format=%s chat_template_kwargs=%s response_format=%s",
+            "reasoning_format=%s chat_template_kwargs=%s response_format=%s "
+            "reasoning_control=%s",
             payload.get("model"),
             payload.get("max_tokens"),
-            payload.get("thinking_budget_tokens"),
+            budget_tokens,
             payload.get("reasoning_format"),
             payload.get("chat_template_kwargs"),
             payload.get("response_format"),
+            payload.get("reasoning_control", False),
         )
 
         try:
-            resp = self.session.post(
-                url,
-                json=payload,
-                headers=headers,
-                timeout=(10, self.timeout_s),
-            )
+            request_kwargs: Dict[str, Any] = {
+                "json": payload,
+                "headers": headers,
+                "timeout": (10, self.timeout_s),
+            }
+            if use_reasoning_control:
+                request_kwargs["stream"] = True
+
+            resp = self.session.post(url, **request_kwargs)
             resp.raise_for_status()
+            if use_reasoning_control:
+                try:
+                    data, stream_diag = self._read_budgeted_stream(
+                        response=resp,
+                        model=model,
+                        budget_tokens=budget_tokens,
+                    )
+                finally:
+                    resp.close()
+                return self._parse_response_data(data, extra_diag=stream_diag)
+
             data = resp.json()
 
         except requests.HTTPError as e:
@@ -308,8 +597,17 @@ class LlamaCppClient:
             setattr(e, "_llama_cpp_body", body)
             raise
 
-        except (requests.Timeout, requests.ConnectionError):
+        except (requests.Timeout, requests.ConnectionError, LlamaCppProtocolError):
             raise
+
+        except requests.RequestException:
+            if use_reasoning_control:
+                raise
+            return {
+                "__parse_error": "request_failed: invalid HTTP response",
+                "__raw": "",
+                "__client_debug": {"request_bytes_len": len(payload_bytes)},
+            }
 
         except Exception as e:
             return {
@@ -318,51 +616,4 @@ class LlamaCppClient:
                 "__client_debug": {"request_bytes_len": len(payload_bytes)},
             }
 
-        msg: Dict[str, Any] = {}
-        choices0: Dict[str, Any] = {}
-
-        try:
-            choices0 = (data.get("choices") or [{}])[0]
-            msg = (choices0.get("message", {}) or {})
-        except Exception:
-            choices0 = {}
-            msg = {}
-
-        content = msg.get("content", "")
-        reasoning_content = msg.get("reasoning_content", "")
-
-        self.log.info(
-            "llama.cpp response finish_reason=%s content_len=%s reasoning_len=%s usage=%s",
-            choices0.get("finish_reason"),
-            len(str(content or "")),
-            len(str(reasoning_content or "")),
-            data.get("usage"),
-        )
-
-        content_s = "" if content is None else str(content)
-        envelope = self._build_envelope(data, content_s)
-        envelope["__llama_cpp"]["reasoning_len"] = len(str(reasoning_content or ""))
-        envelope["__llama_cpp"]["had_reasoning_content"] = bool(reasoning_content)
-
-        if not content_s.strip():
-            return {
-                "__parse_error": "empty_response",
-                "__raw": content_s,
-                "__llama_cpp": envelope["__llama_cpp"],
-                "__server_debug": {
-                    "choices0": (data.get("choices") or [{}])[0],
-                },
-            }
-
-        obj, parse_diag = self._parse_json_from_content(content_s)
-        if obj is not None:
-            obj.update(envelope)
-            obj["__parse_diag"] = parse_diag
-            return obj
-
-        return {
-            "__parse_error": "json_loads_failed",
-            "__raw": content_s,
-            "__parse_diag": parse_diag,
-            **envelope,
-        }
+        return self._parse_response_data(data)

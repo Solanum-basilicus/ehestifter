@@ -29,7 +29,5 @@ services:
       --threads 8
       --parallel 1
       --reasoning-format none
-      --reasoning-budget 6000
-      --reasoning-budget-message "... reasoning budget exceeded, now answer with the final JSON only."
 
     restart: unless-stopped
