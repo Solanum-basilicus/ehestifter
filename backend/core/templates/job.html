@@ -26,18 +26,112 @@
   /* two-column layout for status + actions block */
   .row-actions { display:grid; grid-template-columns: 1fr; gap:12px; } @media (min-width: 900px){ .row-actions { grid-template-columns: 1fr 280px; } }
   .btn[aria-disabled="false"] { cursor:pointer; opacity:1; }
+  /*
+   * Keep the current status visually dominant.
+   * Status transition controls are secondary actions.
+   */
+  .status-line {
+    display:flex;
+    align-items:center;
+    flex-wrap:wrap;
+    gap:6px;
+    min-width:0;
+  }
+
+  .status-label {
+    font-weight:600;
+  }
+
+  .status-private {
+    margin-left:2px;
+    color:#6b7280;
+    font-size:11px;
+    font-weight:400;
+    white-space:nowrap;
+  }
+
+  .status-changed-at {
+    color:#6b7280;
+    font-size:12px;
+    white-space:nowrap;
+  }
+
+  .status-change-actions {
+    display:inline-flex;
+    align-items:center;
+    flex-wrap:wrap;
+    gap:8px;
+    margin-left:4px;
+    padding-left:10px;
+    border-left:1px solid #e5e7eb;
+    font-size:12px;
+    font-weight:400;
+  }
+
+  .status-change-label {
+    color:#6b7280;
+    font-weight:400;
+  }
+
   .status-quick-action {
     padding:0;
     border:0;
-    border-bottom:1px dotted currentColor;
     background:transparent;
-    color:#4f46e5;
+    color:#374151;
     cursor:pointer;
     font:inherit;
+    font-weight:400;
+    text-decoration:underline;
+    text-decoration-style:dotted;
+    text-decoration-color:#9ca3af;
+    text-underline-offset:3px;
   }
-  .status-quick-action:hover:not(:disabled) { border-bottom-style:solid; }
-  .status-quick-action:focus-visible { outline:2px solid currentColor; outline-offset:2px; }
-  .status-quick-action:disabled { cursor:not-allowed; opacity:.5; }
+
+  .status-quick-action:hover:not(:disabled) {
+    color:#111827;
+    text-decoration-style:solid;
+    text-decoration-color:currentColor;
+  }
+
+  .status-quick-action:focus-visible {
+    outline:2px solid #6b7280;
+    outline-offset:2px;
+  }
+
+  .status-quick-action:disabled {
+    cursor:not-allowed;
+    opacity:.5;
+  }
+
+  .status-another-action {
+    margin-left:4px;
+    padding:2px 7px;
+    border:1px solid #d1d5db;
+    border-radius:6px;
+    background:transparent;
+    color:#4b5563;
+    cursor:pointer;
+    font:inherit;
+    font-size:12px;
+    font-weight:400;
+  }
+
+  .status-another-action:hover:not(:disabled) {
+    border-color:#9ca3af;
+    color:#111827;
+    background:#f9fafb;
+  }
+
+  .status-another-action:focus-visible {
+    outline:2px solid #6b7280;
+    outline-offset:2px;
+  }
+
+  .status-another-action:disabled {
+    cursor:not-allowed;
+    opacity:.5;
+  }
+
   .skeleton { background:linear-gradient(90deg,#f4f4f5 25%,#e5e7eb 37%,#f4f4f5 63%); background-size:400% 100%; animation:shimmer 1.2s infinite; border-radius:6px; }
   @keyframes shimmer { 0% { background-position:100% 0; } 100% { background-position:-100% 0; } }
   .prose img { max-width:100%; height:auto; border-radius:8px; }
@@ -175,59 +269,75 @@
         x-data="jobStatusComponent({ jobId: '{{ job_id }}' })"
         x-init="init()">
       
-        <!-- LEFT COLUMN: status controls -->
-        <div class="flex" style="min-width:0; flex-wrap:wrap; gap:10px; align-items:center;">
-          <!-- label styled like your section headers -->
-          <div style="font-weight:600;">This position and you:</div>
-          <span class="chip-private" style="margin-left:2px;">🔒 Only you</span>
+      <!-- Status controls -->
+      <div class="status-line">
+        <span class="status-label">Status:</span>
 
-          <!-- Keep the confirmed status text visible while a change is pending. -->
-          <span class="status-badge"
-                :data-k="pending ? 'unset' : statusKey(app.state)"
-                x-text="!loaded && pending ? 'loading…' : (app.state || 'Unset')"></span>
+        <!-- Keep the confirmed status text visible while a change is pending. -->
+        <span class="status-badge"
+              :data-k="pending ? 'unset' : statusKey(app.state)"
+              x-text="!loaded && pending ? 'loading…' : (app.state || 'Unset')"></span>
 
-          <!-- relative time, if you later surface changedAtUtc -->
-          <template x-if="app.changedAtUtc">
-            <div class="flex muted" style="font-size:14px;">
-              <span x-text="relativeFromLocal(app.changedAtUtc)"></span>
-            </div>
+        <span class="status-private"
+              title="This status is visible only to you">
+          🔒 only you
+        </span>
+
+        <template x-if="app.changedAtUtc">
+          <span class="status-changed-at"
+                x-text="relativeFromLocal(app.changedAtUtc)"></span>
+        </template>
+
+        <!-- Common transitions. Keep these visually secondary to the current status. -->
+        <div class="status-change-actions"
+             x-cloak
+             x-show="!editing && loaded"
+             role="group"
+             aria-label="Quick status changes">
+
+          <span class="status-change-label">Change to:</span>
+
+          <template x-for="quickStatus in quickActions()" :key="quickStatus">
+            <button type="button"
+                    class="status-quick-action"
+                    @click="quickSet(quickStatus)"
+                    :disabled="pending"
+                    :aria-disabled="pending ? 'true' : 'false'"
+                    :aria-label="'Change status to ' + quickStatus"
+                    x-text="quickStatus"></button>
           </template>
 
-          <!-- buttons inline next to status -->
-          <div class="flex" style="gap:.5rem;">
-            <template x-for="quickStatus in quickActions()" :key="quickStatus">
-              <button type="button"
-                      class="status-quick-action"
-                      x-cloak
-                      x-show="!editing && loaded"
-                      @click="quickSet(quickStatus)"
-                      :disabled="pending"
-                      :aria-disabled="pending ? 'true' : 'false'"
-                      x-text="quickStatus"></button>
-            </template>
-
-            <button class="btn"
-                    x-show="!editing"
-                    @click="startEditing()"
-                    :disabled="pending"
-                    :aria-disabled="pending ? 'true' : 'false'">change</button>
-
-            <button class="btn primary"
-                    x-show="editing"
-                    @click="save()"
-                    :disabled="pending"
-                    :aria-disabled="pending ? 'true' : 'false'">
-              <span x-show="!pending">save</span>
-              <span x-show="pending">saving…</span>
-            </button>
-
-            <button class="btn"
-                    x-show="editing"
-                    @click="cancelEditing()"
-                    :disabled="pending"
-                    :aria-disabled="pending ? 'true' : 'false'">cancel</button>
-          </div>
+          <button type="button"
+                  class="status-another-action"
+                  @click="startEditing()"
+                  :disabled="pending"
+                  :aria-disabled="pending ? 'true' : 'false'"
+                  aria-label="Choose another status">
+            another…
+          </button>
         </div>
+
+        <!-- Manual status editor actions. -->
+        <div class="flex"
+             x-cloak
+             x-show="editing"
+             style="gap:.5rem;">
+          <button class="btn primary"
+                  @click="save()"
+                  :disabled="pending"
+                  :aria-disabled="pending ? 'true' : 'false'">
+            <span x-show="!pending">save</span>
+            <span x-show="pending">saving…</span>
+          </button>
+
+          <button class="btn"
+                  @click="cancelEditing()"
+                  :disabled="pending"
+                  :aria-disabled="pending ? 'true' : 'false'">
+            cancel
+          </button>
+        </div>
+      </div>
 
       <!-- Editor row -->
       <div x-show="editing" style="margin-top:10px;">
