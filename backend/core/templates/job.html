@@ -26,6 +26,18 @@
   /* two-column layout for status + actions block */
   .row-actions { display:grid; grid-template-columns: 1fr; gap:12px; } @media (min-width: 900px){ .row-actions { grid-template-columns: 1fr 280px; } }
   .btn[aria-disabled="false"] { cursor:pointer; opacity:1; }
+  .status-quick-action {
+    padding:0;
+    border:0;
+    border-bottom:1px dotted currentColor;
+    background:transparent;
+    color:#4f46e5;
+    cursor:pointer;
+    font:inherit;
+  }
+  .status-quick-action:hover:not(:disabled) { border-bottom-style:solid; }
+  .status-quick-action:focus-visible { outline:2px solid currentColor; outline-offset:2px; }
+  .status-quick-action:disabled { cursor:not-allowed; opacity:.5; }
   .skeleton { background:linear-gradient(90deg,#f4f4f5 25%,#e5e7eb 37%,#f4f4f5 63%); background-size:400% 100%; animation:shimmer 1.2s infinite; border-radius:6px; }
   @keyframes shimmer { 0% { background-position:100% 0; } 100% { background-position:-100% 0; } }
   .prose img { max-width:100%; height:auto; border-radius:8px; }
@@ -169,10 +181,10 @@
           <div style="font-weight:600;">This position and you:</div>
           <span class="chip-private" style="margin-left:2px;">🔒 Only you</span>
 
-          <!-- status text (unchanged logic, no pill) -->
+          <!-- Keep the confirmed status text visible while a change is pending. -->
           <span class="status-badge"
                 :data-k="pending ? 'unset' : statusKey(app.state)"
-                x-text="pending ? 'loading…' : (app.state || 'Unset')"></span>
+                x-text="!loaded && pending ? 'loading…' : (app.state || 'Unset')"></span>
 
           <!-- relative time, if you later surface changedAtUtc -->
           <template x-if="app.changedAtUtc">
@@ -183,6 +195,17 @@
 
           <!-- buttons inline next to status -->
           <div class="flex" style="gap:.5rem;">
+            <template x-for="quickStatus in quickActions()" :key="quickStatus">
+              <button type="button"
+                      class="status-quick-action"
+                      x-cloak
+                      x-show="!editing && loaded"
+                      @click="quickSet(quickStatus)"
+                      :disabled="pending"
+                      :aria-disabled="pending ? 'true' : 'false'"
+                      x-text="quickStatus"></button>
+            </template>
+
             <button class="btn"
                     x-show="!editing"
                     @click="startEditing()"
@@ -213,13 +236,14 @@
                 x-model="selected"
                 @change="selected = $event.target.value"
                 :disabled="pending"
+                :aria-disabled="pending ? 'true' : 'false'"
                 style="min-width:260px;">
           <template x-for="opt in statusOptions" :key="opt">
             <option :value="opt" x-text="opt"></option>
           </template>
         </select>
-        <p class="muted" x-show="error" x-text="error" style="margin-top:8px; color:#a00;"></p>
       </div>
+      <p class="muted" x-show="error" x-text="error" style="margin-top:8px; color:#a00;"></p>
     </div>
 
     <!-- RIGHT COLUMN: job actions block (separate from private status area) -->
@@ -473,18 +497,26 @@
       statusOptions: window.Status.STATUS_OPTIONS,
       selected: null,
       editing: false,
-      pending: true, 
+      pending: true,
+      loaded: false,
       error: "",
 
       statusKey: window.Status.statusKey,
 
+      quickActions(){
+        return window.Status.suggestQuickActions(this.app.state || "Unset");
+      },
+
       startEditing(){
         if (this.pending) return;
+        this.error = "";
         this.editing = true;
         const next = window.Status.suggestNext(this.app.state || "Unset");
         this.selected = this.statusOptions.includes(next) ? next : this.statusOptions[0];
       },
       cancelEditing(){
+        if (this.pending) return;
+        this.error = "";
         this.editing = false;
         this.selected = this.statusOptions.includes(this.app.state)
           ? this.app.state
@@ -500,6 +532,7 @@
           if(!resp.ok) throw new Error('HTTP '+resp.status);
           const data = await resp.json();
           this.app.state = data.status || "Unset";
+          this.loaded = true;
           // if we’re currently editing, keep the predictive selection; otherwise, align to current
           if (!this.editing){
             this.selected = this.statusOptions.includes(this.app.state) ? this.app.state : this.statusOptions[0];
@@ -512,30 +545,43 @@
       },
 
       async save() {
+        const saved = await this.setStatus(this.selected);
+        if (saved) this.editing = false;
+      },
+
+      async quickSet(status) {
+        if (this.editing) return;
+        await this.setStatus(status);
+      },
+
+      async setStatus(status) {
         if (this.pending) return;
+        if (!this.statusOptions.includes(status)) {
+          this.error = "Could not set status - invalid status.";
+          return false;
+        }
+
         this.pending = true;
         this.error = "";
         try {
-          // Guard against Unset
-          const toSend = this.statusOptions.includes(this.selected)
-                        ? this.selected
-                        : this.statusOptions[0];
-
           const resp = await fetch(`/ui/jobs/${jobId}/status`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'same-origin',
-            body: JSON.stringify({ status: toSend })
+            body: JSON.stringify({ status })
           });
           if (!resp.ok) throw new Error('HTTP ' + resp.status);
           const data = await resp.json();
+          if (!data.status) throw new Error('Missing status in response');
 
-          this.app.state = data.status || toSend;
-          this.editing = false;
-          // notify parent to refresh history
+          this.app.state = data.status;
+          this.loaded = true;
+          this.selected = this.statusOptions.includes(data.status) ? data.status : this.selected;
           window.dispatchEvent(new CustomEvent('job-history-refresh', { detail: { jobId: this.jobId } }));
+          return true;
         } catch (e) {
           this.error = "Could not set status - please try again.";
+          return false;
         } finally {
           this.pending = false;
         }

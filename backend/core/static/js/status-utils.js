@@ -27,17 +27,29 @@
   function suggestNext(current){
     const s = (current || "").toLowerCase().trim();
     if (!s || s === "unset")                       return "Applied";
-    if (s === "applied")                           return "Rejected with Unfortunately";
+    if (s === "applied")                           return "Screening Booked";
     if (s === "screening booked")                  return "Screening Done";
     if (s === "screening done")                    return "HM interview Booked";
     if (s === "hm interview booked")               return "HM interview Done";
     if (s === "hm interview done")                 return "Got Offer";
-    if (s === "more interviews booked")            return "More interview Done";
+    if (s === "more interviews booked")            return "More interviews Done";
     if (s === "more interviews done")              return "Got Offer";
     if (s === "got offer")                         return "Accepted Offer";
     if (s === "accepted offer")                    return "Turned down Offer";
+    if (s === "rejected with unfortunately")        return "Ignored";
     return "Applied";
   }
 
-  w.Status = Object.freeze({ STATUS_OPTIONS, statusKey, suggestNext });
+  function suggestQuickActions(current){
+    const s = (current || "").toLowerCase().trim();
+    const primary = suggestNext(current);
+    let secondary = "Rejected with Unfortunately";
+
+    if (!s || s === "unset") secondary = "Ignored";
+    if (s === "rejected with unfortunately") secondary = "Applied";
+
+    return [primary, secondary];
+  }
+
+  w.Status = Object.freeze({ STATUS_OPTIONS, statusKey, suggestNext, suggestQuickActions });
 })(window);
