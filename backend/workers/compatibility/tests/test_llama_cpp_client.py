@@ -124,15 +124,56 @@ class LlamaCppClientTests(unittest.TestCase):
         _, kwargs = self.client.session.post.call_args
         self.assertFalse(kwargs["json"]["stream"])
         self.assertNotIn("reasoning_control", kwargs["json"])
+        self.assertNotIn("reasoning_budget_tokens", kwargs["json"])
+        self.assertNotIn("timings_per_token", kwargs["json"])
         self.assertNotIn("thinking_budget_tokens", kwargs["json"])
         self.assertNotIn("stream", kwargs)
 
-    def test_budgeted_request_sends_reasoning_end_once_and_reads_final_content(self):
+    def test_native_budget_request_does_not_use_fallback_before_margin(self):
         lines = []
         lines += sse_chunk(chat_chunk(reasoning="first ", predicted_n=599))
         lines += sse_chunk(chat_chunk(reasoning="second", predicted_n=600))
-        lines += sse_chunk(chat_chunk(content='{"score": 7}', predicted_n=603))
-        lines += sse_chunk(chat_chunk(predicted_n=604, finish_reason="stop"))
+        lines += sse_chunk(chat_chunk(content='{"score": 6}', predicted_n=604))
+        lines += sse_chunk(chat_chunk(predicted_n=605, finish_reason="stop"))
+        lines += ["data: [DONE]", ""]
+        stream_response = FakeResponse(lines=lines)
+        self.client.session.post.return_value = stream_response
+
+        result = self.generate(budget=600)
+
+        self.assertEqual(result["score"], 6)
+        self.assertEqual(self.client.session.post.call_count, 1)
+        _, kwargs = self.client.session.post.call_args
+        self.assertEqual(kwargs["json"]["reasoning_budget_tokens"], 600)
+        self.assertTrue(kwargs["json"]["reasoning_control"])
+        self.assertTrue(kwargs["json"]["timings_per_token"])
+        self.assertNotIn("thinking_budget_tokens", kwargs["json"])
+        self.assertFalse(result["__llama_cpp"]["reasoning_control_attempted"])
+        self.assertEqual(result["__llama_cpp"]["reasoning_control_fallback_tokens"], 650)
+
+    def test_native_budget_result_does_not_require_live_timings(self):
+        lines = []
+        lines += sse_chunk(chat_chunk(reasoning="short"))
+        lines += sse_chunk(chat_chunk(content='{"score": 8}'))
+        lines += sse_chunk(chat_chunk(predicted_n=630, finish_reason="stop"))
+        lines += ["data: [DONE]", ""]
+        self.client.session.post.return_value = FakeResponse(lines=lines)
+
+        result = self.generate(budget=600)
+
+        self.assertEqual(result["score"], 8)
+        self.assertEqual(self.client.session.post.call_count, 1)
+        self.assertFalse(result["__llama_cpp"]["reasoning_control_attempted"])
+        self.assertEqual(result["__llama_cpp"]["predicted_n"], 630)
+
+    def test_fallback_sends_reasoning_end_once_after_margin(self):
+        lines = []
+        lines += sse_chunk(chat_chunk(reasoning="first ", predicted_n=599))
+        lines += sse_chunk(chat_chunk(reasoning="second", predicted_n=649))
+        lines += sse_chunk(chat_chunk(reasoning="third", predicted_n=650))
+        lines += sse_chunk(chat_chunk(reasoning="fourth", predicted_n=651))
+        lines += sse_chunk(chat_chunk(content='{"score": 7}', predicted_n=653))
+        lines += sse_chunk(chat_chunk(predicted_n=654, finish_reason="stop"))
         lines += ["data: [DONE]", ""]
         stream_response = FakeResponse(lines=lines)
         control_response = FakeResponse(json_data={"success": True})
@@ -146,7 +187,9 @@ class LlamaCppClientTests(unittest.TestCase):
         second_call = self.client.session.post.call_args_list[1]
         self.assertEqual(first_call.args[0], "http://llama.test/v1/chat/completions")
         self.assertTrue(first_call.kwargs["json"]["stream"])
+        self.assertEqual(first_call.kwargs["json"]["reasoning_budget_tokens"], 600)
         self.assertTrue(first_call.kwargs["json"]["reasoning_control"])
+        self.assertTrue(first_call.kwargs["json"]["timings_per_token"])
         self.assertNotIn("thinking_budget_tokens", first_call.kwargs["json"])
         self.assertTrue(first_call.kwargs["stream"])
         self.assertEqual(
@@ -155,7 +198,11 @@ class LlamaCppClientTests(unittest.TestCase):
         )
         self.assertTrue(result["__llama_cpp"]["reasoning_control_attempted"])
         self.assertIsNone(result["__llama_cpp"]["reasoning_control_error"])
-        self.assertEqual(result["__llama_cpp"]["reasoning_len"], len("first second"))
+        self.assertEqual(
+            result["__llama_cpp"]["reasoning_len"],
+            len("first secondthirdfourth"),
+        )
+        self.assertEqual(result["__llama_cpp"]["reasoning_control_fallback_tokens"], 650)
         self.assertTrue(stream_response.closed)
         self.assertEqual(stream_response.iter_line_chunk_sizes, [1])
 
@@ -188,8 +235,9 @@ class LlamaCppClientTests(unittest.TestCase):
 
     def test_failed_control_is_visible_and_stream_continues(self):
         lines = []
-        lines += sse_chunk(chat_chunk(reasoning="long", predicted_n=600))
-        lines += sse_chunk(chat_chunk(reasoning="still thinking", predicted_n=700))
+        lines += sse_chunk(chat_chunk(reasoning="long", predicted_n=649))
+        lines += sse_chunk(chat_chunk(reasoning="still thinking", predicted_n=650))
+        lines += sse_chunk(chat_chunk(reasoning="more", predicted_n=700))
         lines += sse_chunk(chat_chunk(content='{"score": 5}', predicted_n=710))
         lines += sse_chunk(chat_chunk(predicted_n=711, finish_reason="stop"))
         lines += ["data: [DONE]", ""]

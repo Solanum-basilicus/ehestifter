@@ -7,6 +7,9 @@ import requests
 from typing import Any, Dict, Iterator, Optional, Tuple
 
 
+REASONING_CONTROL_FALLBACK_MARGIN_TOKENS = 50
+
+
 class LlamaCppProtocolError(requests.RequestException):
     """The llama.cpp response stream did not follow the expected protocol."""
 
@@ -229,7 +232,7 @@ class LlamaCppClient:
         model: str,
         budget_tokens: int,
     ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-        """Read one chat SSE stream and apply the reasoning budget."""
+        """Read one chat SSE stream and apply the reasoning control fallback."""
         completion_id: Optional[str] = None
         response_model: Optional[str] = None
         created: Any = None
@@ -243,6 +246,7 @@ class LlamaCppClient:
         reasoning_control_attempted = False
         reasoning_control_error: Optional[str] = None
         last_predicted_n: Optional[int] = None
+        fallback_tokens = budget_tokens + REASONING_CONTROL_FALLBACK_MARGIN_TOKENS
 
         for event_data in self._iter_sse_data(response):
             if event_data.strip() == "[DONE]":
@@ -269,6 +273,16 @@ class LlamaCppClient:
                 usage = chunk.get("usage")
             if chunk.get("timings") is not None:
                 timings = chunk.get("timings")
+
+            predicted_n = None
+            chunk_timings = chunk.get("timings")
+            if isinstance(chunk_timings, dict):
+                try:
+                    predicted_n = int(chunk_timings.get("predicted_n"))
+                except (TypeError, ValueError):
+                    predicted_n = None
+            if predicted_n is not None:
+                last_predicted_n = predicted_n
 
             choices = chunk.get("choices")
             if not isinstance(choices, list) or not choices:
@@ -298,23 +312,13 @@ class LlamaCppClient:
                 finish_reason = choice0.get("finish_reason")
                 saw_finish_reason = True
 
-            predicted_n = None
-            chunk_timings = chunk.get("timings")
-            if isinstance(chunk_timings, dict):
-                try:
-                    predicted_n = int(chunk_timings.get("predicted_n"))
-                except (TypeError, ValueError):
-                    predicted_n = None
-            if predicted_n is not None:
-                last_predicted_n = predicted_n
-
             should_end_reasoning = (
                 not reasoning_control_attempted
                 and not final_content_started
                 and bool(reasoning_parts)
                 and completion_id is not None
                 and predicted_n is not None
-                and predicted_n >= budget_tokens
+                and predicted_n >= fallback_tokens
             )
             if should_end_reasoning:
                 reasoning_control_attempted = True
@@ -330,10 +334,12 @@ class LlamaCppClient:
                     )
                 else:
                     self.log.info(
-                        "llama.cpp reasoning control sent id=%s predicted_n=%s budget=%s",
+                        "llama.cpp reasoning fallback sent id=%s predicted_n=%s "
+                        "budget=%s fallback=%s",
                         completion_id,
                         predicted_n,
                         budget_tokens,
+                        fallback_tokens,
                     )
 
         if not saw_finish_reason:
@@ -357,6 +363,7 @@ class LlamaCppClient:
         }
         stream_diag: Dict[str, Any] = {
             "reasoning_budget_tokens": budget_tokens,
+            "reasoning_control_fallback_tokens": fallback_tokens,
             "reasoning_control_attempted": reasoning_control_attempted,
             "reasoning_control_error": reasoning_control_error,
             "predicted_n": last_predicted_n,
@@ -462,14 +469,14 @@ class LlamaCppClient:
         budget_tokens = None
         if thinking_budget_tokens is not None:
             budget_tokens = int(thinking_budget_tokens)
-        use_reasoning_control = budget_tokens is not None and budget_tokens > 0
+        use_reasoning_budget = budget_tokens is not None and budget_tokens > 0
 
         payload: Dict[str, Any] = {
             "model": model,
             "messages": messages,
             "temperature": float(temperature),
             "top_p": float(top_p),
-            "stream": use_reasoning_control,
+            "stream": use_reasoning_budget,
         }
 
         if num_predict is not None:
@@ -495,8 +502,12 @@ class LlamaCppClient:
         if reasoning_format:
             payload["reasoning_format"] = reasoning_format
 
-        if use_reasoning_control:
+        if use_reasoning_budget:
+            # Use llama.cpp native per-request enforcement first. Keep streaming
+            # control as a guard if the native reasoning budget does not stop.
+            payload["reasoning_budget_tokens"] = budget_tokens
             payload["reasoning_control"] = True
+            payload["timings_per_token"] = True
 
         if format is not None:
             if format == "json":
@@ -536,20 +547,26 @@ class LlamaCppClient:
 
         headers = {
             "Content-Type": "application/json",
-            "Accept": "text/event-stream" if use_reasoning_control else "application/json",
+            "Accept": "text/event-stream" if use_reasoning_budget else "application/json",
         }
 
         self.log.info(
             "llama.cpp controls model=%s max_tokens=%s thinking_budget_tokens=%s "
             "reasoning_format=%s chat_template_kwargs=%s response_format=%s "
-            "reasoning_control=%s",
+            "reasoning_budget_tokens=%s reasoning_control=%s fallback_tokens=%s",
             payload.get("model"),
             payload.get("max_tokens"),
             budget_tokens,
             payload.get("reasoning_format"),
             payload.get("chat_template_kwargs"),
             payload.get("response_format"),
+            payload.get("reasoning_budget_tokens"),
             payload.get("reasoning_control", False),
+            (
+                budget_tokens + REASONING_CONTROL_FALLBACK_MARGIN_TOKENS
+                if use_reasoning_budget
+                else None
+            ),
         )
 
         try:
@@ -558,12 +575,12 @@ class LlamaCppClient:
                 "headers": headers,
                 "timeout": (10, self.timeout_s),
             }
-            if use_reasoning_control:
+            if use_reasoning_budget:
                 request_kwargs["stream"] = True
 
             resp = self.session.post(url, **request_kwargs)
             resp.raise_for_status()
-            if use_reasoning_control:
+            if use_reasoning_budget:
                 try:
                     data, stream_diag = self._read_budgeted_stream(
                         response=resp,
@@ -601,7 +618,7 @@ class LlamaCppClient:
             raise
 
         except requests.RequestException:
-            if use_reasoning_control:
+            if use_reasoning_budget:
                 raise
             return {
                 "__parse_error": "request_failed: invalid HTTP response",

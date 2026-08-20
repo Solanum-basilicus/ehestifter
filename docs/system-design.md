@@ -395,14 +395,16 @@ Owns:
 - extracting worker input payload,
 - building prompt from job snapshot and CV text,
 - calling llama.cpp,
-- enforcing its per-request reasoning budget through llama.cpp streaming control,
+- enforcing its per-request reasoning budget through llama.cpp,
 - normalizing result into score and summary,
 - returning result to Gateway.
 
 Inference rules:
-- `thinking_budget_tokens` is worker policy. It is not a llama.cpp request field.
-- A budgeted request uses streaming chat completion with `reasoning_control` enabled.
-- The worker sends one `reasoning_end` control action when the reasoning budget is reached.
+- `thinking_budget_tokens` is the worker policy name.
+- The llama.cpp client sends this value as `reasoning_budget_tokens`.
+- A budgeted request also enables streaming `reasoning_control` and per-token timings.
+- Native llama.cpp budget enforcement is the primary limit.
+- If reasoning is still active when the cumulative generated token count reaches the configured budget plus 50, the worker sends one `reasoning_end` control action as a fallback.
 - The worker parses structured output only from final `content`, not from `reasoning_content`.
 - `max_tokens` remains the independent hard generation limit.
 - The shared llama.cpp server must not use a compatibility-specific global reasoning budget.
