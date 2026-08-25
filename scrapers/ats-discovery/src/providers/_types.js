@@ -126,6 +126,11 @@
  * @property {((entry: PortalEntry) => (DetectHit | null))} [detect]           Optional auto-detection.
  * @property {((entry: PortalEntry) => (string | null))} [tenant]              Optional provider-owned source identity.
  * @property {((entry: PortalEntry) => (string | null))} [sourceOrigin]         Optional trusted acquisition origin.
+ * @property {{importReady?: boolean, listDescription?: boolean, detail?: boolean, providerDateFilter?: boolean, explicitIdentityPreflight?: boolean}} [capabilities]
+ *                                                                            explicitIdentityPreflight is for sources
+ *                                                                            whose public job URL cannot carry full
+ *                                                                            provider identity.
+ * @property {{repository?: string, file?: string, ref?: string, license?: string}} [source] Optional upstream attribution.
  * @property {(entry: PortalEntry, ctx: Context) => Promise<Job[]>} fetch      Required.
  */
 

@@ -70,6 +70,17 @@ export function candidateFromJob(job, target, upstreamRef) {
     ? job.description.trim()
     : '';
 
+  const providerSource = target._provider?.source;
+  const explicitIdentity = target._provider?.capabilities?.explicitIdentityPreflight === true
+    && job.id != null
+    && String(job.id).trim() !== ''
+    ? {
+      provider: target.provider,
+      providerTenant: target.tenant,
+      externalId: String(job.id).trim(),
+    }
+    : null;
+
   return {
     schemaVersion: 1,
     sourceMode: target.targetClass === 'normal' ? 'catalog' : 'priority',
@@ -91,11 +102,14 @@ export function candidateFromJob(job, target, upstreamRef) {
     postedAtUtc,
     salary: job.salary ?? null,
     canonicalIdentity: null,
+    explicitIdentity,
     existingJobId: null,
     preflight: null,
     provenance: {
-      derivedFrom: 'santifer/career-ops',
-      upstreamRef,
+      derivedFrom: providerSource?.repository ?? 'santifer/career-ops',
+      upstreamRef: providerSource?.repository === 'santifer/career-ops'
+        ? upstreamRef
+        : null,
       providerNativeId: job.id != null ? String(job.id) : null,
       sourceOrigin: target.sourceOrigin || sourceOrigin(target.careers_url),
       providerImplementation: providerImplementationRef(target._provider),

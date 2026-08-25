@@ -377,6 +377,20 @@ def deduce_from_url(raw_url: str) -> dict:
             posting_company_name=posting_company_name,
         )
 
+    # iCIMS:
+    # careers-tenant.icims.com/jobs/{id}/{slug}/job
+    if _host_matches(host, "icims.com"):
+        external_id = _first_after(path, "jobs")
+        if host not in {"icims.com", "www.icims.com"} and external_id.isdigit():
+            return _result(
+                provider="icims",
+                provider_tenant=host,
+                external_id=external_id,
+                found_on=ats_found_on(),
+                hiring_company_name=host.split(".")[0] or None,
+                posting_company_name=posting_company_name,
+            )
+
     # Personio:
     if _host_matches(host, "jobs.personio.de") or _host_matches(host, "jobs.personio.com"):
         tenant = host.split(".")[0]
@@ -425,7 +439,6 @@ def deduce_from_url(raw_url: str) -> dict:
         ("jazz.co", "jazzhr"),
         ("recruitee.com", "recruitee"),
         ("bamboohr.com", "bamboohr"),
-        ("icims.com", "icims"),
         ("jobvite.com", "jobvite"),
         ("breezy.hr", "breezyhr"),
         ("comeet.co", "comeet"),
@@ -436,8 +449,6 @@ def deduce_from_url(raw_url: str) -> dict:
         if _host_matches(host, suffix):
             tenant = host.split(".")[0]
             if provider == "workable" and _host_matches(host, "applytojob.com"):
-                tenant = ""
-            if provider == "icims":
                 tenant = ""
             external_id = _first_after(path, "jobs") or _last_path_segment(path) or _fallback_external_id(u)
             return _result(
@@ -476,8 +487,9 @@ def deduce_from_url(raw_url: str) -> dict:
                 posting_company_name=posting_company_name,
             )
 
-    # Unknown corporate site.
-    provider = _provider_from_host(host)
+    # Unknown corporate site. Do not let malformed iCIMS URLs fall back to an
+    # iCIMS provider identity after the strict tenant/job shape check above.
+    provider = "corporate-site" if _host_matches(host, "icims.com") else _provider_from_host(host)
     company = None if posting_company_name else _company_from_host(host)
     after_job = _first_after(path, "job")
     if after_job:

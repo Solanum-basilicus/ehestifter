@@ -158,3 +158,78 @@ test('getJob and updateJobDescription use authenticated system requests', async 
     description: '<p>New</p>',
   });
 });
+
+test('existsByIdentity sends the complete provider identity and no URL', async () => {
+  const calls = [];
+  const client = createJobsClient({
+    baseUrl: 'https://jobs.example/api',
+    functionKey: 'secret',
+    timeoutMs: 1000,
+    retryCount: 0,
+  }, {
+    async fetchImpl(url, options) {
+      calls.push({ url: String(url), options });
+      return new Response(JSON.stringify({
+        exists: false,
+        id: null,
+        provider: 'paylocity',
+        providerTenant: '8e0feae7-e42f-437e-97b1-53b917185eed',
+        externalId: '123',
+        identitySource: 'explicit',
+        foundOn: 'corporate-site',
+        hiringCompanyName: null,
+        postingCompanyName: null,
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+
+  const result = await client.existsByIdentity({
+    provider: 'paylocity',
+    providerTenant: '8e0feae7-e42f-437e-97b1-53b917185eed',
+    externalId: '123',
+  });
+
+  const url = new URL(calls[0].url);
+  assert.equal(url.searchParams.get('provider'), 'paylocity');
+  assert.equal(url.searchParams.get('providerTenant'), '8e0feae7-e42f-437e-97b1-53b917185eed');
+  assert.equal(url.searchParams.get('externalId'), '123');
+  assert.equal(url.searchParams.has('url'), false);
+  assert.equal(result.identity.identitySource, 'explicit');
+});
+
+test('preflightCandidates prefers explicit identity when the provider requires it', async () => {
+  const calls = [];
+  const input = {
+    url: 'https://recruiting.paylocity.com/Recruiting/Jobs/Details/123',
+    explicitIdentity: {
+      provider: 'paylocity',
+      providerTenant: '8e0feae7-e42f-437e-97b1-53b917185eed',
+      externalId: '123',
+    },
+    canonicalIdentity: null,
+    preflight: null,
+  };
+  const client = {
+    async existsByIdentity(identity) {
+      calls.push({ method: 'identity', identity });
+      return {
+        exists: false,
+        id: null,
+        identity: { ...identity, identitySource: 'explicit' },
+        urlInference: { foundOn: null, hiringCompanyName: null, postingCompanyName: null },
+      };
+    },
+    async existsByUrl() {
+      calls.push({ method: 'url' });
+      throw new Error('URL preflight must not be used');
+    },
+  };
+
+  const [result] = await preflightCandidates([input], client, 1);
+  assert.deepEqual(calls, [{ method: 'identity', identity: input.explicitIdentity }]);
+  assert.equal(result.canonicalIdentity.provider, 'paylocity');
+  assert.equal(result.canonicalIdentity.identitySource, 'explicit');
+});

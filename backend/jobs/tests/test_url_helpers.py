@@ -92,3 +92,35 @@ def test_successfactors_csb_requires_job_slug_id_path_shape():
     assert result["provider"] == "wlgore"
     assert result["providerTenant"] == ""
     assert result["externalId"] == "1910-de_DE"
+
+
+def test_bamboohr_keeps_tenant_and_job_id():
+    assert _identity("https://flyio.bamboohr.com/careers/35") == (
+        "bamboohr",
+        "flyio",
+        "35",
+    )
+
+
+def test_icims_uses_full_portal_host_as_tenant():
+    assert _identity(
+        "https://careers-rambus.icims.com/jobs/23020/senior-engineer/job"
+    ) == (
+        "icims",
+        "careers-rambus.icims.com",
+        "23020",
+    )
+
+
+def test_icims_same_numeric_id_on_different_hosts_has_distinct_identity():
+    first = _identity("https://careers-alpha.icims.com/jobs/42/role/job")
+    second = _identity("https://careers-beta.icims.com/jobs/42/role/job")
+
+    assert first != second
+    assert first[2] == second[2] == "42"
+
+
+def test_icims_corporate_site_does_not_claim_icims_identity():
+    result = deduce_from_url("https://www.icims.com/company/about-us")
+
+    assert result["provider"] == "corporate-site"

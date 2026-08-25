@@ -33,6 +33,9 @@ Accepted provider paths:
 - Lever;
 - Ashby;
 - Workday;
+- BambooHR;
+- iCIMS;
+- Paylocity;
 - Personio;
 - SmartRecruiters;
 - Softgarden;
@@ -55,6 +58,22 @@ Catalog data and operator policy remain separate. Catalog synchronizers record s
 The CSV ingestion boundary is strict: the header must be exactly `name,slug,url`, malformed CSV fails the refresh, provider-specific URL/tenant mismatches are rejected, and each new source has a minimum plausible row count plus a minimum normalization acceptance ratio. These are catastrophe guards for upstream truncation/schema drift, not completeness claims.
 
 SuccessFactors is intentionally URL-identified. Its upstream `slug` values are not unique across branded career domains. Rows whose identity depends on query parameters such as legacy `?company=...` RMK URLs are rejected because the current provider canonicalizer deliberately strips query parameters; importing them would merge distinct companies. The accepted catalog therefore has fewer rows than the upstream CSV until that legacy URL shape is supported explicitly.
+
+BambooHR uses the public tenant `careers/list` JSON endpoint. The list does not
+provide a complete description, so the shared detail stage requests the same
+tenant's `/careers/{id}/detail` endpoint after Jobs reports that the job is new.
+
+iCIMS uses the public tenant `/jobs/search` HTML pages with bounded pagination.
+The full `*.icims.com` portal host is the provider tenant because numeric iCIMS
+job IDs are tenant-local. The shared detail stage accepts only same-origin job
+URLs whose numeric ID matches the provider-native ID, then reads `JobPosting`
+JSON-LD.
+
+Paylocity uses the public `/Recruiting/Jobs/All/{board-uuid}` page and parses its
+`window.pageData` JSON object without JavaScript evaluation. Public detail URLs
+contain the job ID but not the board UUID. The scanner therefore uses the Jobs
+explicit identity lookup with `(paylocity, board UUID, job ID)` before detail or
+import. Jobs remains the authority for canonical job identity and persistence.
 
 SuccessFactors has independent health partitions:
 
@@ -114,7 +133,7 @@ New imported jobs use:
 foundOn = "ats-discovery"
 ```
 
-Career-Ops remains the attributed upstream for selected provider code and design ideas. job-board-aggregator remains the attributed source/reference for selected Ashby/Greenhouse/Lever/Workday catalogs and resilience ideas. `kalil0321/ats-scrapers` is the attributed source for Personio/SmartRecruiters/Softgarden/SuccessFactors tenant inventories. Product renaming must not remove source repository, recorded ref, license, or Ehestifter-change notices.
+Career-Ops remains the attributed upstream for selected provider code and design ideas, including the BambooHR and iCIMS adapters. job-board-aggregator remains the attributed source/reference for selected Ashby/Greenhouse/Lever/Workday catalogs and resilience ideas. `kalil0321/ats-scrapers` is the attributed source for the Paylocity adapter and for Personio/SmartRecruiters/Softgarden/SuccessFactors tenant inventories. Product renaming must not remove source repository, recorded ref, license, or Ehestifter-change notices.
 
 The script `scripts/copy-upstream-providers.sh` is bootstrap/reproducibility tooling only. It can overwrite locally adapted provider files and must not be used as an unattended update mechanism. Review upstream changes, apply selectively, and rerun provider fixtures/canaries.
 

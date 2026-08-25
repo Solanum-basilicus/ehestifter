@@ -99,7 +99,10 @@ export async function importCandidates(
         try {
           const result = await client.createJob(
             payload,
-            { reconcileUrl: candidate.url },
+            {
+              reconcileUrl: candidate.url,
+              reconcileIdentity: candidate.canonicalIdentity,
+            },
           );
           output = {
             ...candidate,

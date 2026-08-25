@@ -81,3 +81,61 @@ provider_canaries:
     minimum_detail_successes: 1
     interval_hours: 24
     enabled: false
+
+  # Issue #3 examples are disabled by default. Enable them only after the
+  # provider adapter is deployed and a bounded manual canary run succeeds.
+  - name: Aisle 518 BambooHR protocol canary
+    careers_url: https://aisle518.bamboohr.com/careers
+    provider: bamboohr
+    minimum_jobs: 1
+    detail_sample_size: 3
+    minimum_detail_successes: 1
+    interval_hours: 24
+    enabled: false
+
+  - name: Concept2 BambooHR protocol canary
+    careers_url: https://concept2.bamboohr.com/jobs
+    provider: bamboohr
+    minimum_jobs: 1
+    detail_sample_size: 3
+    minimum_detail_successes: 1
+    interval_hours: 24
+    enabled: false
+
+  - name: Rambus iCIMS protocol canary
+    careers_url: https://careers-rambus.icims.com
+    provider: icims
+    max_pages: 1
+    minimum_jobs: 1
+    detail_sample_size: 3
+    minimum_detail_successes: 1
+    interval_hours: 24
+    enabled: false
+
+  - name: NV5 iCIMS protocol canary
+    careers_url: https://careers-nv5.icims.com
+    provider: icims
+    max_pages: 1
+    minimum_jobs: 1
+    detail_sample_size: 3
+    minimum_detail_successes: 1
+    interval_hours: 24
+    enabled: false
+
+  - name: Abby's Catering Paylocity protocol canary
+    careers_url: https://recruiting.paylocity.com/Recruiting/Jobs/All/8e0feae7-e42f-437e-97b1-53b917185eed
+    provider: paylocity
+    minimum_jobs: 1
+    detail_sample_size: 3
+    minimum_detail_successes: 1
+    interval_hours: 24
+    enabled: false
+
+  - name: AEMI Holdings Paylocity protocol canary
+    careers_url: https://recruiting.paylocity.com/Recruiting/Jobs/All/463a34eb-52cc-4f6e-9325-a8e93ccaf1a3
+    provider: paylocity
+    minimum_jobs: 1
+    detail_sample_size: 3
+    minimum_detail_successes: 1
+    interval_hours: 24
+    enabled: false

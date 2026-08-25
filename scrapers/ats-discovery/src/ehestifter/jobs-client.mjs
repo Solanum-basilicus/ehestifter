@@ -105,6 +105,38 @@ export function createJobsClient(config, { fetchImpl = fetch } = {}) {
     };
   }
 
+  async function existsByIdentity(identity) {
+    const provider = typeof identity?.provider === 'string'
+      ? identity.provider.trim()
+      : '';
+    const providerTenant = typeof identity?.providerTenant === 'string'
+      ? identity.providerTenant.trim()
+      : '';
+    const externalId = typeof identity?.externalId === 'string'
+      ? identity.externalId.trim()
+      : '';
+    if (!provider || !externalId) {
+      throw new Error('Explicit job identity requires provider and externalId');
+    }
+    const endpoint = new URL(`${config.baseUrl}/jobs/exists`);
+    endpoint.searchParams.set('provider', provider);
+    endpoint.searchParams.set('providerTenant', providerTenant);
+    endpoint.searchParams.set('externalId', externalId);
+    const payload = await getJsonWithRetry({
+      fetchImpl,
+      url: endpoint,
+      headers,
+      timeoutMs: config.timeoutMs,
+      retryCount: config.retryCount,
+    });
+    return {
+      exists: payload.exists === true,
+      id: typeof payload.id === 'string' ? payload.id : null,
+      identity: validateIdentity(payload),
+      urlInference: extractUrlInference(payload),
+    };
+  }
+
   async function getJob(jobId) {
     const normalizedId = typeof jobId === 'string' ? jobId.trim() : '';
     if (!normalizedId) throw new Error('jobId must be a non-empty string');
@@ -171,7 +203,10 @@ export function createJobsClient(config, { fetchImpl = fetch } = {}) {
     throw lastError ?? new Error('Jobs update failed without an error');
   }
 
-  async function createJob(payload, { reconcileUrl = payload.url } = {}) {
+  async function createJob(
+    payload,
+    { reconcileUrl = payload.url, reconcileIdentity = null } = {},
+  ) {
     const endpoint = new URL(`${config.baseUrl}/jobs`);
     let lastError = null;
     for (let attempt = 0; attempt <= config.retryCount; attempt += 1) {
@@ -221,7 +256,9 @@ export function createJobsClient(config, { fetchImpl = fetch } = {}) {
 
       /* An ambiguous POST may have committed before its response was lost. */
       try {
-        const reconciliation = await existsByUrl(reconcileUrl);
+        const reconciliation = reconcileIdentity
+          ? await existsByIdentity(reconcileIdentity)
+          : await existsByUrl(reconcileUrl);
         if (reconciliation.exists && reconciliation.id) {
           return {
             id: reconciliation.id,
@@ -242,7 +279,13 @@ export function createJobsClient(config, { fetchImpl = fetch } = {}) {
     throw lastError ?? new Error('Jobs create failed without an error');
   }
 
-  return { existsByUrl, getJob, updateJobDescription, createJob };
+  return {
+    existsByUrl,
+    existsByIdentity,
+    getJob,
+    updateJobDescription,
+    createJob,
+  };
 }
 
 function safeProgress(onProgress, value) {
@@ -289,7 +332,9 @@ export async function preflightCandidates(
     concurrency,
     async (candidate) => {
       try {
-        const result = await client.existsByUrl(candidate.url);
+        const result = candidate.explicitIdentity
+          ? await client.existsByIdentity(candidate.explicitIdentity)
+          : await client.existsByUrl(candidate.url);
         return {
           ...candidate,
           canonicalIdentity: result.identity,

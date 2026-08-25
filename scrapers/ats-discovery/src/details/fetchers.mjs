@@ -13,6 +13,10 @@ import {
 const GREENHOUSE_HOST = 'boards-api.greenhouse.io';
 const ASHBY_HOST = 'api.ashbyhq.com';
 const SMARTRECRUITERS_HOST = 'api.smartrecruiters.com';
+const BAMBOOHR_HOST_RE = /^[a-z0-9][a-z0-9-]*\.bamboohr\.com$/;
+const ICIMS_HOST_RE = /^[a-z0-9][a-z0-9.-]*\.icims\.com$/;
+const PAYLOCITY_HOST = 'recruiting.paylocity.com';
+const PAYLOCITY_BOARD_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SOFTGARDEN_HOST_RE = /^(?:[a-z0-9-]+\.)*softgarden\.io$/;
 const WORKDAY_HOST_RE = /^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.(wd[a-z0-9-]+)\.myworkdayjobs\.com$/i;
 const WORKDAY_SITE_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._~-]*$/;
@@ -212,6 +216,69 @@ function sourceIdentity(candidate) {
     externalId: candidate.provenance?.providerNativeId
       || candidate.canonicalIdentity?.externalId
       || null,
+  };
+}
+
+function sourceOriginUrl(candidate, label) {
+  const raw = candidate.provenance?.sourceOrigin;
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    throw new Error(`${label} detail fetch requires source origin`);
+  }
+  const parsed = assertPublicHttpsUrl(raw, `${label} source origin`);
+  if (parsed.pathname !== '/' || parsed.search || parsed.hash) {
+    throw new Error(`${label} source origin must be an origin URL`);
+  }
+  return parsed;
+}
+
+function pathSegment(value, label) {
+  try {
+    return decodeURIComponent(value);
+  } catch (error) {
+    throw new Error(`${label} contains invalid percent encoding`, { cause: error });
+  }
+}
+
+async function fetchBambooHRDetails(candidate, context) {
+  const identity = sourceIdentity(candidate);
+  const tenant = typeof identity.tenant === 'string' ? identity.tenant.trim().toLowerCase() : '';
+  const externalId = typeof identity.externalId === 'string' ? identity.externalId.trim() : '';
+  if (!tenant || !externalId) {
+    throw new Error('BambooHR detail fetch requires tenant and provider-native id');
+  }
+  const source = sourceOriginUrl(candidate, 'BambooHR');
+  if (!BAMBOOHR_HOST_RE.test(source.hostname) || source.hostname.split('.')[0] !== tenant) {
+    throw new Error('BambooHR source origin does not match the source tenant');
+  }
+  const publicUrl = assertPublicHttpsUrl(candidate.url, 'BambooHR detail URL');
+  const parts = publicUrl.pathname.split('/').filter(Boolean);
+  if (
+    publicUrl.origin !== source.origin
+    || parts.length !== 2
+    || parts[0].toLowerCase() !== 'careers'
+    || pathSegment(parts[1], 'BambooHR job id') !== externalId
+  ) {
+    throw new Error('BambooHR detail URL must match the source tenant and job id');
+  }
+  const endpoint = new URL(`/careers/${encodeURIComponent(externalId)}/detail`, source.origin);
+  const json = await fetchJsonWithTimeout({
+    fetchImpl: context.fetchImpl,
+    url: endpoint,
+    timeoutMs: context.timeoutMs,
+  });
+  const job = json?.result?.jobOpening;
+  if (!job || typeof job !== 'object') {
+    throw new Error('BambooHR detail endpoint omitted result.jobOpening');
+  }
+  return {
+    description: htmlToPlainText(job.description),
+    descriptionStatus: 'bamboohr-detail-json',
+    applyUrl: (() => {
+      const applyUrl = safeApplyUrl(job.jobOpeningShareUrl);
+      return applyUrl && sameOrigin(applyUrl, source.origin) ? applyUrl : candidate.url;
+    })(),
+    locations: [],
+    remoteType: null,
   };
 }
 
@@ -722,15 +789,53 @@ function assertJsonLdSource(candidate) {
     }
     return endpoint;
   }
+  if (candidate.sourceProvider === 'icims') {
+    const source = sourceOriginUrl(candidate, 'iCIMS');
+    const identity = sourceIdentity(candidate);
+    const match = endpoint.pathname.match(/^\/jobs\/(\d+)(?:\/|$)/i);
+    if (
+      !ICIMS_HOST_RE.test(endpoint.hostname)
+      || endpoint.hostname === 'www.icims.com'
+      || endpoint.origin !== source.origin
+      || !match
+      || match[1] !== String(identity.externalId ?? '').trim()
+    ) {
+      throw new Error('iCIMS detail URL must match the source origin and provider-native id');
+    }
+    return endpoint;
+  }
+  if (candidate.sourceProvider === 'paylocity') {
+    const source = sourceOriginUrl(candidate, 'Paylocity');
+    const identity = sourceIdentity(candidate);
+    const match = endpoint.pathname.match(/^\/Recruiting\/Jobs\/Details\/(\d+)\/?$/i);
+    if (
+      source.hostname !== PAYLOCITY_HOST
+      || endpoint.hostname !== PAYLOCITY_HOST
+      || endpoint.origin !== source.origin
+      || !PAYLOCITY_BOARD_ID_RE.test(String(identity.tenant ?? ''))
+      || !match
+      || match[1] !== String(identity.externalId ?? '').trim()
+    ) {
+      throw new Error('Paylocity detail URL must match the source board and provider-native id');
+    }
+    return endpoint;
+  }
   throw new Error(`Unsupported JSON-LD source provider: ${candidate.sourceProvider}`);
 }
 
 async function fetchJsonLdDetails(candidate, context) {
   const endpoint = assertJsonLdSource(candidate);
+  const browserHeaders = ['icims', 'paylocity'].includes(candidate.sourceProvider)
+    ? {
+      'user-agent': BROWSER_LIKE_USER_AGENT,
+      'accept-language': 'en-US,en;q=0.9',
+    }
+    : {};
   const html = await fetchTextWithTimeout({
     fetchImpl: context.fetchImpl,
     url: endpoint,
     timeoutMs: context.timeoutMs,
+    options: { headers: browserHeaders },
   });
   const parsed = parseJobPostingJsonLd(html, endpoint.href);
   if (!parsed) throw new Error('Detail page contains no parseable JobPosting JSON-LD');
@@ -838,6 +943,11 @@ async function fetchDetails(candidate, context) {
   switch (provider) {
     case 'greenhouse':
       return { supported: true, ...(await fetchGreenhouseDetails(candidate, context)) };
+    case 'bamboohr':
+      return { supported: true, ...(await fetchBambooHRDetails(candidate, context)) };
+    case 'icims':
+    case 'paylocity':
+      return { supported: true, ...(await fetchJsonLdDetails(candidate, context)) };
     case 'ashby':
       return { supported: true, ...(await fetchAshbyDetails(candidate, context)) };
     case 'smartrecruiters':

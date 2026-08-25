@@ -206,3 +206,46 @@ test('tracked target can share one fetch with an attached canary', async () => {
   assert.equal(result.providerResults[0].status, 'ok');
   assert.equal(result.providerResults[0].jobsReturned, 1);
 });
+
+test('Paylocity candidate carries explicit board identity and provider attribution', () => {
+  const boardId = '8e0feae7-e42f-437e-97b1-53b917185eed';
+  const source = Object.freeze({
+    repository: 'kalil0321/ats-scrapers',
+    file: 'src/ats_scrapers/scrapers/paylocity.py',
+    ref: '83a694a80679d49376b76e31fccd5676cddf9cd1',
+    license: 'MIT',
+  });
+  const result = candidateFromJob(
+    {
+      id: '123',
+      title: 'Product Manager',
+      url: 'https://recruiting.paylocity.com/Recruiting/Jobs/Details/123',
+      company: 'Acme',
+      location: 'Berlin, Germany',
+    },
+    {
+      provider: 'paylocity',
+      tenant: boardId,
+      name: 'Acme',
+      careers_url: `https://recruiting.paylocity.com/Recruiting/Jobs/All/${boardId}`,
+      sourceOrigin: 'https://recruiting.paylocity.com',
+      targetClass: 'priority',
+      reason: 'tracked_company',
+      _provider: {
+        id: 'paylocity',
+        source,
+        capabilities: { explicitIdentityPreflight: true },
+      },
+    },
+    'career-ops-ref',
+  );
+
+  assert.deepEqual(result.explicitIdentity, {
+    provider: 'paylocity',
+    providerTenant: boardId,
+    externalId: '123',
+  });
+  assert.equal(result.provenance.derivedFrom, 'kalil0321/ats-scrapers');
+  assert.equal(result.provenance.upstreamRef, null);
+  assert.equal(result.provenance.providerImplementation.ref, source.ref);
+});

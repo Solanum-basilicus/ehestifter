@@ -496,3 +496,196 @@ test('SuccessFactors unavailable shell is reported separately from parser failur
   assert.equal(result.detail.status, 'unavailable');
   assert.match(result.detail.error, /job is unavailable/);
 });
+
+test('BambooHR detail uses the public job detail endpoint', async () => {
+  const source = candidate({
+    sourceProvider: 'bamboohr',
+    sourceTenant: 'acme',
+    url: 'https://acme.bamboohr.com/careers/35',
+    provenance: {
+      providerNativeId: '35',
+      sourceOrigin: 'https://acme.bamboohr.com',
+    },
+  });
+  const calls = [];
+  const [result] = await enrichCandidateDetails([source], {
+    concurrency: 1,
+    maxFetches: 1,
+    timeoutMs: 1000,
+    async fetchImpl(url) {
+      calls.push(String(url));
+      return response({
+        result: {
+          jobOpening: {
+            description: '<p>Build useful products.</p>',
+            jobOpeningShareUrl: 'https://acme.bamboohr.com/careers/35',
+          },
+        },
+      });
+    },
+  });
+
+  assert.deepEqual(calls, ['https://acme.bamboohr.com/careers/35/detail']);
+  assert.equal(result.detail.status, 'ok');
+  assert.equal(result.descriptionStatus, 'bamboohr-detail-json');
+  assert.match(result.description, /Build useful products/);
+});
+
+test('BambooHR detail ignores a cross-origin share URL', async () => {
+  const source = candidate({
+    sourceProvider: 'bamboohr',
+    sourceTenant: 'acme',
+    url: 'https://acme.bamboohr.com/careers/35',
+    provenance: {
+      providerNativeId: '35',
+      sourceOrigin: 'https://acme.bamboohr.com',
+    },
+  });
+  const [result] = await enrichCandidateDetails([source], {
+    concurrency: 1,
+    maxFetches: 1,
+    timeoutMs: 1000,
+    async fetchImpl() {
+      return response({
+        result: {
+          jobOpening: {
+            description: '<p>Build useful products.</p>',
+            jobOpeningShareUrl: 'https://example.com/untrusted',
+          },
+        },
+      });
+    },
+  });
+
+  assert.equal(result.applyUrl, source.url);
+});
+
+test('BambooHR detail rejects a mismatched job URL before fetch', async () => {
+  const source = candidate({
+    sourceProvider: 'bamboohr',
+    sourceTenant: 'acme',
+    url: 'https://acme.bamboohr.com/careers/99',
+    provenance: {
+      providerNativeId: '35',
+      sourceOrigin: 'https://acme.bamboohr.com',
+    },
+  });
+  let calls = 0;
+  const [result] = await enrichCandidateDetails([source], {
+    concurrency: 1,
+    maxFetches: 1,
+    timeoutMs: 1000,
+    async fetchImpl() { calls += 1; return response('{}'); },
+  });
+  assert.equal(calls, 0);
+  assert.equal(result.detail.status, 'error');
+  assert.match(result.detail.error, /must match the source tenant and job id/);
+});
+
+test('iCIMS detail uses same-origin JobPosting JSON-LD and browser headers', async () => {
+  const source = candidate({
+    sourceProvider: 'icims',
+    sourceTenant: 'careers-rambus.icims.com',
+    url: 'https://careers-rambus.icims.com/jobs/23020/senior-engineer/job',
+    provenance: {
+      providerNativeId: '23020',
+      sourceOrigin: 'https://careers-rambus.icims.com',
+    },
+  });
+  let request = null;
+  const [result] = await enrichCandidateDetails([source], {
+    concurrency: 1,
+    maxFetches: 1,
+    timeoutMs: 1000,
+    async fetchImpl(url, options = {}) {
+      request = { url: String(url), headers: new Headers(options.headers ?? {}) };
+      return response(`<script type="application/ld+json">${JSON.stringify({
+        '@type': 'JobPosting',
+        description: '<p>Design memory interfaces.</p>',
+        url: '/jobs/23020/senior-engineer/job',
+        jobLocation: { address: { addressCountry: 'Germany', addressLocality: 'Berlin' } },
+      })}</script>`);
+    },
+  });
+
+  assert.equal(request.url, source.url);
+  assert.match(request.headers.get('user-agent'), /Mozilla/);
+  assert.equal(result.detail.status, 'ok');
+  assert.equal(result.descriptionStatus, 'icims-jobposting-jsonld');
+  assert.equal(result.locations[0].cityName, 'Berlin');
+});
+
+test('iCIMS detail rejects a cross-origin URL before fetch', async () => {
+  const source = candidate({
+    sourceProvider: 'icims',
+    sourceTenant: 'careers-rambus.icims.com',
+    url: 'https://careers-other.icims.com/jobs/23020/role/job',
+    provenance: {
+      providerNativeId: '23020',
+      sourceOrigin: 'https://careers-rambus.icims.com',
+    },
+  });
+  let calls = 0;
+  const [result] = await enrichCandidateDetails([source], {
+    concurrency: 1,
+    maxFetches: 1,
+    timeoutMs: 1000,
+    async fetchImpl() { calls += 1; return response(''); },
+  });
+  assert.equal(calls, 0);
+  assert.equal(result.detail.status, 'error');
+  assert.match(result.detail.error, /must match the source origin and provider-native id/);
+});
+
+test('Paylocity detail uses the public job page and JobPosting JSON-LD', async () => {
+  const source = candidate({
+    sourceProvider: 'paylocity',
+    sourceTenant: '8e0feae7-e42f-437e-97b1-53b917185eed',
+    url: 'https://recruiting.paylocity.com/Recruiting/Jobs/Details/123',
+    provenance: {
+      providerNativeId: '123',
+      sourceOrigin: 'https://recruiting.paylocity.com',
+    },
+  });
+  const [result] = await enrichCandidateDetails([source], {
+    concurrency: 1,
+    maxFetches: 1,
+    timeoutMs: 1000,
+    async fetchImpl() {
+      return response(`<script type="application/ld+json">${JSON.stringify({
+        '@type': 'JobPosting',
+        description: '<p>Run the product program.</p>',
+        url: '/Recruiting/Jobs/Details/123',
+        jobLocationType: 'TELECOMMUTE',
+        applicantLocationRequirements: { '@type': 'Country', name: 'Germany' },
+      })}</script>`);
+    },
+  });
+
+  assert.equal(result.detail.status, 'ok');
+  assert.equal(result.descriptionStatus, 'paylocity-jobposting-jsonld');
+  assert.equal(result.remoteType, 'Remote');
+  assert.equal(result.locations[0].countryName, 'Germany');
+});
+
+test('Paylocity detail rejects a mismatched provider-native id before fetch', async () => {
+  const source = candidate({
+    sourceProvider: 'paylocity',
+    sourceTenant: '8e0feae7-e42f-437e-97b1-53b917185eed',
+    url: 'https://recruiting.paylocity.com/Recruiting/Jobs/Details/999',
+    provenance: {
+      providerNativeId: '123',
+      sourceOrigin: 'https://recruiting.paylocity.com',
+    },
+  });
+  let calls = 0;
+  const [result] = await enrichCandidateDetails([source], {
+    concurrency: 1,
+    maxFetches: 1,
+    timeoutMs: 1000,
+    async fetchImpl() { calls += 1; return response(''); },
+  });
+  assert.equal(calls, 0);
+  assert.equal(result.detail.status, 'error');
+  assert.match(result.detail.error, /must match the source board and provider-native id/);
+});
