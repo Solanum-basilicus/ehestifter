@@ -56,6 +56,9 @@ test('catalog sync all uses provider-specific source URLs and output files', asy
       smartrecruiters: 'name,slug,url\nAcme,acme,https://careers.smartrecruiters.com/acme\n',
       softgarden: 'name,slug,url\nAcme,acme,https://acme.career.softgarden.de/\n',
       successfactors: 'name,slug,url\nAcme,careers,https://careers.acme.example\n',
+      bamboohr: '["acme"]',
+      icims: '["acme"]',
+      paylocity: '[{"guid":"73b6525a-3273-48b3-b9d8-d6479233c61c","name":"Acme","jobs":2}]',
     };
     const outputPaths = Object.fromEntries(
       Object.keys(bodies).map((provider) => [provider, path.join(directory, `${provider}.json`)]),
@@ -78,10 +81,10 @@ test('catalog sync all uses provider-specific source URLs and output files', asy
   });
 });
 
-test('unsupported catalog providers fail before network or filesystem work', async () => {
+test('unsupported catalog providers fail before network or file work', async () => {
   let fetched = false;
   await assert.rejects(
-    syncProviderCatalog('bamboohr', {
+    syncProviderCatalog('taleo', {
       outputPath: '/tmp/unused.json',
       fetchImpl: async () => { fetched = true; return response('[]'); },
     }),

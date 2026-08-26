@@ -51,11 +51,16 @@ Machine-managed catalogs currently exist for:
 - Personio;
 - SmartRecruiters;
 - Softgarden;
-- SuccessFactors.
+- SuccessFactors;
+- BambooHR;
+- iCIMS;
+- Paylocity.
 
-Catalog data and operator policy remain separate. Catalog synchronizers record source provenance, fetch time, item count, rejection count, and SHA-256 and use atomic replacement so a failed refresh does not destroy the previous valid catalog. Ashby, Greenhouse, Lever, and Workday use the existing `Feashliaa/job-board-aggregator` JSON inventories. Personio, SmartRecruiters, Softgarden, and SuccessFactors use the MIT-licensed `kalil0321/ats-scrapers` CSV inventories under `ats-companies/`.
+Catalog data and operator policy remain separate. Catalog synchronizers record source provenance, fetch time, item count, rejection count, and SHA-256 and use atomic replacement so a failed refresh does not destroy the previous valid catalog. Ashby, Greenhouse, Lever, Workday, BambooHR, iCIMS, and Paylocity use the `Feashliaa/job-board-aggregator` JSON inventories. The curated datasets in that repository are CC BY-NC 4.0 and are therefore limited to the current non-commercial use unless separate permission is obtained. Personio, SmartRecruiters, Softgarden, and SuccessFactors use the MIT-licensed `kalil0321/ats-scrapers` CSV inventories under `ats-companies/`.
 
-The CSV ingestion boundary is strict: the header must be exactly `name,slug,url`, malformed CSV fails the refresh, provider-specific URL/tenant mismatches are rejected, and each new source has a minimum plausible row count plus a minimum normalization acceptance ratio. These are catastrophe guards for upstream truncation/schema drift, not completeness claims.
+The catalog ingestion boundary is strict. CSV headers must be exactly `name,slug,url`, malformed input fails the refresh, provider-specific URL/tenant mismatches are rejected, and newer sources have a minimum plausible row count plus a minimum normalization acceptance ratio. These limits reject large upstream truncation or schema drift. They are not completeness claims.
+
+BambooHR catalog slugs become `<slug>.bamboohr.com` portal URLs while the slug remains the provider tenant. The iCIMS source contains short values that the upstream scraper maps to `careers-<slug>.icims.com`; ATS Discovery stores that full host because the iCIMS provider tenant contract is host-based. Full `*.icims.com` hosts are still accepted in operator overrides. Paylocity source records use the board `guid`, which is stored as the provider tenant and rendered as `/Recruiting/Jobs/All/{board-uuid}`. Upstream `jobs` counts are not part of the local catalog schema.
 
 SuccessFactors is intentionally URL-identified. Its upstream `slug` values are not unique across branded career domains. Rows whose identity depends on query parameters such as legacy `?company=...` RMK URLs are rejected because the current provider canonicalizer deliberately strips query parameters; importing them would merge distinct companies. The accepted catalog therefore has fewer rows than the upstream CSV until that legacy URL shape is supported explicitly.
 
@@ -133,7 +138,7 @@ New imported jobs use:
 foundOn = "ats-discovery"
 ```
 
-Career-Ops remains the attributed upstream for selected provider code and design ideas, including the BambooHR and iCIMS adapters. job-board-aggregator remains the attributed source/reference for selected Ashby/Greenhouse/Lever/Workday catalogs and resilience ideas. `kalil0321/ats-scrapers` is the attributed source for the Paylocity adapter and for Personio/SmartRecruiters/Softgarden/SuccessFactors tenant inventories. Product renaming must not remove source repository, recorded ref, license, or Ehestifter-change notices.
+Career-Ops remains the attributed upstream for selected provider code and design ideas, including the BambooHR and iCIMS adapters. job-board-aggregator remains the attributed source/reference for the Ashby/Greenhouse/Lever/Workday/BambooHR/iCIMS/Paylocity catalogs and selected resilience ideas. `kalil0321/ats-scrapers` is the attributed source for the Paylocity adapter and for Personio/SmartRecruiters/Softgarden/SuccessFactors tenant inventories. Product renaming must not remove source repository, recorded ref, license, or Ehestifter-change notices.
 
 The script `scripts/copy-upstream-providers.sh` is bootstrap/reproducibility tooling only. It can overwrite locally adapted provider files and must not be used as an unattended update mechanism. Review upstream changes, apply selectively, and rerun provider fixtures/canaries.
 
@@ -537,11 +542,12 @@ preceding run artifacts have been inspected.
 ./ops/scheduler/ats-ops scanner -- catalog sync all
 ```
 
-This refreshes all eight machine-managed provider catalogs using atomic
+This refreshes all eleven machine-managed provider catalogs using atomic
 replacement. It does not scan vacancies, call Jobs, import jobs, or request
 compatibility. Existing active discovery policy is not modified by catalog
-sync; the four newly catalog-backed providers remain catalog-disabled unless
-the operator enables them in `config/discovery-policy.yml`.
+sync. The committed policy template keeps Personio, SmartRecruiters, Softgarden,
+SuccessFactors, BambooHR, iCIMS, and Paylocity catalog-disabled until the
+operator enables them in `config/discovery-policy.yml`.
 
 `--no-progress` may be added to any scan mode when machine-readable or quiet
 output is preferable.
@@ -801,7 +807,7 @@ Failure visibility is local: systemd unit state, journal output, scheduler state
 ## Deferred work
 
 - Optional GCP Cloud Run Job deployment remains skipped and uncommitted.
-- Unsupported ATS ingestion/catalog discovery remains tracked separately.
+- Catalog completeness and additional ATS ingestion remain tracked separately.
 - Direct Compose commands still bypass the host lock.
 - Timers catch up after resume but do not wake sleeping hardware.
 - Rootless Docker requires explicit operator adaptation.

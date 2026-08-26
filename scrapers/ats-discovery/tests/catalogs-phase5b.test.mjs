@@ -19,6 +19,9 @@ test('Phase 5B catalog providers are explicit and bounded', () => {
     'smartrecruiters',
     'softgarden',
     'successfactors',
+    'bamboohr',
+    'icims',
+    'paylocity',
   ]);
 });
 

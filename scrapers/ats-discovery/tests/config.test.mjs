@@ -101,6 +101,9 @@ test('loadRuntimeConfig returns Phase 3 paths and derived state path', async () 
       'smartrecruiters',
       'softgarden',
       'successfactors',
+      'bamboohr',
+      'icims',
+      'paylocity',
     ]);
     assert.equal(config.paths.state, path.join(directory, 'state'));
     assert.equal(config.state.tenantStatePath, path.join(directory, 'state', 'tenant-state.json'));

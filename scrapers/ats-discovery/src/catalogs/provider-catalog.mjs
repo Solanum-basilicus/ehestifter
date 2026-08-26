@@ -11,6 +11,9 @@ export const CATALOG_PROVIDER_IDS = Object.freeze([
   'smartrecruiters',
   'softgarden',
   'successfactors',
+  'bamboohr',
+  'icims',
+  'paylocity',
 ]);
 
 export const CATALOG_SOURCES = Object.freeze({
@@ -78,6 +81,30 @@ export const CATALOG_SOURCES = Object.freeze({
     license: 'MIT',
     format: 'csv',
   }),
+  bamboohr: Object.freeze({
+    repository: 'Feashliaa/job-board-aggregator',
+    path: 'data/bamboohr_companies.json',
+    url: 'https://raw.githubusercontent.com/Feashliaa/job-board-aggregator/main/data/bamboohr_companies.json',
+    ref: 'main',
+    license: 'CC BY-NC 4.0',
+    format: 'json',
+  }),
+  icims: Object.freeze({
+    repository: 'Feashliaa/job-board-aggregator',
+    path: 'data/icims_companies.json',
+    url: 'https://raw.githubusercontent.com/Feashliaa/job-board-aggregator/main/data/icims_companies.json',
+    ref: 'main',
+    license: 'CC BY-NC 4.0',
+    format: 'json',
+  }),
+  paylocity: Object.freeze({
+    repository: 'Feashliaa/job-board-aggregator',
+    path: 'data/paylocity_companies_clean.json',
+    url: 'https://raw.githubusercontent.com/Feashliaa/job-board-aggregator/main/data/paylocity_companies_clean.json',
+    ref: 'main',
+    license: 'CC BY-NC 4.0',
+    format: 'json',
+  }),
 });
 
 export const CATALOG_SOURCE_QUALITY = Object.freeze({
@@ -88,6 +115,9 @@ export const CATALOG_SOURCE_QUALITY = Object.freeze({
   // The current provider deliberately drops query parameters, so those rows
   // are rejected rather than collapsed into an unsafe hostname/path identity.
   successfactors: Object.freeze({ minimumSourceItems: 1000, minimumAcceptanceRatio: 0.85 }),
+  bamboohr: Object.freeze({ minimumSourceItems: 9000, minimumAcceptanceRatio: 0.99 }),
+  icims: Object.freeze({ minimumSourceItems: 8000, minimumAcceptanceRatio: 0.99 }),
+  paylocity: Object.freeze({ minimumSourceItems: 8000, minimumAcceptanceRatio: 0.99 }),
 });
 
 const MAX_COMPONENT_LENGTH = 200;
@@ -96,6 +126,7 @@ const SAFE_SLUG = /^[A-Za-z0-9][A-Za-z0-9._~-]*$/;
 const SAFE_HOST_LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
 const SAFE_SITE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._~-]*$/;
 const SAFE_SMARTRECRUITERS_TENANT = /^[A-Za-z0-9._-]+$/;
+const SAFE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function requireProvider(provider) {
   if (!CATALOG_PROVIDER_IDS.includes(provider)) {
@@ -416,6 +447,127 @@ function normalizeSuccessFactorsItem(value) {
   return { ok: true, reason: null, item };
 }
 
+function normalizeBambooHrItem(value) {
+  const input = slugInput(value);
+  if (!input) return { ok: false, reason: 'not_string_or_object' };
+  const validated = validateCatalogHostLabel(input.tenant);
+  if (!validated.ok) return validated;
+  const tenant = validated.value.toLowerCase();
+  const expectedHost = `${tenant}.bamboohr.com`;
+  const rawUrl = input.sourceUrl || input.careersUrl;
+  if (rawUrl) {
+    const result = parsePublicCatalogUrl(rawUrl, 'BambooHR catalog URL');
+    if (!result.ok) return result;
+    const parsed = result.parsed;
+    if (parsed.hostname.toLowerCase() !== expectedHost) {
+      return { ok: false, reason: 'tenant_url_mismatch' };
+    }
+    if (!['', '/', '/careers', '/careers/'].includes(parsed.pathname) || parsed.search || parsed.hash) {
+      return { ok: false, reason: 'bamboohr_url_shape' };
+    }
+  }
+  const item = { tenant, careersUrl: `https://${expectedHost}/careers` };
+  if (input.name) item.name = input.name;
+  return { ok: true, reason: null, item };
+}
+
+function validateIcimsHost(value) {
+  const host = normalizeString(value).toLowerCase();
+  if (!host) return { ok: false, reason: 'tenant_empty' };
+  if (host.length > 253) return { ok: false, reason: 'tenant_too_long' };
+  if (!host.endsWith('.icims.com') || host === 'www.icims.com') {
+    return { ok: false, reason: 'icims_host' };
+  }
+  const labels = host.split('.');
+  if (labels.some((label) => !SAFE_HOST_LABEL.test(label))) {
+    return { ok: false, reason: 'tenant_unsafe' };
+  }
+  return { ok: true, host };
+}
+
+function normalizeIcimsItem(value) {
+  let rawTenant;
+  let name = null;
+  let rawUrl = '';
+  if (typeof value === 'string') {
+    rawTenant = value;
+  } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+    rawTenant = value.tenant ?? value.slug;
+    name = normalizeOptionalName(value.name);
+    rawUrl = normalizeString(value.url) || normalizeString(value.careersUrl);
+  } else {
+    return { ok: false, reason: 'not_string_or_object' };
+  }
+
+  const sourceValue = normalizeString(rawTenant).toLowerCase();
+  if (!sourceValue) return { ok: false, reason: 'tenant_empty' };
+  let host;
+  if (sourceValue.endsWith('.icims.com')) {
+    const validated = validateIcimsHost(sourceValue);
+    if (!validated.ok) return validated;
+    host = validated.host;
+  } else {
+    const slug = validateCatalogHostLabel(sourceValue, 'slug');
+    if (!slug.ok) return slug;
+    host = `careers-${slug.value.toLowerCase()}.icims.com`;
+    const validated = validateIcimsHost(host);
+    if (!validated.ok) return validated;
+  }
+
+  if (rawUrl) {
+    const result = parsePublicCatalogUrl(rawUrl, 'iCIMS catalog URL');
+    if (!result.ok) return result;
+    const parsed = result.parsed;
+    if (parsed.hostname.toLowerCase() !== host) {
+      return { ok: false, reason: 'tenant_url_mismatch' };
+    }
+    if (!['', '/'].includes(parsed.pathname) || parsed.search || parsed.hash) {
+      return { ok: false, reason: 'icims_url_shape' };
+    }
+  }
+
+  const item = { tenant: host, careersUrl: `https://${host}` };
+  if (name) item.name = name;
+  return { ok: true, reason: null, item };
+}
+
+function normalizePaylocityItem(value) {
+  let rawTenant;
+  let name = null;
+  let rawUrl = '';
+  if (typeof value === 'string') {
+    rawTenant = value;
+  } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+    rawTenant = value.tenant ?? value.guid ?? value.slug;
+    name = normalizeOptionalName(value.name);
+    rawUrl = normalizeString(value.url) || normalizeString(value.careersUrl);
+  } else {
+    return { ok: false, reason: 'not_string_or_object' };
+  }
+  const tenant = normalizeString(rawTenant).toLowerCase();
+  if (!SAFE_UUID.test(tenant)) return { ok: false, reason: 'paylocity_uuid' };
+  const careersUrl = `https://recruiting.paylocity.com/Recruiting/Jobs/All/${tenant}`;
+  if (rawUrl) {
+    const result = parsePublicCatalogUrl(rawUrl, 'Paylocity catalog URL');
+    if (!result.ok) return result;
+    const parsed = result.parsed;
+    if (parsed.hostname.toLowerCase() !== 'recruiting.paylocity.com' || parsed.search || parsed.hash) {
+      return { ok: false, reason: 'paylocity_url_shape' };
+    }
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    if (
+      segments.length !== 4
+      || segments.slice(0, 3).map((segment) => segment.toLowerCase()).join('/') !== 'recruiting/jobs/all'
+      || normalizeString(segments[3]).toLowerCase() !== tenant
+    ) {
+      return { ok: false, reason: 'tenant_url_mismatch' };
+    }
+  }
+  const item = { tenant, careersUrl };
+  if (name) item.name = name;
+  return { ok: true, reason: null, item };
+}
+
 export function normalizeCatalogItem(provider, value) {
   requireProvider(provider);
   if (provider === 'workday') return validateWorkdayCatalogItem(value);
@@ -423,6 +575,9 @@ export function normalizeCatalogItem(provider, value) {
   if (provider === 'smartrecruiters') return normalizeSmartRecruitersItem(value);
   if (provider === 'softgarden') return normalizeSoftgardenItem(value);
   if (provider === 'successfactors') return normalizeSuccessFactorsItem(value);
+  if (provider === 'bamboohr') return normalizeBambooHrItem(value);
+  if (provider === 'icims') return normalizeIcimsItem(value);
+  if (provider === 'paylocity') return normalizePaylocityItem(value);
   const input = slugInput(value);
   if (!input) return { ok: false, reason: 'not_string_or_object' };
   const validated = validateCatalogSlug(provider, input.tenant);

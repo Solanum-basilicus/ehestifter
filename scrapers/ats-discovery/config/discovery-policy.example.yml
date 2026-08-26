@@ -126,3 +126,29 @@ providers:
         transient_error_ratio_threshold: 0.4
         minimum_requests_for_ratio: 5
         cooldown_minutes: 1440
+
+  bamboohr:
+    catalog_enabled: false
+    max_normal_targets_per_run: 5
+    target_full_sweep_days: 7
+    execution:
+      concurrency: 2
+      min_request_interval_ms: 500
+
+  # iCIMS can require several HTML pages for one tenant. Start with one
+  # catalog tenant per run and increase only after canary and sweep review.
+  icims:
+    catalog_enabled: false
+    max_normal_targets_per_run: 1
+    target_full_sweep_days: 7
+    execution:
+      concurrency: 1
+      min_request_interval_ms: 1000
+
+  paylocity:
+    catalog_enabled: false
+    max_normal_targets_per_run: 2
+    target_full_sweep_days: 7
+    execution:
+      concurrency: 1
+      min_request_interval_ms: 1000

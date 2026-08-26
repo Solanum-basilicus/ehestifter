@@ -23,7 +23,26 @@ provider layer is used only for public job discovery.
 - Repository: https://github.com/Feashliaa/job-board-aggregator
 - Ref used by unattended catalog sync: `main`
 - License recorded in catalog provenance: CC BY-NC 4.0
-- Catalogs: Ashby, Greenhouse, Lever, Workday
+- Dataset license terms: https://creativecommons.org/licenses/by-nc/4.0/
+- Catalog files:
+  - `data/ashby_companies.json`
+  - `data/greenhouse_companies.json`
+  - `data/lever_companies.json`
+  - `data/workday_companies.json`
+  - `data/bamboohr_companies.json`
+  - `data/icims_companies.json`
+  - `data/paylocity_companies_clean.json`
+
+The repository code is MIT-licensed, but its README applies CC BY-NC 4.0 to the
+curated company datasets under `data/`. Ehestifter records the data license in
+each catalog envelope. This source is suitable for the current non-commercial
+project. Commercial use requires separate permission or a replacement source.
+
+The BambooHR source values are tenant slugs. The iCIMS source values are short
+identifiers that its scraper expands to `careers-<slug>.icims.com`; Ehestifter
+stores the full host to match its iCIMS provider tenant contract. The Paylocity
+clean source contains board GUID, company name, and an upstream job count;
+Ehestifter keeps the GUID and optional name and ignores the job count.
 
 ## ats-scrapers
 

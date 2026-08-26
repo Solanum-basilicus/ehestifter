@@ -88,6 +88,9 @@ test('offline planner applies independent provider budgets', () => {
     smartrecruiters: 0,
     softgarden: 0,
     successfactors: 0,
+    bamboohr: 0,
+    icims: 0,
+    paylocity: 0,
   });
   assert.equal(result.plan.counts.normal, 6);
 });
