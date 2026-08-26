@@ -19,7 +19,8 @@ export const sourceMeta = providerSourceMeta({
   file: 'providers/icims.mjs',
   ref: 'b9cd65e8ddba9448c9590c25f45288cf61c1c1c7',
   changes: [
-    'bounded pagination that honors the shared health-probe page cap',
+    'portal bootstrap that follows the tenant-generated search entry URL',
+    'bounded pagination that follows same-origin iCIMS page links',
     'full portal host as provider tenant to prevent cross-tenant id collisions',
     'provider-native numeric job ids for shared detail and identity checks',
   ],
@@ -50,12 +51,51 @@ export function resolveIcimsOrigin(entry) {
   return null;
 }
 
-function searchUrl(origin, page) {
-  const url = new URL('/jobs/search', origin);
-  url.searchParams.set('ss', '1');
-  url.searchParams.set('pr', String(page));
-  url.searchParams.set('in_iframe', '1');
+function introUrl(origin) {
+  const url = new URL('/jobs/intro', origin);
+  url.searchParams.set('mobile', 'true');
+  url.searchParams.set('needsRedirect', 'false');
   return url.href;
+}
+
+function safeSearchPageUrl(rawHref, origin) {
+  if (typeof rawHref !== 'string' || rawHref.trim() === '') return null;
+  let parsed;
+  try {
+    parsed = new URL(decodeHtmlEntities(rawHref.trim()), origin);
+  } catch {
+    return null;
+  }
+  if (parsed.origin !== origin || !/^\/jobs\/search\/?$/i.test(parsed.pathname)) return null;
+  parsed.hash = '';
+  return parsed;
+}
+
+function anchorHrefs(html) {
+  return [...String(html ?? '').matchAll(/<a\b[^>]*\bhref=["']([^"']+)["'][^>]*>/gi)]
+    .map((match) => match[1]);
+}
+
+export function resolveIcimsSearchUrl(html, origin) {
+  let fallback = null;
+  for (const href of anchorHrefs(html)) {
+    const parsed = safeSearchPageUrl(href, origin);
+    if (!parsed) continue;
+    if (!fallback) fallback = parsed.href;
+    if (parsed.searchParams.get('ss') === '1') return parsed.href;
+  }
+  return fallback;
+}
+
+export function resolveIcimsNextPageUrl(html, origin, currentPage) {
+  const expected = currentPage + 1;
+  for (const href of anchorHrefs(html)) {
+    const parsed = safeSearchPageUrl(href, origin);
+    if (!parsed) continue;
+    const page = Number.parseInt(parsed.searchParams.get('pr') ?? '', 10);
+    if (page === expected) return parsed.href;
+  }
+  return null;
 }
 
 function maxPages(entry, ctx) {
@@ -113,7 +153,7 @@ export default {
   }),
   detect(entry) {
     const origin = resolveIcimsOrigin(entry);
-    return origin ? { url: searchUrl(origin, 0) } : null;
+    return origin ? { url: introUrl(origin) } : null;
   },
   tenant(entry) {
     const origin = resolveIcimsOrigin(entry);
@@ -125,23 +165,44 @@ export default {
   async fetch(entry, ctx) {
     const origin = resolveIcimsOrigin(entry);
     if (!origin) throw new Error(`icims: cannot resolve portal for ${entry.name}`);
+
+    const bootstrap = introUrl(origin);
+    const bootstrapHtml = await ctx.fetchText(bootstrap, {
+      redirect: 'error',
+      headers: HEADERS,
+    });
+    let pageUrl = resolveIcimsSearchUrl(bootstrapHtml, origin);
+    if (!pageUrl) {
+      throw new Error(`icims: portal intro has no same-origin job search link for ${entry.name}`);
+    }
+
     const all = [];
-    const seen = new Set();
-    let previousFirstUrl = null;
-    for (let page = 0; page < maxPages(entry, ctx); page += 1) {
+    const seenJobs = new Set();
+    const seenPages = new Set();
+    const limit = maxPages(entry, ctx);
+    let referer = bootstrap;
+
+    for (let page = 0; page < limit; page += 1) {
+      if (seenPages.has(pageUrl)) break;
+      seenPages.add(pageUrl);
       if (page > 0) await sleep(INTER_PAGE_DELAY_MS, ctx);
-      const html = await ctx.fetchText(searchUrl(origin, page), {
+
+      const html = await ctx.fetchText(pageUrl, {
         redirect: 'error',
-        headers: HEADERS,
+        headers: { ...HEADERS, referer },
       });
       const pageJobs = parseIcimsSearchPage(html, origin, entry.name);
-      if (pageJobs.length === 0 || pageJobs[0].url === previousFirstUrl) break;
-      previousFirstUrl = pageJobs[0].url;
+      if (pageJobs.length === 0) break;
       for (const job of pageJobs) {
-        if (seen.has(job.id)) continue;
-        seen.add(job.id);
+        if (seenJobs.has(job.id)) continue;
+        seenJobs.add(job.id);
         all.push(job);
       }
+
+      const nextPageUrl = resolveIcimsNextPageUrl(html, origin, page);
+      if (!nextPageUrl) break;
+      referer = pageUrl;
+      pageUrl = nextPageUrl;
     }
     return all;
   },
