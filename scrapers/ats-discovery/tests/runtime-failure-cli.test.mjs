@@ -39,13 +39,33 @@ test('import cap mismatch fails before scanning and publishes a partial run', as
 
   const dataPath = path.join(directory, 'data');
   const configPath = path.join(directory, 'scanner.json');
+  const portalsPath = path.join(directory, 'portals.yml');
+  const overridesPath = path.join(directory, 'overrides.yml');
+  const policyPath = path.join(directory, 'policy.yml');
+
+  await writeFile(portalsPath, JSON.stringify({ tracked_companies: [] }));
+  await writeFile(overridesPath, JSON.stringify({
+    schema_version: 1,
+    priority: { ashby: [] },
+    disabled: { ashby: [] },
+  }));
+  await writeFile(policyPath, JSON.stringify({
+    schema_version: 1,
+    providers: {
+      ashby: {
+        catalog_enabled: false,
+        max_normal_targets_per_run: 100,
+        target_full_sweep_days: 3,
+      },
+    },
+  }));
   await writeFile(configPath, JSON.stringify({
     schemaVersion: 1,
     careerOps: { upstreamRef: 'test-ref' },
     paths: {
-      portals: path.join(directory, 'portals.yml'),
-      companyOverrides: path.join(directory, 'overrides.yml'),
-      discoveryPolicy: path.join(directory, 'policy.yml'),
+      portals: portalsPath,
+      companyOverrides: overridesPath,
+      discoveryPolicy: policyPath,
       catalogs: path.join(dataPath, 'catalogs'),
       state: path.join(dataPath, 'state'),
       data: dataPath,

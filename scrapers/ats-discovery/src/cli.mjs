@@ -147,7 +147,6 @@ async function runScan(args) {
       mode: args.mode,
     });
     failureStage = 'runtime_config_validation';
-    prerequisiteFailure = true;
     requestedCatalogTargets = validateLiveCatalogTargetRequest({
       mode: args.mode,
       requested: args.catalogTargets,
@@ -157,6 +156,7 @@ async function runScan(args) {
       args.mode === 'import'
       && args.maxCreate > config.imports.maxCreatesPerRun
     ) {
+      prerequisiteFailure = true;
       throw new Error(
         `--max-create ${args.maxCreate} exceeds imports.maxCreatesPerRun `
         + `${config.imports.maxCreatesPerRun}`,
