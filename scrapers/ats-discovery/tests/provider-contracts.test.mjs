@@ -54,5 +54,6 @@ test('new provider source attribution is pinned to the adapted upstream code', (
   assert.equal(paylocity.source.repository, 'kalil0321/ats-scrapers');
   assert.equal(paylocity.source.file, 'src/ats_scrapers/scrapers/paylocity.py');
   assert.equal(paylocity.source.ref, '83a694a80679d49376b76e31fccd5676cddf9cd1');
+  assert.equal(icims.capabilities.explicitIdentityPreflight, true);
   assert.equal(paylocity.capabilities.explicitIdentityPreflight, true);
 });

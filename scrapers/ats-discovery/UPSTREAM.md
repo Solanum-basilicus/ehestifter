@@ -81,6 +81,27 @@ Ehestifter adapts the public listing logic to its provider contract, bounded
 execution, shared detail stage, and Jobs-owned canonical identity. The code is
 not copied as an unattended upstream update.
 
+### Career-Ops JibeApply acquisition reference
+
+- Repository: https://github.com/santifer/career-ops
+- Commit: 311ed4a
+- License: MIT
+- Adapted file: `providers/jibeapply.mjs`
+- Source URL: https://github.com/santifer/career-ops/blob/311ed4a/providers/jibeapply.mjs
+
+Ehestifter keeps Jibe as an iCIMS acquisition variant instead of a persisted
+provider. The public `/api/jobs` request pattern and bounded pagination are
+adapted from this source. The description and identity mapping use fields
+confirmed by an Ehestifter operator probe on 2026-08-27: `description`,
+`responsibilities`, `qualifications`, `req_id`, and the classic iCIMS
+`apply_url`.
+
+An independent implementation documents a root `<site>/jobs/<req_id>` public
+route and the iCIMS-backed `apply_url` behavior. Ehestifter uses the Jibe
+`client_code` path segment when the API provides it, because branded sites can
+expose canonical paths such as `/<client_code>/jobs/<req_id>`:
+https://github.com/Esteban-PG/Job-alert-bot/blob/main/jobbot/fetchers/jibe.py
+
 ## ats-scrapers Paylocity
 
 - Repository: https://github.com/kalil0321/ats-scrapers

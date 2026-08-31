@@ -22,7 +22,8 @@
  *                                detail enrichment and diagnostics; Jobs owns
  *                                the canonical persisted identity.
  * @property {string} title    Required, non-empty after trim.
- * @property {string} url      Required, absolute URL — used as the dedup key.
+ * @property {string} url      Required, absolute public job URL — used as the dedup key.
+ * @property {string} [applyUrl] Optional absolute application URL when it differs from `url`.
  * @property {string} company  May be empty when the source can't expose it
  *                             at the list-page level; populated downstream.
  * @property {string} location May be empty.
@@ -34,11 +35,14 @@
  *                               omit it. Consumed by scan.mjs's
  *                               content_filter; an empty/absent value always
  *                               passes the filter.
- * @property {number} [postedAt] Epoch ms when the posting was published.
+ * @property {number|string} [postedAt] Epoch ms or parseable date when the posting was published.
  *                               Omitted when the source doesn't expose a
  *                               usable date. scan.mjs ignores it; consumers
  *                               like scan-ats-full.mjs use it for recency
  *                               filtering.
+ * @property {{provider:string,providerTenant:string,externalId:string}} [explicitIdentity]
+ *                               Provider-proven identity when the acquisition URL cannot carry
+ *                               the persisted identity. The scanner validates it before preflight.
  * @property {number} [trustScore] 0-100 trust score from _trust-validator.mjs.
  * @property {string[]} [trustFlags] Flags raised by trust validation (e.g.
  *                                   'invalid_url', 'suspicious_domain').

@@ -102,9 +102,11 @@ provider_canaries:
     interval_hours: 24
     enabled: false
 
-  - name: Rambus iCIMS protocol canary
-    careers_url: https://careers-rambus.icims.com
+  - name: TeKnowledge iCIMS Jibe protocol canary
+    careers_url: https://careers.teknowledge.com
+    api: https://careers.teknowledge.com/api/jobs
     provider: icims
+    icims_variant: jibe
     max_pages: 1
     minimum_jobs: 1
     detail_sample_size: 3
@@ -112,9 +114,11 @@ provider_canaries:
     interval_hours: 24
     enabled: false
 
-  - name: NV5 iCIMS protocol canary
-    careers_url: https://careers-nv5.icims.com
+  - name: Booking.com iCIMS Jibe protocol canary
+    careers_url: https://jobs.booking.com
+    api: https://jobs.booking.com/api/jobs
     provider: icims
+    icims_variant: jibe
     max_pages: 1
     minimum_jobs: 1
     detail_sample_size: 3

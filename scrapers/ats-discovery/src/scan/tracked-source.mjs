@@ -71,15 +71,36 @@ export function candidateFromJob(job, target, upstreamRef) {
     : '';
 
   const providerSource = target._provider?.source;
-  const explicitIdentity = target._provider?.capabilities?.explicitIdentityPreflight === true
+  let explicitIdentity = null;
+  if (
+    target._provider?.capabilities?.explicitIdentityPreflight === true
     && job.id != null
     && String(job.id).trim() !== ''
-    ? {
-      provider: target.provider,
-      providerTenant: target.tenant,
-      externalId: String(job.id).trim(),
+  ) {
+    const supplied = job.explicitIdentity;
+    if (supplied != null) {
+      const provider = typeof supplied.provider === 'string' ? supplied.provider.trim() : '';
+      const providerTenant = typeof supplied.providerTenant === 'string'
+        ? supplied.providerTenant.trim()
+        : '';
+      const externalId = typeof supplied.externalId === 'string'
+        ? supplied.externalId.trim()
+        : '';
+      if (provider !== target.provider || !providerTenant || externalId !== String(job.id).trim()) {
+        throw new Error(`Provider ${target.provider} returned an invalid explicit job identity`);
+      }
+      explicitIdentity = { provider, providerTenant, externalId };
+    } else {
+      explicitIdentity = {
+        provider: target.provider,
+        providerTenant: target.tenant,
+        externalId: String(job.id).trim(),
+      };
     }
-    : null;
+  }
+
+  const jobUrl = String(job.url ?? '').trim();
+  const applyUrl = String(job.applyUrl ?? '').trim();
 
   return {
     schemaVersion: 1,
@@ -88,8 +109,8 @@ export function candidateFromJob(job, target, upstreamRef) {
     sourceProviderVariant: target.providerVariant ?? null,
     sourceTenant: target.tenant,
     sourceCompany: target.name,
-    url: String(job.url ?? '').trim(),
-    applyUrl: String(job.url ?? '').trim(),
+    url: jobUrl,
+    applyUrl: validHttpUrl(applyUrl) ? applyUrl : jobUrl,
     title: String(job.title ?? '').trim(),
     hiringCompanyName: String(job.company ?? target.name ?? '').trim(),
     postingCompanyName: null,

@@ -68,11 +68,19 @@ BambooHR uses the public tenant `careers/list` JSON endpoint. The list does not
 provide a complete description, so the shared detail stage requests the same
 tenant's `/careers/{id}/detail` endpoint after Jobs reports that the job is new.
 
-iCIMS uses the public tenant `/jobs/search` HTML pages with bounded pagination.
-The full `*.icims.com` portal host is the provider tenant because numeric iCIMS
-job IDs are tenant-local. The shared detail stage accepts only same-origin job
-URLs whose numeric ID matches the provider-native ID, then reads `JobPosting`
-JSON-LD.
+iCIMS has two acquisition modes. Classic `*.icims.com` portals keep the full
+portal host as the provider tenant because numeric job IDs are tenant-local. If
+AWS WAF returns its Human Verification CAPTCHA page, ATS Discovery reports
+`waf_captcha` instead of treating the response as an ordinary 405.
+
+Jibe/iCIMS Career Sites use an explicit `icims_variant: jibe` entry and the
+branded site's same-origin `/api/jobs` JSON endpoint. The list response carries
+title, location, posting date, and full description sections. Each accepted row
+must also carry an `apply_url` on `*.icims.com` whose numeric ID matches the Jibe
+requisition ID. That URL proves the Jobs identity while the branded Jibe URL
+remains the public job URL. The public path uses Jibe `client_code` when the API
+provides it. Jibe health is isolated under `icims:jibe`; classic
+iCIMS keeps the existing `icims` health/state key.
 
 Paylocity uses the public `/Recruiting/Jobs/All/{board-uuid}` page and parses its
 `window.pageData` JSON object without JavaScript evaluation. Public detail URLs

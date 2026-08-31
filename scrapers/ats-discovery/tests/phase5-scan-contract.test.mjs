@@ -249,3 +249,86 @@ test('Paylocity candidate carries explicit board identity and provider attributi
   assert.equal(result.provenance.upstreamRef, null);
   assert.equal(result.provenance.providerImplementation.ref, source.ref);
 });
+
+test('iCIMS Jibe candidate uses per-job iCIMS identity and keeps branded public URL', () => {
+  const result = candidateFromJob(
+    {
+      id: '17621',
+      title: 'Senior Accountant',
+      url: 'https://careers.teknowledge.com/jobs/17621',
+      applyUrl: 'https://careers-everty.icims.com/jobs/17621/login',
+      company: 'Everty',
+      location: 'Lagos, Nigeria',
+      description: 'Full description',
+      explicitIdentity: {
+        provider: 'icims',
+        providerTenant: 'careers-everty.icims.com',
+        externalId: '17621',
+      },
+      acquisitionMode: 'jibe-api',
+    },
+    {
+      provider: 'icims',
+      providerVariant: 'jibe',
+      healthPartition: 'icims:jibe',
+      tenant: 'careers.teknowledge.com',
+      name: 'TeKnowledge',
+      careers_url: 'https://careers.teknowledge.com',
+      sourceOrigin: 'https://careers.teknowledge.com',
+      targetClass: 'priority',
+      reason: 'provider_canary',
+      _provider: {
+        id: 'icims',
+        source: {
+          repository: 'santifer/career-ops',
+          file: 'providers/icims.mjs',
+          ref: 'b9cd65e8ddba9448c9590c25f45288cf61c1c1c7',
+          license: 'MIT',
+        },
+        capabilities: { explicitIdentityPreflight: true },
+      },
+    },
+    'career-ops-ref',
+  );
+
+  assert.equal(result.sourceTenant, 'careers.teknowledge.com');
+  assert.equal(result.url, 'https://careers.teknowledge.com/jobs/17621');
+  assert.equal(result.applyUrl, 'https://careers-everty.icims.com/jobs/17621/login');
+  assert.equal(result.descriptionStatus, 'provider-list');
+  assert.deepEqual(result.explicitIdentity, {
+    provider: 'icims',
+    providerTenant: 'careers-everty.icims.com',
+    externalId: '17621',
+  });
+  assert.equal(result.provenance.acquisitionMode, 'jibe-api');
+});
+
+test('candidate rejects a provider-supplied identity that does not match the job id', () => {
+  assert.throws(
+    () => candidateFromJob(
+      {
+        id: '17621',
+        title: 'Senior Accountant',
+        url: 'https://careers.teknowledge.com/jobs/17621',
+        explicitIdentity: {
+          provider: 'icims',
+          providerTenant: 'careers-everty.icims.com',
+          externalId: '99999',
+        },
+      },
+      {
+        provider: 'icims',
+        tenant: 'careers.teknowledge.com',
+        name: 'TeKnowledge',
+        targetClass: 'priority',
+        reason: 'tracked_company',
+        _provider: {
+          id: 'icims',
+          capabilities: { explicitIdentityPreflight: true },
+        },
+      },
+      'career-ops-ref',
+    ),
+    /invalid explicit job identity/,
+  );
+});

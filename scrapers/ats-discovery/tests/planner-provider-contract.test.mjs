@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { buildTargetPlan } from '../src/targets/planner.mjs';
+import icims from '../src/providers/icims.mjs';
 
 function policy() {
   return {
@@ -220,4 +221,40 @@ test('provider canary minimum_jobs must remain positive', () => {
   assert.equal(result.planningRejections.length, 1);
   assert.equal(result.plan.counts.canaryPlanningRejected, 1);
   assert.match(result.planningRejections[0].details.error, /minimum_jobs.*1 to 100000/);
+});
+
+
+test('planner gives Jibe iCIMS canary a separate acquisition health partition', () => {
+  const result = buildTargetPlan({
+    portalConfig: {
+      provider_canaries: [{
+        name: 'TeKnowledge iCIMS Jibe canary',
+        provider: 'icims',
+        icims_variant: 'jibe',
+        careers_url: 'https://careers.teknowledge.com',
+        api: 'https://careers.teknowledge.com/api/jobs',
+        minimum_jobs: 1,
+        detail_sample_size: 3,
+        minimum_detail_successes: 1,
+      }],
+    },
+    companyOverrides: { schema_version: 1, priority: { ashby: [] }, disabled: { ashby: [] } },
+    discoveryPolicy: {
+      schema_version: 1,
+      providers: {
+        ashby: { catalog_enabled: false },
+        icims: { catalog_enabled: false },
+      },
+    },
+    tenantState: state(),
+    providers: new Map([['icims', icims]]),
+    mode: 'preflight',
+    generatedAt: new Date('2026-08-27T07:00:00Z'),
+  });
+
+  assert.equal(result.runtimeTargets.length, 1);
+  assert.equal(result.runtimeTargets[0].tenant, 'careers.teknowledge.com');
+  assert.equal(result.runtimeTargets[0].providerVariant, 'jibe');
+  assert.equal(result.runtimeTargets[0].healthPartition, 'icims:jibe');
+  assert.equal(result.runtimeTargets[0].sourceOrigin, 'https://careers.teknowledge.com');
 });

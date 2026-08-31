@@ -30,6 +30,8 @@ export function classifyProviderError(error) {
   if (codes.includes('WORKDAY_TENANT_INVALID')) return 'workday_tenant_invalid';
   if (codes.includes('WORKDAY_TENANT_RESTRICTED')) return 'workday_tenant_restricted';
   if (codes.includes('WORKDAY_REQUEST_REJECTED')) return 'provider_schema';
+  if (codes.includes('ICIMS_WAF_CAPTCHA')) return 'waf_captcha';
+  if (codes.includes('ICIMS_JIBE_QUERY_REJECTED')) return 'provider_schema';
   if (codes.includes('CSB_LISTING_SCHEMA_MISMATCH')) return 'provider_schema';
   if (codes.some((code) => [
     'CSB_SESSION_REJECTED',
@@ -83,5 +85,6 @@ export function isTransientProviderResult(result) {
     'provider_anomaly',
     'provider_schema',
     'provider_auth',
+    'waf_captcha',
   ].includes(result.errorClass);
 }

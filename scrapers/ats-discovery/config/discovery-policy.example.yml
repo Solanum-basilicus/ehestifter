@@ -135,8 +135,9 @@ providers:
       concurrency: 2
       min_request_interval_ms: 500
 
-  # iCIMS can require several HTML pages for one tenant. Start with one
-  # catalog tenant per run and increase only after canary and sweep review.
+  # The classic iCIMS catalog is inventory only by default. Current classic
+  # portals can return AWS WAF CAPTCHA to the scanner runtime. Jibe/iCIMS
+  # Career Sites are configured as explicit tracked/canary targets in Stage 1.
   icims:
     catalog_enabled: false
     max_normal_targets_per_run: 1

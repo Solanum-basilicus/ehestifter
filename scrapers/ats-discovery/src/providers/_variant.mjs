@@ -24,10 +24,30 @@ export function successFactorsVariant(entry) {
   return 'rmk';
 }
 
+export function icimsVariant(entry) {
+  const explicit = clean(
+    entry?.icims_variant
+    ?? entry?.icimsVariant
+    ?? entry?.providerVariant,
+  );
+  if (explicit === 'jibe') return explicit;
+  if (explicit === 'classic') return null;
+  if (explicit != null) throw new Error(`Unsupported iCIMS variant: ${explicit}`);
+
+  const raw = entry?.api || entry?.careers_url || '';
+  try {
+    if (/\.jibeapply\.com$/i.test(new URL(raw).hostname)) return 'jibe';
+  } catch {
+    /* Invalid URLs are handled by provider-specific validation. */
+  }
+  return null;
+}
+
 export function providerVariant(provider, target = null) {
   const providerId = clean(provider);
   if (!providerId) return null;
   if (providerId === 'successfactors') return successFactorsVariant(target);
+  if (providerId === 'icims') return icimsVariant(target);
   return null;
 }
 
