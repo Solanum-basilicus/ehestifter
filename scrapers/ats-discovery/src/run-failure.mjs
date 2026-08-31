@@ -143,6 +143,17 @@ export function classifyPrerequisiteFailure(error, stage = 'discovery_users_load
   };
 }
 
+export function classifyRuntimeFailure(error, stage) {
+  return {
+    schemaVersion: 1,
+    stage,
+    outcome: 'failed_transient',
+    retryable: true,
+    exitCode: 1,
+    error: buildErrorDiagnostic(error),
+  };
+}
+
 export function buildPrerequisiteFailureSummary(summary, failure) {
   return {
     ...summary,

@@ -78,6 +78,12 @@ def iso_utc(value: datetime | None) -> str | None:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def iso_local(value: datetime | None, timezone_name: str) -> str | None:
+    if value is None:
+        return None
+    return value.astimezone(ZoneInfo(timezone_name)).isoformat()
+
+
 def parse_utc(value: Any, field: str) -> datetime | None:
     if value is None:
         return None
@@ -274,6 +280,10 @@ def empty_task_state() -> dict[str, Any]:
         "lastSuccessfulAtUtc": None,
         "lastRunId": None,
         "lastRunPath": None,
+        "lastAttemptRunId": None,
+        "lastAttemptRunPath": None,
+        "lastCompletedRunId": None,
+        "lastCompletedRunPath": None,
         "lastOutcome": None,
         "lastExitCode": None,
         "lastTrigger": None,
@@ -287,7 +297,19 @@ def validate_task_state(value: Any, field: str) -> dict[str, Any]:
         raise StateError(f"{field} must be an object")
     expected = empty_task_state()
     result = {**expected, **value}
-    for key in ("currentSlot", "lastCompletedSlot", "lastRunId", "lastRunPath", "lastOutcome", "lastTrigger", "lastError"):
+    for key in (
+        "currentSlot",
+        "lastCompletedSlot",
+        "lastRunId",
+        "lastRunPath",
+        "lastAttemptRunId",
+        "lastAttemptRunPath",
+        "lastCompletedRunId",
+        "lastCompletedRunPath",
+        "lastOutcome",
+        "lastTrigger",
+        "lastError",
+    ):
         if result[key] is not None and not isinstance(result[key], str):
             raise StateError(f"{field}.{key} must be a string or null")
     for key in ("firstAttemptAtUtc", "lastAttemptAtUtc", "lastCompletedAtUtc", "lastSuccessfulAtUtc"):
@@ -554,6 +576,25 @@ def find_new_run(runs_path: Path, before: set[Path]) -> Path | None:
     return max(new, key=lambda item: item.stat().st_mtime)
 
 
+def read_run_failure_message(run_path: Path | None) -> str | None:
+    if run_path is None:
+        return None
+    try:
+        failure = json.loads((run_path / "failure.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(failure, dict):
+        return None
+    error = failure.get("error")
+    message = error.get("message") if isinstance(error, dict) else None
+    if not isinstance(message, str) or not message.strip():
+        return None
+    stage = failure.get("stage")
+    if isinstance(stage, str) and stage.strip():
+        return f"{stage}: {message.strip()}"
+    return message.strip()
+
+
 def run_command(command: Sequence[str], cwd: Path) -> int:
     environment = os.environ.copy()
     environment.setdefault("LOCAL_UID", str(os.getuid()))
@@ -600,6 +641,11 @@ def mark_completed(
         task_state["lastSuccessfulAtUtc"] = iso_utc(now)
     task_state["lastRunId"] = run_path.name if run_path else task_state.get("lastRunId")
     task_state["lastRunPath"] = str(run_path) if run_path else task_state.get("lastRunPath")
+    task_state["lastAttemptRunId"] = run_path.name if run_path else None
+    task_state["lastAttemptRunPath"] = str(run_path) if run_path else None
+    if run_path:
+        task_state["lastCompletedRunId"] = run_path.name
+        task_state["lastCompletedRunPath"] = str(run_path)
     task_state["lastOutcome"] = outcome
     task_state["lastExitCode"] = exit_code
     task_state["lastTrigger"] = trigger
@@ -620,6 +666,8 @@ def mark_failed(
     task_state["lastAttemptAtUtc"] = iso_utc(now)
     task_state["lastRunId"] = run_path.name if run_path else task_state.get("lastRunId")
     task_state["lastRunPath"] = str(run_path) if run_path else task_state.get("lastRunPath")
+    task_state["lastAttemptRunId"] = run_path.name if run_path else None
+    task_state["lastAttemptRunPath"] = str(run_path) if run_path else None
     task_state["lastOutcome"] = outcome
     task_state["lastExitCode"] = exit_code
     task_state["lastTrigger"] = trigger
@@ -786,6 +834,13 @@ def run_scheduled_task(
         else:
             outcome = "failed_transient"
 
+        error_message = launch_error or read_run_failure_message(run_path)
+        if outcome.startswith("failed_") and error_message is None:
+            error_message = (
+                "scanner exited without publishing a run artifact"
+                if outcome == "failed_missing_run_artifact"
+                else f"scanner exited with code {exit_code}"
+            )
         if outcome in ("success", "completed_degraded"):
             mark_completed(
                 task_state,
@@ -805,7 +860,7 @@ def run_scheduled_task(
                 exit_code=exit_code,
                 trigger=trigger,
                 run_path=run_path,
-                error_message=launch_error,
+                error_message=error_message,
             )
 
         metadata = {
@@ -815,8 +870,9 @@ def run_scheduled_task(
             "trigger": trigger,
             "outcome": outcome,
             "exitCode": exit_code,
-            "error": launch_error,
-            "finishedAtUtc": iso_utc(finished),
+            "error": error_message,
+            "finishedAt": iso_local(finished, config["timezone"]),
+            "timezone": config["timezone"],
         }
         write_run_scheduler_metadata(run_path, metadata)
         backup_and_write_state(config, state, finished)
@@ -920,6 +976,70 @@ def apply_retention(config: Mapping[str, Any], now: datetime) -> dict[str, int]:
     return summary
 
 
+def _status_timestamp(value: Any, field: str, timezone_name: str) -> str | None:
+    parsed = parse_utc(value, field)
+    return iso_local(parsed, timezone_name)
+
+
+def _legacy_status_run_paths(task_state: Mapping[str, Any]) -> dict[str, str]:
+    legacy_path = task_state.get("lastRunPath")
+    if not isinstance(legacy_path, str) or not legacy_path:
+        return {}
+    path = Path(legacy_path)
+    try:
+        metadata = json.loads((path / "scheduler.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+    if not isinstance(metadata, dict):
+        return {}
+    outcome = metadata.get("outcome")
+    result: dict[str, str] = {}
+    if outcome in ("success", "completed_degraded"):
+        result["lastCompletedRunId"] = path.name
+        result["lastCompletedRunPath"] = str(path)
+    if outcome == task_state.get("lastOutcome"):
+        result["lastAttemptRunId"] = path.name
+        result["lastAttemptRunPath"] = str(path)
+    return result
+
+
+def _status_lock(lock: Mapping[str, Any], timezone_name: str) -> dict[str, Any]:
+    result = dict(lock)
+    for key in ("owner", "staleOwner"):
+        owner = result.get(key)
+        if not isinstance(owner, dict):
+            continue
+        localized = dict(owner)
+        if "startedAtUtc" in localized:
+            localized["startedAt"] = _status_timestamp(
+                localized.pop("startedAtUtc"),
+                f"lock.{key}.startedAtUtc",
+                timezone_name,
+            )
+        result[key] = localized
+    return result
+
+
+def _status_task_state(task_state: Mapping[str, Any], timezone_name: str) -> dict[str, Any]:
+    hidden = {
+        "firstAttemptAtUtc",
+        "lastAttemptAtUtc",
+        "lastCompletedAtUtc",
+        "lastSuccessfulAtUtc",
+        "lastRunId",
+        "lastRunPath",
+    }
+    result = {key: value for key, value in task_state.items() if key not in hidden}
+    for key, value in _legacy_status_run_paths(task_state).items():
+        if result.get(key) is None:
+            result[key] = value
+    result["firstAttemptAt"] = _status_timestamp(task_state.get("firstAttemptAtUtc"), "task.firstAttemptAtUtc", timezone_name)
+    result["lastAttemptAt"] = _status_timestamp(task_state.get("lastAttemptAtUtc"), "task.lastAttemptAtUtc", timezone_name)
+    result["lastCompletedAt"] = _status_timestamp(task_state.get("lastCompletedAtUtc"), "task.lastCompletedAtUtc", timezone_name)
+    result["lastSuccessfulAt"] = _status_timestamp(task_state.get("lastSuccessfulAtUtc"), "task.lastSuccessfulAtUtc", timezone_name)
+    return result
+
+
 def status_payload(config: Mapping[str, Any], now: datetime) -> dict[str, Any]:
     state = load_state(config["_paths"]["state"], config["timezone"])
     tasks: dict[str, Any] = {}
@@ -934,13 +1054,13 @@ def status_payload(config: Mapping[str, Any], now: datetime) -> dict[str, Any]:
             "slotScheduledAt": slot.scheduled_local.isoformat(),
             "nextScheduledAt": next_time.isoformat(),
             "due": task_config["enabled"] and task_state.get("lastCompletedSlot") != slot.slot_id,
-            **task_state,
+            **_status_task_state(task_state, config["timezone"]),
         }
     return {
         "schemaVersion": SCHEMA_VERSION,
-        "generatedAtUtc": iso_utc(now),
+        "generatedAt": iso_local(now, config["timezone"]),
         "timezone": config["timezone"],
-        "lock": inspect_lock(config),
+        "lock": _status_lock(inspect_lock(config), config["timezone"]),
         "tasks": tasks,
     }
 
@@ -959,10 +1079,12 @@ def print_status(payload: Mapping[str, Any]) -> None:
         print(f"  Enabled:            {task['enabled']}")
         print(f"  Current due slot:   {task['currentDueSlot']}")
         print(f"  Due:                {task['due']}")
-        print(f"  Last completed:     {task.get('lastCompletedAtUtc') or '-'}")
+        print(f"  Last attempt:       {task.get('lastAttemptAt') or '-'}")
         print(f"  Last outcome:       {task.get('lastOutcome') or '-'}")
         print(f"  Last error:         {task.get('lastError') or '-'}")
-        print(f"  Last run:           {task.get('lastRunPath') or '-'}")
+        print(f"  Last attempt run:   {task.get('lastAttemptRunPath') or '-'}")
+        print(f"  Last completed:     {task.get('lastCompletedAt') or '-'}")
+        print(f"  Last completed run: {task.get('lastCompletedRunPath') or '-'}")
         print(f"  Attempts this slot: {task.get('attemptsForCurrentSlot', 0)}")
         print(f"  Next scheduled:     {task['nextScheduledAt']}")
 

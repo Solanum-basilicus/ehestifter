@@ -181,6 +181,12 @@ The `*.example.*` files are committed templates. The active files without
 `.example` are operator-owned local configuration and should not contain secrets
 that are committed to Git.
 
+For scheduled import, `dailyDiscovery.scannerArgs --max-create` in
+`scheduler.local.json` is the requested per-run create budget, while
+`imports.maxCreatesPerRun` in `scanner.local.json` is the scanner safety ceiling.
+The requested value must be less than or equal to the ceiling. The scanner checks
+this before provider work and publishes a prerequisite-failure run when they disagree.
+
 ### After changing scanner or discovery configuration
 
 The current Compose service bind-mounts `./config` as `/config`. Therefore a new
@@ -598,6 +604,11 @@ and the live/stale lock state. Its exit code is `2` when an enabled task's last
 outcome is degraded or failed, which is useful for monitoring but can surprise a
 shell running with `set -e`.
 
+Operator-facing status timestamps use the configured scheduler timezone and local
+offset. Scheduler state continues to store `*Utc` fields internally. Status keeps
+separate last-attempt and last-completed run paths so a failed attempt cannot make
+an older completed run look like its own artifact directory.
+
 ### `scanner [--label NAME] -- <scanner arguments>`
 
 ```bash
@@ -663,7 +674,7 @@ A normal run can emit:
 
 ```text
 metadata.json
-failure.json                  prerequisite failures only
+failure.json                  failed/aborted runs when failure evidence is available
 summary.json
 target-plan.json
 provider-results.json
@@ -681,6 +692,12 @@ scheduler.json
 ```
 
 If required Users discovery input fails before provider execution, the scanner still publishes an atomic run directory. `failure.json` contains a bounded sanitized cause chain; provider/canary/state-change artifacts remain empty or absent because no provider health observation was made.
+
+Other scanner failures also make a best-effort atomic publication. A partial run
+contains `metadata.json` and `failure.json` plus only stage artifacts that were
+complete when the error occurred. Missing files therefore mean "stage not completed",
+not "empty result". A partial run may include proposed tenant-state changes for
+diagnosis, but it never updates `tenant-state.json` outside the normal persistence boundary.
 
 `summary.json` reports unavailable detail observations separately through
 `detailUnavailable` and reports their no-write import outcome through
@@ -705,6 +722,7 @@ Key behavior:
 - scanner exit `2` completes the slot as degraded and remains visible;
 - scanner exit `75` with a published run is `aborted_retryable`, leaves the slot due, and uses the existing bounded systemd retry policy;
 - scanner exit `64` with a published run is `failed_prerequisite`, leaves the slot due, and stops the immediate systemd restart chain;
+- unexpected scanner failures remain retryable exit `1`, but publish partial evidence when possible;
 - malformed or timezone-mismatched scheduler state fails closed;
 - discovery may continue with the previous valid catalogs when refresh fails;
 - scheduler and tenant-state backups plus artifact retention are bounded.
@@ -808,7 +826,10 @@ Before trusting scheduled live operation:
 6. install timers only after rendered units point to `scrapers/ats-discovery` and Compose service `ats-discovery`;
 7. inspect the next natural missed-slot catch-up after reboot/resume.
 
-For a degraded or aborted run, inspect `summary.json`, `failure.json` when present, `scheduler.json`, the systemd journal around the run, and owner-service telemetry. A missing owner-service request combined with host link/DNS events indicates failure before the request reached the service.
+For a degraded or aborted run, start with `ats-ops status`, then inspect the last
+attempt run's `failure.json`, available stage artifacts, and `scheduler.json`.
+Use the systemd journal and owner-service telemetry only when retained artifacts do
+not explain the failure. A missing owner-service request combined with host link/DNS events indicates failure before the request reached the service.
 
 Failure visibility is local: systemd unit state, journal output, scheduler state/status, and retained run artifacts. There is no external email/chat alert channel.
 

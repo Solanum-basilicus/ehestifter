@@ -2,7 +2,11 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createRunId, writeRunArtifacts } from './artifacts/run-writer.mjs';
+import {
+  createRunId,
+  writeRunArtifacts,
+  writeRunFailureArtifact,
+} from './artifacts/run-writer.mjs';
 import {
   catalogSyncSummary,
   syncAllProviderCatalogs,
@@ -24,7 +28,10 @@ import { normalizeCandidateLocations } from './locations/normalizer.mjs';
 import { loadProviders } from './providers/_registry.mjs';
 import { makeHttpCtx } from './providers/_http.mjs';
 import { publishPrerequisiteFailureRun } from './prerequisite-failure-run.mjs';
-import { classifyPrerequisiteFailure } from './run-failure.mjs';
+import {
+  classifyPrerequisiteFailure,
+  classifyRuntimeFailure,
+} from './run-failure.mjs';
 import { buildRunSummary } from './run-summary.mjs';
 import { buildProviderCanaryResults } from './scan/provider-canaries.mjs';
 import { buildRateObservations } from './scan/rate-observations.mjs';
@@ -111,32 +118,66 @@ async function runScan(args) {
     enabled: args.noProgress ? false : 'auto',
   });
   let progressCleared = false;
+  const startedAt = new Date();
+  const runId = createRunId(startedAt);
+  let config = null;
+  let requestedCatalogTargets = args.catalogTargets ?? 0;
+  let providers = null;
+  let planning = null;
+  let scanResult = null;
+  let userMatchResults = null;
+  let canaryResults = null;
+  let preflightResults = null;
+  let detailResults = null;
+  let locationResults = null;
+  let importResults = null;
+  let compatibilityResults = null;
+  let rateObservations = null;
+  let tenantStateChanges = null;
+  let summary = null;
+  let rejected = null;
+  let runPublished = false;
+  let publishedRunPath = null;
+  let failureStage = 'runtime_config_load';
+  let prerequisiteFailure = false;
 
   try {
-    const startedAt = new Date();
-    const runId = createRunId(startedAt);
-    const config = await loadRuntimeConfig({
+    config = await loadRuntimeConfig({
       operation: 'scan',
       mode: args.mode,
     });
-    const requestedCatalogTargets = validateLiveCatalogTargetRequest({
+    failureStage = 'runtime_config_validation';
+    prerequisiteFailure = true;
+    requestedCatalogTargets = validateLiveCatalogTargetRequest({
       mode: args.mode,
       requested: args.catalogTargets,
       liveCatalog: config.liveCatalog,
     });
+    if (
+      args.mode === 'import'
+      && args.maxCreate > config.imports.maxCreatesPerRun
+    ) {
+      throw new Error(
+        `--max-create ${args.maxCreate} exceeds imports.maxCreatesPerRun `
+        + `${config.imports.maxCreatesPerRun}`,
+      );
+    }
+    prerequisiteFailure = false;
 
     let discoveryUsersPayload = null;
     let discoveryMatcher = null;
     let discoveryUsersError = null;
 
+    failureStage = 'provider_load';
     const moduleDir = path.dirname(fileURLToPath(import.meta.url));
     const providersDir = path.join(moduleDir, 'providers');
-    const providers = await loadProviders(providersDir);
+    providers = await loadProviders(providersDir);
     if (providers.size === 0) {
       throw new Error(`No providers loaded from ${providersDir}`);
     }
 
-    const planning = await buildTargetPlanFromFiles({
+    failureStage = 'target_planning';
+    planning = await buildTargetPlanFromFiles({
       portalsPath: config.paths.portals,
       companyOverridesPath: config.paths.companyOverrides,
       discoveryPolicyPath: config.paths.discoveryPolicy,
@@ -154,6 +195,7 @@ async function runScan(args) {
     );
 
     if (config.multiUser.enabled) {
+      failureStage = 'discovery_users_load';
       progress.update({ stage: 'users', current: 0, total: 1 });
       try {
         const usersClient = createUsersClient(config.usersApi);
@@ -215,7 +257,8 @@ async function runScan(args) {
       current: 0,
       total: executionTargets.length,
     });
-    const scanResult = await runTrackedScan({
+    failureStage = 'provider_scan';
+    scanResult = await runTrackedScan({
       portalConfig: planning.portalConfig,
       targets: executionTargets,
       providers,
@@ -232,7 +275,8 @@ async function runScan(args) {
       }),
     });
 
-    const userMatchResults = discoveryMatcher
+    failureStage = 'user_match_artifact';
+    userMatchResults = discoveryMatcher
       ? buildUserMatchArtifact({
         discoveryMatcher,
         candidates: scanResult.candidates,
@@ -242,6 +286,7 @@ async function runScan(args) {
 
     let canaryDetailResults = null;
     if (scanResult.canaryCandidates.length > 0) {
+      failureStage = 'provider_canary_details';
       progress.update({
         stage: 'details',
         current: 0,
@@ -261,10 +306,11 @@ async function runScan(args) {
         },
       );
     }
+    failureStage = 'provider_canary_evaluation';
     const hasCanaryTargets = planning.runtimeTargets.some(
       (target) => target.canary != null,
     );
-    const canaryResults = hasCanaryTargets
+    canaryResults = hasCanaryTargets
       ? buildProviderCanaryResults({
         targets: executionTargets,
         providerResults: scanResult.providerResults,
@@ -274,8 +320,8 @@ async function runScan(args) {
       : null;
 
     let client = null;
-    let preflightResults = null;
     if (args.mode === 'preflight' || args.mode === 'import') {
+      failureStage = 'preflight';
       client = createJobsClient(config.jobsApi);
       progress.update({
         stage: 'preflight',
@@ -292,11 +338,11 @@ async function runScan(args) {
       );
     }
 
-    let detailResults = null;
     if (
       (args.mode === 'preflight' || args.mode === 'import')
       && config.scan.description.fetchMissing
     ) {
+      failureStage = 'detail_enrichment';
       const eligibleDetails = preflightResults.filter((candidate) => (
         candidate.preflight?.status === 'ok'
         && !candidate.preflight.exists
@@ -322,8 +368,8 @@ async function runScan(args) {
       });
     }
 
-    let locationResults = null;
     if (args.mode === 'preflight' || args.mode === 'import') {
+      failureStage = 'location_normalization';
       locationResults = normalizeCandidateLocations(
         detailResults ?? preflightResults,
         {
@@ -332,14 +378,8 @@ async function runScan(args) {
       );
     }
 
-    let importResults = null;
     if (args.mode === 'import') {
-      if (args.maxCreate > config.imports.maxCreatesPerRun) {
-        throw new Error(
-          `--max-create ${args.maxCreate} exceeds imports.maxCreatesPerRun `
-          + `${config.imports.maxCreatesPerRun}`,
-        );
-      }
+      failureStage = 'import';
       progress.update({
         stage: 'import',
         current: 0,
@@ -352,13 +392,13 @@ async function runScan(args) {
       });
     }
 
-    let compatibilityResults = null;
     if (
       args.mode === 'import'
       && config.multiUser.enabled
       && config.multiUser.compatibility.enabled
       && discoveryMatcher != null
     ) {
+      failureStage = 'compatibility';
       const enrichmentClient = createEnrichmentClient(config.enrichmentApi);
       progress.update({
         stage: 'compatibility',
@@ -387,7 +427,8 @@ async function runScan(args) {
       ?? scanResult.candidates;
     const finishedAt = new Date();
 
-    const rateObservations = buildRateObservations({
+    failureStage = 'rate_observations';
+    rateObservations = buildRateObservations({
       providerResults: scanResult.providerResults,
       breakerEvents: scanResult.breakerEvents,
       policy: planning.policy,
@@ -401,8 +442,8 @@ async function runScan(args) {
       !config.multiUser.enabled || executionTargets.length > 0
     );
     let nextTenantState = null;
-    let tenantStateChanges = null;
     if (shouldPersistTenantState) {
+      failureStage = 'tenant_state_transition';
       const transition = buildNextTenantState({
         previousState: planning.tenantState,
         targets: planning.runtimeTargets,
@@ -416,7 +457,8 @@ async function runScan(args) {
       tenantStateChanges = transition.changes;
     }
 
-    const summary = buildRunSummary({
+    failureStage = 'summary_build';
+    summary = buildRunSummary({
       runId,
       mode: args.mode,
       startedAt,
@@ -437,10 +479,11 @@ async function runScan(args) {
       targetsSkippedNoEligibleUsers,
     });
 
-    const rejected = [
+    rejected = [
       ...planning.planningRejections,
       ...scanResult.rejected,
     ];
+    failureStage = 'artifact_publish';
     const runPath = await writeRunArtifacts({
       dataPath: config.paths.data,
       runId,
@@ -493,8 +536,11 @@ async function runScan(args) {
       importResults,
       summary,
     });
+    runPublished = true;
+    publishedRunPath = runPath;
 
     if (nextTenantState) {
+      failureStage = 'tenant_state_persist';
       try {
         await saveTenantState(config.state.tenantStatePath, nextTenantState);
       } catch (error) {
@@ -524,6 +570,85 @@ async function runScan(args) {
     ) {
       process.exitCode = 2;
     }
+  } catch (error) {
+    console.error(error instanceof Error ? error.stack : String(error));
+    const failure = prerequisiteFailure
+      ? classifyPrerequisiteFailure(error, failureStage)
+      : classifyRuntimeFailure(error, failureStage);
+    if (config && runPublished && publishedRunPath) {
+      try {
+        await writeRunFailureArtifact(publishedRunPath, failure);
+        progress.clear();
+        progressCleared = true;
+        console.log(JSON.stringify({
+          runPath: publishedRunPath,
+          tenantStatePath: null,
+          failure,
+        }, null, 2));
+        process.exitCode = failure.exitCode;
+        return;
+      } catch (publishError) {
+        console.error(
+          `Failed to attach failure evidence to run ${runId}: ${publishError instanceof Error ? publishError.stack : String(publishError)}`,
+        );
+      }
+    } else if (config) {
+      try {
+        const runPath = await writeRunArtifacts({
+          dataPath: config.paths.data,
+          runId,
+          metadata: {
+            schemaVersion: 3,
+            runId,
+            mode: args.mode,
+            runStatus: failure.outcome,
+            failureStage: failure.stage,
+            partial: true,
+            scannerConfigPath: config.configPath,
+            careerOpsUpstreamRef: config.careerOps.upstreamRef,
+            catalogTargetsRequested: requestedCatalogTargets,
+            maxCreatesRequested: args.maxCreate,
+          },
+          failure,
+          targetPlan: planning?.plan ?? null,
+          providerResults: scanResult?.providerResults ?? null,
+          tenantStateChanges,
+          rateObservations,
+          canaryResults,
+          userMatchResults,
+          compatibilityResults,
+          candidates: scanResult?.candidates ?? null,
+          rejected: rejected ?? (scanResult
+            ? [...(planning?.planningRejections ?? []), ...scanResult.rejected]
+            : planning?.planningRejections ?? null),
+          preflightResults,
+          detailResults,
+          locationResults,
+          importResults,
+          summary: summary ? {
+            ...summary,
+            runStatus: failure.outcome,
+            failureStage: failure.stage,
+          } : null,
+        });
+        runPublished = true;
+        publishedRunPath = runPath;
+        progress.clear();
+        progressCleared = true;
+        console.log(JSON.stringify({
+          runPath,
+          tenantStatePath: null,
+          failure,
+        }, null, 2));
+        process.exitCode = failure.exitCode;
+        return;
+      } catch (publishError) {
+        console.error(
+          `Failed to publish partial run ${runId}: ${publishError instanceof Error ? publishError.stack : String(publishError)}`,
+        );
+      }
+    }
+    throw error;
   } finally {
     if (!progressCleared) progress.clear();
   }

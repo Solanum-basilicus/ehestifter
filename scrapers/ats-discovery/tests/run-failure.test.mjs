@@ -7,6 +7,7 @@ import {
   buildErrorDiagnostic,
   buildPrerequisiteFailureSummary,
   classifyPrerequisiteFailure,
+  classifyRuntimeFailure,
   isRetryablePrerequisiteError,
 } from '../src/run-failure.mjs';
 
@@ -66,6 +67,18 @@ test('does not retry authentication or response-contract failures', () => {
   );
 
   assert.equal(classifyPrerequisiteFailure(unauthorized).exitCode, EXIT_FAILED_PREREQUISITE);
+});
+
+test('classifies unexpected runtime failures as retryable without prerequisite semantics', () => {
+  const failure = classifyRuntimeFailure(
+    new Error('unexpected scanner failure'),
+    'detail_enrichment',
+  );
+  assert.equal(failure.outcome, 'failed_transient');
+  assert.equal(failure.retryable, true);
+  assert.equal(failure.exitCode, 1);
+  assert.equal(failure.stage, 'detail_enrichment');
+  assert.equal(failure.error.message, 'unexpected scanner failure');
 });
 
 test('retryable prerequisite abort clears provider health and state metrics', () => {
