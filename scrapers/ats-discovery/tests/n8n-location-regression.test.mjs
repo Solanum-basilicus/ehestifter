@@ -151,7 +151,7 @@ test('Bosnia aliases resolve to canonical Web GEO country', () => {
 });
 
 
-test('domain words in a title do not imply a remote work arrangement', () => {
+test('domain words in a title do not imply Remote and provider location defaults to On-Site', () => {
   const [result] = normalizeCandidateLocations([{
     title: 'Remote Sensing Engineer',
     rawLocation: 'Germany',
@@ -161,7 +161,7 @@ test('domain words in a title do not imply a remote work arrangement', () => {
     preflight: { status: 'ok', exists: false },
   }], { dictionary: dictionaryWithCities, locationScopeFilter });
 
-  assert.equal(result.remoteType, 'Unknown');
+  assert.equal(result.remoteType, 'On-Site');
   assert.ok(!result.locationNormalization.observations.some(
     (item) => item.source === 'title' && item.kind === 'work_arrangement',
   ));

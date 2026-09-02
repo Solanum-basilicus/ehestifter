@@ -125,6 +125,38 @@ test('normalizes multiple cities from provider code format and arrangement suffi
   assert.deepEqual(result.unresolved, []);
 });
 
+test('provider detail location defaults to On-Site when no stronger arrangement exists', () => {
+  const [result] = normalizeCandidateLocations([
+    candidate({
+      detailRawLocation: 'Hamburg, DE, 22419',
+    }),
+  ], { locationScopeFilter });
+
+  assert.equal(result.remoteType, 'On-Site');
+  assert.deepEqual(result.locations, [{
+    countryName: 'Germany',
+    countryCode: 'DE',
+    cityName: 'Hamburg',
+    region: null,
+  }]);
+});
+
+test('description-only geography does not default the arrangement to On-Site', () => {
+  const [result] = normalizeCandidateLocations([
+    candidate({
+      description: 'Location: Austin, TX',
+    }),
+  ], { locationScopeFilter });
+
+  assert.equal(result.remoteType, 'Unknown');
+  assert.deepEqual(result.locations, [{
+    countryName: 'United States',
+    countryCode: 'US',
+    cityName: 'Austin',
+    region: 'Texas',
+  }]);
+});
+
 test('provider structured locations are canonicalized instead of trusted verbatim', () => {
   const [result] = normalizeCandidateLocations([
     candidate({

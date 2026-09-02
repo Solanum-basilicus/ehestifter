@@ -252,6 +252,35 @@ test('SuccessFactors RMK detail falls back to server-rendered job description HT
   );
 });
 
+test('SuccessFactors HTML detail keeps LOCATION evidence for GEO normalization', async () => {
+  const source = candidate({
+    sourceProvider: 'successfactors',
+    sourceTenant: 'jobs.nordex-online.com',
+    url: 'https://jobs.nordex-online.com/job/Hamburg-Role-22419/1382371633/',
+    provenance: {
+      providerNativeId: '1382371633',
+      sourceOrigin: 'https://jobs.nordex-online.com',
+    },
+  });
+  const html = `
+    <h1>SCADA Requirements Engineer</h1>
+    <div>REQUISITION ID: 12006</div>
+    <div>LOCATION:&nbsp;</div>
+    <div>Hamburg, DE, 22419</div>
+    <div>DEPARTMENT: Engineering</div>
+    <div class="jobdescription"><p>Define SCADA requirements.</p></div>`;
+  const [result] = await enrichCandidateDetails([source], {
+    concurrency: 1,
+    maxFetches: 1,
+    timeoutMs: 1000,
+    async fetchImpl() { return response(html); },
+  });
+
+  assert.equal(result.detail.status, 'ok');
+  assert.equal(result.detailRawLocation, 'Hamburg, DE, 22419');
+  assert.equal(result.remoteType, 'Unknown');
+});
+
 test('SuccessFactors HTML detail supports a Job description heading fallback', async () => {
   const source = candidate({
     sourceProvider: 'successfactors',

@@ -1191,7 +1191,14 @@ export function normalizeCandidateLocations(
     ];
     const resolvedArrangement = strongerArrangement
       ?? description.arrangement;
+    const hasProviderLocation = primary.locations.some((location) => (
+      cleanText(location.countryCode) || cleanText(location.countryName)
+    ));
+    const defaultArrangement = hasProviderLocation && !description.arrangementConflict
+      ? 'On-Site'
+      : null;
     const remoteType = resolvedArrangement
+      ?? defaultArrangement
       ?? (cleanText(candidate.remoteType) || 'Unknown');
     const titleObservations = (
       titleArrangement

@@ -769,6 +769,7 @@ export function parseSuccessFactorsHtmlDetails(html, pageUrl) {
   return {
     description,
     applyUrl: sameOriginApplyUrl(html, endpoint) || endpoint.href,
+    rawLocation: location || null,
     locations: [],
     remoteType: /\bremote\b/i.test(location) ? 'Remote' : null,
   };

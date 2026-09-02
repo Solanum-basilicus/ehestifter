@@ -82,14 +82,14 @@ test('provider arrangement outranks a conflicting labelled description policy', 
   )));
 });
 
-test('casual remote wording and hashtags do not set work arrangement', () => {
+test('casual remote wording does not set Remote and provider location defaults to On-Site', () => {
   const [result] = normalizeCandidateLocations([
     candidate({
       description: 'You will collaborate with remote teams around the world. #LI-Remote',
     }),
   ], { dictionary, locationScopeFilter });
 
-  assert.equal(result.remoteType, 'Unknown');
+  assert.equal(result.remoteType, 'On-Site');
   assert.ok(!result.locationNormalization.observations.some((item) => (
     item.source === 'description' && item.kind === 'work_arrangement'
   )));
