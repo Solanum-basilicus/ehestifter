@@ -6,6 +6,7 @@ import {
   enrichCandidateDetails,
   parseWorkdayDetailPayload,
 } from '../src/details/fetchers.mjs';
+import { normalizeCandidateLocations } from '../src/locations/normalizer.mjs';
 import workday, {
   parseWorkdayResponse,
 } from '../src/providers/workday.mjs';
@@ -209,6 +210,62 @@ test('Workday details normalize description and improve same-origin metadata', a
     },
   ]);
   assert.equal(result.detail.status, 'ok');
+});
+
+test('Workday requisition location resolves a city-only listing location', async () => {
+  const source = candidate({
+    url: 'https://tenbrinke.wd3.myworkdayjobs.com/tenbrinke/job/Berlin/Projektleiter-Bau--m-w-d----Berlin---Vollzeit_JR101554-1',
+    applyUrl: 'https://tenbrinke.wd3.myworkdayjobs.com/tenbrinke/job/Berlin/Projektleiter-Bau--m-w-d----Berlin---Vollzeit_JR101554-1',
+    sourceTenant: 'tenbrinke.wd3.myworkdayjobs.com/tenbrinke',
+    rawLocation: 'Berlin',
+    locations: [],
+    canonicalIdentity: {
+      provider: 'workday',
+      providerTenant: 'tenbrinke',
+      externalId: 'Projektleiter-Bau--m-w-d----Berlin---Vollzeit_JR101554-1',
+      identitySource: 'url',
+    },
+    provenance: {
+      sourceOrigin: 'https://tenbrinke.wd3.myworkdayjobs.com',
+      providerNativeId: '/job/Berlin/Projektleiter-Bau--m-w-d----Berlin---Vollzeit_JR101554-1',
+      targetSequence: 1,
+    },
+  });
+  const [enriched] = await enrichCandidateDetails([source], {
+    concurrency: 1,
+    maxFetches: 1,
+    timeoutMs: 1000,
+    fetchImpl: async () => new Response(JSON.stringify(detailPayload({
+      externalUrl: '/tenbrinke/job/Berlin/Projektleiter-Bau--m-w-d----Berlin---Vollzeit_JR101554-1',
+      location: 'Berlin',
+      additionalLocations: null,
+      workplaceType: '',
+      jobRequisitionLocation: {
+        descriptor: 'Berlin',
+        country: {
+          descriptor: 'Germany',
+          id: 'dcc5b7608d8644b3a93716604e78e995',
+          alpha2Code: 'DE',
+        },
+      },
+    })), { status: 200 }),
+  });
+
+  assert.deepEqual(enriched.locations, [{
+    countryName: 'Germany',
+    countryCode: 'DE',
+    cityName: 'Berlin',
+    region: null,
+  }]);
+
+  const [normalized] = normalizeCandidateLocations([enriched]);
+  assert.equal(normalized.remoteType, 'On-Site');
+  assert.deepEqual(normalized.locations, [{
+    countryName: 'Germany',
+    countryCode: 'DE',
+    cityName: 'Berlin',
+    region: null,
+  }]);
 });
 
 test('Workday detail retains listing metadata when the response cannot improve it', async () => {

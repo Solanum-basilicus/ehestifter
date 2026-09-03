@@ -105,6 +105,11 @@ job URL. Workday detail GETs use the scanner's existing timeout and 5 MB respons
 ceiling and are serialized per Workday origin. Different Workday origins can
 still use the configured global detail concurrency.
 
+When Workday returns `jobPostingInfo.jobRequisitionLocation`, the detail stage
+keeps its country descriptor and ISO alpha-2 code as provider location evidence.
+This evidence can qualify a city-only listing value such as `Berlin` without a
+generic city-to-country guess.
+
 A Workday detail `404`, `410`, or `canApply: false` result is recorded as
 `detail.status = "unavailable"`. Changed response shapes, unsafe identity,
 timeouts, and transport failures remain `detail.status = "error"`. The same

@@ -438,6 +438,29 @@ function workdayStructuredLocation(value) {
   };
 }
 
+function workdayRequisitionLocation(info) {
+  const value = info.jobRequisitionLocation;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const country = value.country;
+  if (!country || typeof country !== 'object' || Array.isArray(country)) return null;
+  const countryName = typeof country.descriptor === 'string'
+    ? country.descriptor.trim()
+    : '';
+  const countryCode = typeof country.alpha2Code === 'string'
+    ? country.alpha2Code.trim()
+    : '';
+  if (!countryName && !countryCode) return null;
+  const cityName = typeof value.descriptor === 'string'
+    ? value.descriptor.trim()
+    : '';
+  return {
+    countryName: countryName || null,
+    countryCode: countryCode || null,
+    cityName: cityName || null,
+    region: null,
+  };
+}
+
 function workdayStructuredLocations(info) {
   const candidates = [
     info.location,
@@ -453,6 +476,11 @@ function workdayStructuredLocations(info) {
     if (seen.has(key)) continue;
     seen.add(key);
     locations.push(location);
+  }
+  const requisitionLocation = workdayRequisitionLocation(info);
+  if (requisitionLocation) {
+    const key = JSON.stringify(requisitionLocation);
+    if (!seen.has(key)) locations.push(requisitionLocation);
   }
   return locations;
 }
