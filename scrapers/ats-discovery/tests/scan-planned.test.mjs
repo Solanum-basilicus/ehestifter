@@ -160,6 +160,28 @@ test('one provider failure does not stop another target', async () => {
   assert.equal(result.candidates.length, 1);
 });
 
+test('network failures preserve bounded cause diagnostics', async () => {
+  const cause = Object.assign(new Error('dns lookup failed'), {
+    code: 'ENOTFOUND',
+    errno: -3008,
+    syscall: 'getaddrinfo',
+    hostname: 'example.bamboohr.com',
+  });
+  const error = new TypeError('fetch failed', { cause });
+  const result = await scan([target({ error })]);
+  assert.equal(result.providerResults[0].errorClass, 'network');
+  assert.deepEqual(result.providerResults[0].networkDiagnostic, {
+    code: 'ENOTFOUND',
+    errno: -3008,
+    syscall: 'getaddrinfo',
+    hostname: 'example.bamboohr.com',
+  });
+  assert.doesNotMatch(
+    JSON.stringify(result.providerResults[0].networkDiagnostic),
+    /dns lookup failed|fetch failed/u,
+  );
+});
+
 test('404 status is preserved for durable tenant-state decisions', async () => {
   const error = Object.assign(new Error('HTTP 404'), { status: 404 });
   const result = await scan([target({ error })]);

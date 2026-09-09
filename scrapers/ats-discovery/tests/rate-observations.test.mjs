@@ -107,6 +107,23 @@ test('rate limit recommends lower concurrency and more pacing', () => {
   assert.ok(recommendation.suggestedMinRequestIntervalMs > 100);
 });
 
+test('transient breaker alone does not imply that slower pacing will help', () => {
+  const observations = buildRateObservations({
+    providerResults: Array.from({ length: 10 }, (_, sequence) => result({
+      sequence,
+      ...(sequence === 0
+        ? { status: 'error', errorClass: 'network' }
+        : {}),
+    })),
+    breakerEvents: [{ provider: 'ashby', reason: 'transient_error_threshold' }],
+    policy: policy({ concurrency: 3, interval: 100 }),
+  });
+  const recommendation = observations.providers[0].recommendation;
+  assert.equal(recommendation.action, 'hold');
+  assert.equal(recommendation.suggestedMinRequestIntervalMs, 100);
+  assert.match(recommendation.rationale, /non-rate-limit provider circuit/);
+});
+
 test('high transient error ratio recommends decrease without auto-applying it', () => {
   const observations = buildRateObservations({
     providerResults: [

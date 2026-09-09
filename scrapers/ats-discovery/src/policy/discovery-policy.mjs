@@ -46,6 +46,8 @@ const DEFAULTS = Object.freeze({
     suspiciousEmptyBaselineMinimumJobs: 10,
     suspiciousEmptyReprobeMinutes: 60,
     recentSuccessfulCountWindow: 8,
+    listingEmptyDegradedMinimumAttempts: 50,
+    listingEmptyDegradedRatio: 0.5,
     degradedMinimumAttempts: 2,
     degradedErrorRatio: 0.5,
   }),
@@ -337,6 +339,18 @@ function parseMonitoring(raw, base, name) {
       base.recentSuccessfulCountWindow,
       `${name}.recent_successful_count_window`,
       { min: 2, max: 32 },
+    ),
+    listingEmptyDegradedMinimumAttempts: integer(
+      value.listing_empty_degraded_minimum_attempts,
+      base.listingEmptyDegradedMinimumAttempts,
+      `${name}.listing_empty_degraded_minimum_attempts`,
+      { min: 1, max: 100000 },
+    ),
+    listingEmptyDegradedRatio: finiteNumber(
+      value.listing_empty_degraded_ratio,
+      base.listingEmptyDegradedRatio,
+      `${name}.listing_empty_degraded_ratio`,
+      { min: 0.01, max: 1 },
     ),
     degradedMinimumAttempts: integer(
       value.degraded_minimum_attempts,

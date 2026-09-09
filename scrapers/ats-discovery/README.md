@@ -408,7 +408,22 @@ Review active configuration before live traffic, especially:
 Tenant listing-volume history is used only to guard an explicit zero result from
 a historically non-empty tenant. Any nonzero listing result is accepted as the
 current provider observation, even when it is much smaller than earlier runs.
-Provider canaries may still enforce their own explicit minimum-job thresholds.
+An individual historical-zero observation is a normal self-healing event: the
+tenant is made eligible for its short re-probe and the provider summary records
+a notice. Provider health becomes degraded from historical-zero observations only
+when both `monitoring.listing_empty_degraded_minimum_attempts` and
+`monitoring.listing_empty_degraded_ratio` are reached. The committed defaults
+are 50 attempted targets and 50%. Provider canaries may still enforce their own
+explicit minimum-job thresholds.
+
+Rate recommendations distinguish provider throttling from generic reliability
+failures. A rate-limit observation or rate-limit breaker can recommend slower
+pacing; a transient/network breaker by itself does not. A sufficiently high
+transient-error ratio can still independently recommend a decrease. Network
+provider results retain only bounded diagnostic fields such as error code,
+errno, syscall, and hostname so operators can distinguish tenant-local DNS or
+connectivity failures from shared provider health without persisting arbitrary
+exception text or URLs.
 
 Secrets are mounted/read by the existing scanner configuration path. Do not
 print function keys, tokens, cookies, CSRF values, CV data, or full user

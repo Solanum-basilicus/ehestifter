@@ -93,6 +93,78 @@ function variantMode(variant) {
   return variant === 'csb' ? 'csb-api' : 'rmk-html';
 }
 
+function listingEmptySummary({ attempted, anomalies }) {
+  const parsedPolicy = policy();
+  const targets = Array.from({ length: attempted }, (_, sequence) => (
+    sfTarget(sequence, 'csb', `tenant-${sequence}`)
+  ));
+  return buildRunSummary({
+    runId: `listing-empty-${anomalies}-${attempted}`,
+    mode: 'offline',
+    startedAt: NOW,
+    finishedAt: new Date(NOW.getTime() + 1000),
+    targetPlan: {
+      targets,
+      healthPartitions: {
+        'successfactors:csb': {
+          provider: 'successfactors',
+          providerVariant: 'csb',
+          healthPartition: 'successfactors:csb',
+          selectedTargets: attempted,
+          selectedCanaries: 0,
+          selectedNormal: 0,
+          skippedNotDue: 0,
+          skippedProviderCooldown: 0,
+          skippedNormalBudget: 0,
+        },
+      },
+      counts: {
+        priority: attempted,
+        canary: 0,
+        normal: 0,
+        disabled: 0,
+        disabledRemoved: 0,
+        planningRejected: 0,
+        canaryPlanningRejected: 0,
+        catalogEligible: 0,
+        skippedNotDue: 0,
+        skippedProviderCooldown: 0,
+        skippedNormalBudget: 0,
+        skippedTotal: 0,
+      },
+      limits: {},
+      catalogs: { ashby: null },
+      catalogSweeps: {},
+      sweep: {
+        targetFullSweepDays: 3,
+        estimatedHealthySweepDays: 0,
+        recommendedHealthyTargetsPerRun: 0,
+        recommendedNormalTargetsPerRun: 0,
+        feasibleAtConfiguredBudget: true,
+      },
+    },
+    scanResult: {
+      providerResults: targets.map((target) => providerResult(target)),
+      breakerEvents: [],
+      candidates: [],
+      rejected: [],
+      providerIds: ['successfactors'],
+    },
+    evaluated: [],
+    tenantStateChanges: {
+      tenantChanges: Array.from({ length: anomalies }, (_, sequence) => ({
+        provider: 'successfactors',
+        providerVariant: 'csb',
+        healthPartition: 'successfactors:csb',
+        tenant: `tenant-${sequence}`,
+        listingOutcome: 'listing_empty_anomaly',
+      })),
+      providerChanges: [],
+    },
+    policy: parsedPolicy,
+  });
+}
+
 test('SuccessFactors variant detection recognizes CSB hosts and explicit RMK', () => {
   assert.equal(successFactorsVariant({ careers_url: 'https://gore.jobs.hr.cloud.sap/' }), 'csb');
   assert.equal(successFactorsVariant({ careers_url: 'https://careers.ey.com/ey/search/' }), 'rmk');
@@ -239,6 +311,34 @@ test('historically nonempty explicit zero gets a short re-probe before empty acc
   const thirdTenant = tenantStateMaps(third.state).tenants.get('successfactors:csb::gore');
   assert.equal(thirdTenant.health, 'healthy');
   assert.equal(thirdTenant.lastListingOutcome, 'listing_success_explicit_empty');
+});
+
+test('isolated historical-zero re-probes are notices rather than provider degradation', () => {
+  const summary = listingEmptySummary({ attempted: 2495, anomalies: 3 });
+  const variant = summary.providerVariants['successfactors:csb'];
+  assert.equal(variant.status, 'healthy');
+  assert.equal(variant.listingEmptyAnomalies, 3);
+  assert.equal(variant.listingEmptySystemic, false);
+  assert.deepEqual(summary.providerHealthWarnings, []);
+  assert.match(summary.providerHealthNotices[0], /3\/2495/);
+});
+
+test('historical-zero anomalies degrade only at the configured systemic threshold', () => {
+  const below = listingEmptySummary({ attempted: 50, anomalies: 24 });
+  assert.equal(below.providerVariants['successfactors:csb'].status, 'healthy');
+  assert.equal(
+    below.providerVariants['successfactors:csb'].listingEmptySystemic,
+    false,
+  );
+  assert.deepEqual(below.providerHealthWarnings, []);
+
+  const threshold = listingEmptySummary({ attempted: 50, anomalies: 25 });
+  assert.equal(threshold.providerVariants['successfactors:csb'].status, 'degraded');
+  assert.equal(
+    threshold.providerVariants['successfactors:csb'].listingEmptySystemic,
+    true,
+  );
+  assert.match(threshold.providerHealthWarnings[0], /25\/50/);
 });
 
 test('nonzero historical volume drops are accepted without a diagnostic re-probe', () => {

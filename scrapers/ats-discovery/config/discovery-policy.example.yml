@@ -40,6 +40,10 @@ defaults:
     suspicious_empty_baseline_minimum_jobs: 10
     suspicious_empty_reprobe_minutes: 60
     recent_successful_count_window: 8
+    # Individual historical-zero observations are normal self-healing events.
+    # Escalate only when they become systemic across a meaningful sample.
+    listing_empty_degraded_minimum_attempts: 50
+    listing_empty_degraded_ratio: 0.50
     # Variant summaries become degraded only after a meaningful sample.
     degraded_minimum_attempts: 2
     degraded_error_ratio: 0.5

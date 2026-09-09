@@ -152,6 +152,8 @@ test('monitoring defaults protect historically active providers from silent expl
     suspiciousEmptyBaselineMinimumJobs: 10,
     suspiciousEmptyReprobeMinutes: 60,
     recentSuccessfulCountWindow: 8,
+    listingEmptyDegradedMinimumAttempts: 50,
+    listingEmptyDegradedRatio: 0.5,
     degradedMinimumAttempts: 2,
     degradedErrorRatio: 0.5,
   });
@@ -168,6 +170,8 @@ test('provider monitoring overrides are validated and preserve default siblings'
       successfactors: {
         monitoring: {
           suspicious_empty_reprobe_minutes: 30,
+          listing_empty_degraded_minimum_attempts: 100,
+          listing_empty_degraded_ratio: 0.25,
           degraded_error_ratio: 0.25,
         },
       },
@@ -177,12 +181,21 @@ test('provider monitoring overrides are validated and preserve default siblings'
   assert.equal(successfactors.monitoring.suspiciousEmptyReprobeMinutes, 30);
   assert.equal(successfactors.monitoring.degradedErrorRatio, 0.25);
   assert.equal(successfactors.monitoring.recentSuccessfulCountWindow, 8);
+  assert.equal(successfactors.monitoring.listingEmptyDegradedMinimumAttempts, 100);
+  assert.equal(successfactors.monitoring.listingEmptyDegradedRatio, 0.25);
   assert.throws(
     () => parseDiscoveryPolicy(raw({
       defaults: { monitoring: { recent_successful_count_window: 1 } },
       providers: { ashby: {} },
     })),
     /recent_successful_count_window/,
+  );
+  assert.throws(
+    () => parseDiscoveryPolicy(raw({
+      defaults: { monitoring: { listing_empty_degraded_ratio: 1.1 } },
+      providers: { ashby: {} },
+    })),
+    /listing_empty_degraded_ratio/,
   );
 });
 

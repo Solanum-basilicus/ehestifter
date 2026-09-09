@@ -29,7 +29,10 @@ function recommendation(observation, providerPolicy) {
     ? 1
     : observation.successes / attempted;
 
-  if (observation.rateLimited > 0 || observation.breakerActivated) {
+  if (
+    observation.rateLimited > 0
+    || observation.breakerReason === 'rate_limit_threshold'
+  ) {
     return {
       action: 'decrease',
       suggestedConcurrency: Math.max(1, execution.concurrency - 1),
@@ -37,7 +40,7 @@ function recommendation(observation, providerPolicy) {
         execution.minRequestIntervalMs + 100,
         Math.ceil(execution.minRequestIntervalMs * 1.5),
       ),
-      rationale: 'Rate limiting or a provider circuit breaker was observed.',
+      rationale: 'Rate limiting was observed.',
     };
   }
   if (
@@ -52,6 +55,14 @@ function recommendation(observation, providerPolicy) {
         Math.ceil(execution.minRequestIntervalMs * 1.25),
       ),
       rationale: 'Transient provider error ratio is above the review threshold.',
+    };
+  }
+  if (observation.breakerActivated) {
+    return {
+      action: 'hold',
+      suggestedConcurrency: execution.concurrency,
+      suggestedMinRequestIntervalMs: execution.minRequestIntervalMs,
+      rationale: 'A non-rate-limit provider circuit opened; pacing is unchanged without a rate signal.',
     };
   }
   if (

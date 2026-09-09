@@ -74,7 +74,12 @@ function providerVariantHealth({
     const durableTenantFailures = attempted.filter(isDurableProviderResult).length;
     const monitoring = policy
       ? getProviderPolicy(policy, provider).monitoring
-      : { degradedMinimumAttempts: 2, degradedErrorRatio: 0.5 };
+      : {
+        listingEmptyDegradedMinimumAttempts: 50,
+        listingEmptyDegradedRatio: 0.5,
+        degradedMinimumAttempts: 2,
+        degradedErrorRatio: 0.5,
+      };
     const healthErrorRatio = attempted.length === 0
       ? 0
       : healthErrors / attempted.length;
@@ -84,6 +89,13 @@ function providerVariantHealth({
     const listingVolumeAnomalies =
       volumeAnomalyByPartition.get(healthPartition) ?? 0;
     const listingAnomalies = listingEmptyAnomalies + listingVolumeAnomalies;
+    const listingEmptyAnomalyRatio = attempted.length === 0
+      ? 0
+      : listingEmptyAnomalies / attempted.length;
+    const systemicListingEmptyAnomaly = (
+      attempted.length >= monitoring.listingEmptyDegradedMinimumAttempts
+      && listingEmptyAnomalyRatio >= monitoring.listingEmptyDegradedRatio
+    );
     const canaries = canaryByPartition.get(healthPartition) ?? [];
     const degradedCanaries = canaries.filter((item) => item.status === 'degraded');
     const inconclusiveCanaries = canaries.filter(
@@ -99,7 +111,8 @@ function providerVariantHealth({
     const skippedNormalBudget = planStats?.skippedNormalBudget ?? 0;
     const degraded = Boolean(breaker)
       || skippedProviderCooldown > 0
-      || listingAnomalies > 0
+      || systemicListingEmptyAnomaly
+      || listingVolumeAnomalies > 0
       || degradedCanaries.length > 0
       || (
         attempted.length >= monitoring.degradedMinimumAttempts
@@ -112,7 +125,9 @@ function providerVariantHealth({
       itemWarnings.push(`${skippedProviderCooldown} target(s) skipped because this health partition is in cooldown`);
     }
     if (listingEmptyAnomalies > 0) {
-      itemWarnings.push(`${listingEmptyAnomalies} historical nonempty tenant(s) returned explicit zero and were scheduled for re-probe`);
+      const message = `${listingEmptyAnomalies}/${attempted.length} attempted target(s) were historical nonempty tenants that returned explicit zero and were made eligible for short re-probe`;
+      if (systemicListingEmptyAnomaly) itemWarnings.push(message);
+      else itemNotices.push(message);
     }
     if (listingVolumeAnomalies > 0) {
       itemWarnings.push(`${listingVolumeAnomalies} provider canary target(s) missed the configured listing minimum and were made eligible for re-probe`);
@@ -152,6 +167,9 @@ function providerVariantHealth({
       jobsReturned: results.reduce((sum, item) => sum + item.jobsReturned, 0),
       listingOutcomes,
       listingEmptyAnomalies,
+      listingEmptyAnomalyRatio:
+        Math.round(listingEmptyAnomalyRatio * 10_000) / 10_000,
+      listingEmptySystemic: systemicListingEmptyAnomaly,
       listingVolumeAnomalies,
       listingAnomalies,
       breakerOpen: Boolean(breaker),

@@ -8,6 +8,7 @@ import {
   isTransientProviderResult,
   providerErrorMessage,
   providerHttpStatus,
+  providerNetworkDiagnostic,
 } from './provider-errors.mjs';
 
 // Maintenance targets are intentionally expected to contain stale or
@@ -201,6 +202,7 @@ class ProviderGuard {
               skipReason: null,
               errorClass: classifyProviderError(error),
               errorMessage: providerErrorMessage(error),
+              networkDiagnostic: null,
               httpStatus: null,
               jobsReturned: fetched.jobs.length,
               candidatesMatched: 0,
@@ -222,6 +224,7 @@ class ProviderGuard {
             skipReason: null,
             errorClass: null,
             errorMessage: null,
+            networkDiagnostic: null,
             httpStatus: null,
             jobsReturned: fetched.jobs.length,
             candidatesMatched: 0,
@@ -235,6 +238,7 @@ class ProviderGuard {
         };
       } catch (error) {
         const telemetry = cleanTelemetry(error?.providerTelemetry);
+        const errorClass = classifyProviderError(error);
         result = {
           target,
           jobs: [],
@@ -243,8 +247,11 @@ class ProviderGuard {
             ...baseProviderResult(target),
             status: 'error',
             skipReason: null,
-            errorClass: classifyProviderError(error),
+            errorClass,
             errorMessage: providerErrorMessage(error),
+            networkDiagnostic: errorClass === 'network'
+              ? providerNetworkDiagnostic(error)
+              : null,
             httpStatus: providerHttpStatus(error),
             jobsReturned: 0,
             candidatesMatched: 0,
@@ -275,6 +282,7 @@ function skippedResult(target, reason) {
       skipReason: reason,
       errorClass: null,
       errorMessage: null,
+      networkDiagnostic: null,
       httpStatus: null,
       jobsReturned: 0,
       candidatesMatched: 0,

@@ -63,6 +63,42 @@ export function providerErrorMessage(error, maxLength = 500) {
     : `${message.slice(0, maxLength - 3)}...`;
 }
 
+function boundedString(value, maxLength) {
+  if (typeof value !== 'string' || value.length === 0) return null;
+  return value.length <= maxLength ? value : value.slice(0, maxLength);
+}
+
+export function providerNetworkDiagnostic(error) {
+  const diagnostic = {
+    code: null,
+    errno: null,
+    syscall: null,
+    hostname: null,
+  };
+  for (const item of errorChain(error)) {
+    if (diagnostic.code == null) {
+      diagnostic.code = boundedString(item.code, 80);
+    }
+    if (
+      diagnostic.errno == null
+      && (typeof item.errno === 'number' || typeof item.errno === 'string')
+    ) {
+      diagnostic.errno = typeof item.errno === 'string'
+        ? boundedString(item.errno, 80)
+        : item.errno;
+    }
+    if (diagnostic.syscall == null) {
+      diagnostic.syscall = boundedString(item.syscall, 80);
+    }
+    if (diagnostic.hostname == null) {
+      diagnostic.hostname = boundedString(item.hostname, 253);
+    }
+  }
+  return Object.values(diagnostic).some((value) => value != null)
+    ? diagnostic
+    : null;
+}
+
 export function isDurableProviderResult(result) {
   if (['workday_tenant_invalid', 'workday_tenant_restricted'].includes(
     result?.errorClass,
