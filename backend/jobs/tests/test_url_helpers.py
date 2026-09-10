@@ -1,5 +1,10 @@
 # tests/test_url_helpers.py
-from helpers.url_helpers import deduce_from_url
+from pathlib import Path
+from runpy import run_path
+
+
+JOBS_ROOT = Path(__file__).resolve().parents[1]
+deduce_from_url = run_path(str(JOBS_ROOT / "helpers/url_helpers.py"))["deduce_from_url"]
 
 
 def _identity(url: str) -> tuple[str, str, str]:
