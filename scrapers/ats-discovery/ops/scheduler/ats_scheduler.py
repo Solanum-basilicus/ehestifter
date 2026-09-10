@@ -275,6 +275,7 @@ def empty_task_state() -> dict[str, Any]:
         "firstAttemptAtUtc": None,
         "attemptsForCurrentSlot": 0,
         "lastAttemptAtUtc": None,
+        "lastFinishedAtUtc": None,
         "lastCompletedSlot": None,
         "lastCompletedAtUtc": None,
         "lastSuccessfulAtUtc": None,
@@ -288,6 +289,11 @@ def empty_task_state() -> dict[str, Any]:
         "lastExitCode": None,
         "lastTrigger": None,
         "lastError": None,
+        "lastFailureAtUtc": None,
+        "lastFailureOutcome": None,
+        "lastFailureError": None,
+        "lastFailureRunId": None,
+        "lastFailureRunPath": None,
         "consecutiveFailures": 0,
     }
 
@@ -309,10 +315,21 @@ def validate_task_state(value: Any, field: str) -> dict[str, Any]:
         "lastOutcome",
         "lastTrigger",
         "lastError",
+        "lastFailureOutcome",
+        "lastFailureError",
+        "lastFailureRunId",
+        "lastFailureRunPath",
     ):
         if result[key] is not None and not isinstance(result[key], str):
             raise StateError(f"{field}.{key} must be a string or null")
-    for key in ("firstAttemptAtUtc", "lastAttemptAtUtc", "lastCompletedAtUtc", "lastSuccessfulAtUtc"):
+    for key in (
+        "firstAttemptAtUtc",
+        "lastAttemptAtUtc",
+        "lastFinishedAtUtc",
+        "lastCompletedAtUtc",
+        "lastSuccessfulAtUtc",
+        "lastFailureAtUtc",
+    ):
         parse_utc(result[key], f"{field}.{key}")
     for key in ("attemptsForCurrentSlot", "consecutiveFailures"):
         if type(result[key]) is not int or result[key] < 0:
@@ -635,6 +652,7 @@ def mark_completed(
     success: bool,
 ) -> None:
     task_state["lastAttemptAtUtc"] = iso_utc(now)
+    task_state["lastFinishedAtUtc"] = iso_utc(now)
     task_state["lastCompletedSlot"] = slot_id
     task_state["lastCompletedAtUtc"] = iso_utc(now)
     if success:
@@ -663,7 +681,10 @@ def mark_failed(
     run_path: Path | None,
     error_message: str | None = None,
 ) -> None:
-    task_state["lastAttemptAtUtc"] = iso_utc(now)
+    finished_at = iso_utc(now)
+    failure_error = error_message[:1000] if error_message else None
+    task_state["lastAttemptAtUtc"] = finished_at
+    task_state["lastFinishedAtUtc"] = finished_at
     task_state["lastRunId"] = run_path.name if run_path else task_state.get("lastRunId")
     task_state["lastRunPath"] = str(run_path) if run_path else task_state.get("lastRunPath")
     task_state["lastAttemptRunId"] = run_path.name if run_path else None
@@ -671,7 +692,12 @@ def mark_failed(
     task_state["lastOutcome"] = outcome
     task_state["lastExitCode"] = exit_code
     task_state["lastTrigger"] = trigger
-    task_state["lastError"] = error_message[:1000] if error_message else None
+    task_state["lastError"] = failure_error
+    task_state["lastFailureAtUtc"] = finished_at
+    task_state["lastFailureOutcome"] = outcome
+    task_state["lastFailureError"] = failure_error
+    task_state["lastFailureRunId"] = run_path.name if run_path else None
+    task_state["lastFailureRunPath"] = str(run_path) if run_path else None
     task_state["consecutiveFailures"] = int(task_state.get("consecutiveFailures", 0)) + 1
 
 
@@ -1024,8 +1050,10 @@ def _status_task_state(task_state: Mapping[str, Any], timezone_name: str) -> dic
     hidden = {
         "firstAttemptAtUtc",
         "lastAttemptAtUtc",
+        "lastFinishedAtUtc",
         "lastCompletedAtUtc",
         "lastSuccessfulAtUtc",
+        "lastFailureAtUtc",
         "lastRunId",
         "lastRunPath",
     }
@@ -1035,8 +1063,10 @@ def _status_task_state(task_state: Mapping[str, Any], timezone_name: str) -> dic
             result[key] = value
     result["firstAttemptAt"] = _status_timestamp(task_state.get("firstAttemptAtUtc"), "task.firstAttemptAtUtc", timezone_name)
     result["lastAttemptAt"] = _status_timestamp(task_state.get("lastAttemptAtUtc"), "task.lastAttemptAtUtc", timezone_name)
+    result["lastFinishedAt"] = _status_timestamp(task_state.get("lastFinishedAtUtc"), "task.lastFinishedAtUtc", timezone_name)
     result["lastCompletedAt"] = _status_timestamp(task_state.get("lastCompletedAtUtc"), "task.lastCompletedAtUtc", timezone_name)
     result["lastSuccessfulAt"] = _status_timestamp(task_state.get("lastSuccessfulAtUtc"), "task.lastSuccessfulAtUtc", timezone_name)
+    result["lastFailureAt"] = _status_timestamp(task_state.get("lastFailureAtUtc"), "task.lastFailureAtUtc", timezone_name)
     return result
 
 
@@ -1048,12 +1078,18 @@ def status_payload(config: Mapping[str, Any], now: datetime) -> dict[str, Any]:
         task_state = state["tasks"][task_key]
         slot = latest_slot(task_key, task_config, config["timezone"], now)
         next_time = next_scheduled(task_key, task_config, config["timezone"], now)
+        attempts_for_due_slot = (
+            task_state.get("attemptsForCurrentSlot", 0)
+            if task_state.get("currentSlot") == slot.slot_id
+            else 0
+        )
         tasks[task_name] = {
             "enabled": task_config["enabled"],
             "currentDueSlot": slot.slot_id,
             "slotScheduledAt": slot.scheduled_local.isoformat(),
             "nextScheduledAt": next_time.isoformat(),
             "due": task_config["enabled"] and task_state.get("lastCompletedSlot") != slot.slot_id,
+            "attemptsForDueSlot": attempts_for_due_slot,
             **_status_task_state(task_state, config["timezone"]),
         }
     return {
@@ -1065,28 +1101,92 @@ def status_payload(config: Mapping[str, Any], now: datetime) -> dict[str, Any]:
     }
 
 
+def _pretty_timestamp(value: Any) -> str:
+    if value is None:
+        return "-"
+    text = str(value)
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).replace(microsecond=0).isoformat()
+    except ValueError:
+        return text
+
+
+def _task_display_state(
+    task_name: str,
+    task: Mapping[str, Any],
+    lock: Mapping[str, Any],
+) -> str:
+    if not task.get("enabled"):
+        return "DISABLED"
+    owner = lock.get("owner") if lock.get("busy") else None
+    if isinstance(owner, dict) and owner.get("operation") == task_name:
+        return "IN PROGRESS"
+    return "DUE" if task.get("due") else "CURRENT"
+
+
+def _previous_finished_at(
+    task_name: str,
+    task: Mapping[str, Any],
+    lock: Mapping[str, Any],
+) -> str:
+    if task.get("lastFinishedAt"):
+        return _pretty_timestamp(task["lastFinishedAt"])
+    if (
+        task.get("lastOutcome") in ("success", "completed_degraded", "skipped_minimum_spacing")
+        and task.get("lastCompletedAt")
+    ):
+        return _pretty_timestamp(task["lastCompletedAt"])
+    owner = lock.get("owner") if lock.get("busy") else None
+    if not (isinstance(owner, dict) and owner.get("operation") == task_name):
+        if task.get("lastAttemptAt"):
+            return _pretty_timestamp(task["lastAttemptAt"])
+    return "-"
+
+
+def _print_lock_status(lock: Mapping[str, Any]) -> None:
+    if lock.get("busy"):
+        owner = lock.get("owner")
+        if isinstance(owner, dict):
+            operation = owner.get("operation") or "unknown operation"
+            started_at = owner.get("startedAt")
+            pid = owner.get("pid")
+            detail = f"{operation} running"
+            if started_at:
+                detail += f" since {_pretty_timestamp(started_at)}"
+            if pid is not None:
+                detail += f" (pid {pid})"
+            print(f"  Lock: {detail}")
+            return
+        print("  Lock: busy")
+        return
+    stale = lock.get("staleOwner")
+    if isinstance(stale, dict):
+        operation = stale.get("operation") or "unknown operation"
+        print(f"  Lock: free (stale metadata: {operation})")
+        return
+    print("  Lock: free")
+
+
 def print_status(payload: Mapping[str, Any]) -> None:
     print(f"ATS Discovery scheduler ({payload['timezone']})")
     lock = payload.get("lock", {})
-    if lock.get("busy"):
-        print(f"  Lock: busy {json.dumps(lock.get('owner'))}")
-    elif lock.get("staleOwner"):
-        print(f"  Lock: free (stale metadata {json.dumps(lock.get('staleOwner'))})")
-    else:
-        print("  Lock: free")
+    _print_lock_status(lock)
     for task_name, task in payload["tasks"].items():
+        state = _task_display_state(task_name, task, lock)
+        previous_outcome = task.get("lastOutcome") or "-"
+        previous_at = _previous_finished_at(task_name, task, lock)
+        attempts = task.get("attemptsForDueSlot", 0)
         print(f"\n{task_name}")
-        print(f"  Enabled:            {task['enabled']}")
-        print(f"  Current due slot:   {task['currentDueSlot']}")
-        print(f"  Due:                {task['due']}")
-        print(f"  Last attempt:       {task.get('lastAttemptAt') or '-'}")
-        print(f"  Last outcome:       {task.get('lastOutcome') or '-'}")
-        print(f"  Last error:         {task.get('lastError') or '-'}")
-        print(f"  Last attempt run:   {task.get('lastAttemptRunPath') or '-'}")
-        print(f"  Last completed:     {task.get('lastCompletedAt') or '-'}")
-        print(f"  Last completed run: {task.get('lastCompletedRunPath') or '-'}")
-        print(f"  Attempts this slot: {task.get('attemptsForCurrentSlot', 0)}")
-        print(f"  Next scheduled:     {task['nextScheduledAt']}")
+        print(f"  State:        {state}")
+        print(
+            f"  Slot:         {task['currentDueSlot']} · attempts {attempts} · "
+            f"next {task['nextScheduledAt']}"
+        )
+        print(f"  Previous:     {previous_outcome} · {previous_at}")
+        if task.get("lastAttemptRunPath"):
+            print(f"  Previous run: {task['lastAttemptRunPath']}")
+        if task.get("lastError"):
+            print(f"  Error:        {task['lastError']}")
 
 
 def run_locked_scanner(config: Mapping[str, Any], scanner_args: Sequence[str], label: str) -> int:

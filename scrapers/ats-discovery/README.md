@@ -620,15 +620,24 @@ ranges, and retention ranges. It does not run Docker or change systemd.
 ./ops/scheduler/ats-ops status --json | jq .
 ```
 
-Shows both configured tasks, latest logical slots, outcomes, next schedules,
-and the live/stale lock state. Its exit code is `2` when an enabled task's last
-outcome is degraded or failed, which is useful for monitoring but can surprise a
-shell running with `set -e`.
+The default view is compact and operator-oriented. It shows current task state
+first (`IN PROGRESS`, `DUE`, `CURRENT`, or `DISABLED`), then the current due slot
+with its attempt count and next schedule, followed by the latest finished outcome
+and its run artifact when one exists. A live scheduler lock is rendered as a short
+human-readable line instead of raw lock-owner JSON.
+
+`status --json` remains the detailed machine-readable view. It exposes separate
+last-attempt and last-completed run paths, the latest finished timestamp, and the
+last recorded failure (`lastFailureAt`, `lastFailureOutcome`, `lastFailureError`,
+and `lastFailureRunPath`). A later successful run clears the current `lastError`
+but does not erase those last-failure breadcrumbs. Attempts shown for the current
+due slot are zero until that slot has actually been attempted; attempts retained
+for an older scheduler slot remain available in JSON state fields.
 
 Operator-facing status timestamps use the configured scheduler timezone and local
-offset. Scheduler state continues to store `*Utc` fields internally. Status keeps
-separate last-attempt and last-completed run paths so a failed attempt cannot make
-an older completed run look like its own artifact directory.
+offset. Scheduler state continues to store `*Utc` fields internally. Its exit code
+is `2` when an enabled task's latest finished outcome is degraded or failed, which
+is useful for monitoring but can surprise a shell running with `set -e`.
 
 ### `scanner [--label NAME] -- <scanner arguments>`
 
