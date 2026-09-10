@@ -1,6 +1,6 @@
 {# Shared job form. Expects:
     mode: "create" | "edit"
-    disable_ats: bool
+    disable_ats: bool; disables canonical provider identity fields only
     initial_json: safe JSON object with current values ({} for create)
     submit_label: string ("Create" | "Save changes")
     cancel_href: string
@@ -80,6 +80,9 @@
       <details class="advanced" {{ 'open' if mode == 'edit' else '' }}>
         <summary>ATS & identifiers (optional)</summary>
         <div class="grid" style="grid-template-columns: 160px 1fr; gap:8px 12px; margin-top:8px;">
+          <label for="atsVendor" class="label">ATS vendor</label>
+          <input type="text" id="atsVendor" name="atsVendor" placeholder="e.g. workday, greenhouse, successfactors">
+
           <label for="provider" class="label">Provider</label>
           <input type="text" id="provider" name="provider" placeholder="workday / greenhouse / join / corporate-site" {{ 'disabled' if disable_ats else '' }}>
 
@@ -91,7 +94,7 @@
         </div>
       </details>
       <div class="muted" style="font-size:12px; margin-top:4px;">
-        We’ll try to fill these from the URL. You can override them. {{ ' (disabled in edit mode)' if disable_ats else '' }}
+        ATS vendor is optional. Provider identifiers are inferred from the URL. {{ 'Provider identifiers are disabled in edit mode.' if disable_ats else 'You can override provider identifiers.' }}
       </div>
     </div>
 

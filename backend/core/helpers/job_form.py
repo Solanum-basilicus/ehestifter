@@ -3,7 +3,7 @@
 # Fields the UI is allowed to send to the Jobs API for create/update
 _ALLOWED = {
     "url", "title", "hiringCompanyName", "postingCompanyName",
-    "foundOn", "provider", "providerTenant", "externalId",
+    "foundOn", "provider", "providerTenant", "atsVendor", "externalId",
     "remoteType", "description", "locations"
 }
 

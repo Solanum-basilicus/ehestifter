@@ -112,6 +112,11 @@ export function buildCreatePayload(
 
     foundOn: requiredString(candidate.foundOn, 'candidate.foundOn'),
 
+    atsVendor: requiredString(
+      candidate.sourceProvider,
+      'candidate.sourceProvider',
+    ),
+
     provider: requiredString(
       identity.provider,
       'canonicalIdentity.provider',

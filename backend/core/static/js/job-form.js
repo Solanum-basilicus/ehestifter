@@ -153,6 +153,7 @@ import { loadGeoDict, countryLookup, prioritizedCountries, citiesByCountry } fro
     assign('hiringCompanyName', initial.hiringCompanyName);
     assign('postingCompanyName', initial.postingCompanyName);
     assign('foundOn', initial.foundOn);
+    assign('atsVendor', initial.atsVendor);
     assign('provider', initial.provider);
     assign('providerTenant', initial.providerTenant);
     assign('externalId', initial.externalId);
@@ -205,6 +206,7 @@ import { loadGeoDict, countryLookup, prioritizedCountries, citiesByCountry } fro
     const errEl = el('err');
     const urlInput = el('url');
     const foundOnInput = el('foundOn');
+    const atsVendorInput = el('atsVendor');
     const externalIdInput = el('externalId');
     const companyInput = el('hiringCompanyName');
     const providerInput = el('provider');
@@ -424,6 +426,7 @@ import { loadGeoDict, countryLookup, prioritizedCountries, citiesByCountry } fro
         hiringCompanyName: companyInput.value.trim() || undefined,
         postingCompanyName: el('postingCompanyName').value.trim() || undefined,
         foundOn: foundOnInput.value.trim() || undefined,
+        atsVendor: atsVendorInput.value.trim() || undefined,
         remoteType: normRemote(document.querySelector('input[name="remoteType"]:checked')?.value || 'Unknown'),
         description,
         locations: (function(){

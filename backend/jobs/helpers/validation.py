@@ -30,6 +30,7 @@ def validate_job_payload(data: dict, for_update=False) -> (bool, str):
         "foundOn": 100,
         "provider": 100,
         "providerTenant": 200,
+        "atsVendor": 100,
         "externalId": 200,
         "url": 1000,
         "applyUrl": 1000,

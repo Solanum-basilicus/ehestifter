@@ -377,6 +377,7 @@ def register(app: func.FunctionApp):
                   j.Title,
                   j.ExternalId,
                   j.FoundOn,
+                  j.AtsVendor,
                   j.HiringCompanyName,
                   j.PostingCompanyName,
                   j.RemoteType,

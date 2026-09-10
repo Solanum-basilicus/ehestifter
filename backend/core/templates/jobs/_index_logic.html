@@ -438,6 +438,7 @@
     const geo = summarizeLocations(row);
     const firstSeen = row.FirstSeenAt || row.CreatedAt || row.LastUpdateAt || '';
     const via = (row.FoundOn || '').trim();
+    const atsVendor = (row.AtsVendor || '').trim();
 
     const statusId = `ust_${row.Id}`;
     const compatWrapId = `ucw_${row.Id}`;
@@ -456,6 +457,7 @@
               ${companyLine ? `<span class="truncate-1" style="max-width:36ch;" title="${escq(companyLine)}">${companyLine}</span>` : ''}
               ${geo ? `<span class="truncate-1" style="max-width:38ch;" title="${escq(geo)}">${geo}</span>` : ''}
               ${via ? `<span class="chip muted" title="Found on">${escq(via)}</span>` : ''}
+              ${atsVendor ? `<span class="chip muted" title="ATS vendor">ATS: ${escapeHtml(atsVendor)}</span>` : ''}
             </div>
           </div>
 

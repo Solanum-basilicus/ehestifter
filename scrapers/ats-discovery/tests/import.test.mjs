@@ -22,6 +22,7 @@ function candidate(overrides = {}) {
       'https://job-boards.greenhouse.io/example/jobs/123',
 
     foundOn: 'ats-discovery',
+    sourceProvider: 'greenhouse',
     sourceCompany: 'Example GmbH',
     hiringCompanyName: 'Example GmbH',
     postingCompanyName: null,
@@ -65,6 +66,11 @@ test('buildCreatePayload uses scanner provenance and Jobs identity', () => {
   );
 
   assert.equal(
+    payload.atsVendor,
+    'greenhouse',
+  );
+
+  assert.equal(
     payload.providerTenant,
     'example',
   );
@@ -87,6 +93,22 @@ test('buildCreatePayload uses scanner provenance and Jobs identity', () => {
       region: 'Berlin',
     },
   ]);
+});
+
+test('buildCreatePayload keeps ATS vendor separate from Jobs provider', () => {
+  const payload = buildCreatePayload(candidate({
+    sourceProvider: 'successfactors',
+    canonicalIdentity: {
+      provider: 'westfalen',
+      providerTenant: '',
+      externalId: 'Muenster-Senior-Projektmanager',
+      identitySource: 'url',
+    },
+  }));
+
+  assert.equal(payload.atsVendor, 'successfactors');
+  assert.equal(payload.provider, 'westfalen');
+  assert.equal(payload.providerTenant, '');
 });
 
 test('createJob reconciles an ambiguous POST through exists', async () => {

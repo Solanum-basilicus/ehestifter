@@ -18,6 +18,7 @@ function candidate(locations) {
     url: 'https://example.test/job/1',
     applyUrl: 'https://example.test/job/1',
     foundOn: 'ats-discovery',
+    sourceProvider: 'greenhouse',
     title: 'Engineer',
     hiringCompanyName: 'Example',
     remoteType: 'Remote',

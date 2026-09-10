@@ -37,6 +37,7 @@ def _map_api_job_to_initial(job: dict) -> dict:
         "foundOn": _pick(job, "foundOn", "FoundOn") or "",
         "provider": _pick(job, "provider", "Provider") or "",
         "providerTenant": _pick(job, "providerTenant", "ProviderTenant") or "",
+        "atsVendor": _pick(job, "atsVendor", "AtsVendor") or "",
         "externalId": _pick(job, "externalId", "ExternalId") or "",
         "remoteType": (_pick(job, "remoteType", "RemoteType") or "Unknown"),
         # HTML description (accept different casings)
@@ -88,7 +89,7 @@ def create_blueprint(auth):
             title="Edit job",
             # values consumed by templates/jobs/_job_form.html
             mode="edit",
-            disable_ats=True,               # Provider / Tenant / ExternalId disabled in edit
+            disable_ats=True,               # Canonical provider identity is read-only in edit.
             initial_json=initial,
             submit_label="Save changes",
             cancel_href=f"/jobs/{job_id}",

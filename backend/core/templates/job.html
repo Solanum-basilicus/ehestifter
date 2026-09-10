@@ -235,11 +235,11 @@
             </div>
           </template>
 
-          <!-- ATS / Provider -->
-          <template x-if="providerLine()">
+          <!-- ATS vendor -->
+          <template x-if="atsLine()">
             <div class="flex">
               <div class="sep-vert"></div>
-              <span class="badge" x-text="providerLine()"></span>
+              <span class="badge" x-text="atsLine()"></span>
             </div>
           </template>
 
@@ -712,7 +712,7 @@
         title:"", company:"", postingCompany:"",
         remoteType:"", firstSeenUtc:"", lastSeenUtc:"",
         repostCount:0, url:"", applyUrl:"",
-        foundOn:"", externalId:"", provider:"", providerTenant:"",
+        foundOn:"", externalId:"", provider:"", providerTenant:"", atsVendor:"",
         locations: []
       },
       app:{ state:"New", changedAtUtc:null },
@@ -772,6 +772,7 @@
         const foundOn = (this.get(p, ["FoundOn","foundOn"]) || "").toString().trim();
         const provider = (this.get(p, ["Provider","provider"]) || "").toString().trim();
         const tenant   = (this.get(p, ["ProviderTenant","providerTenant"]) || "").toString().trim();
+        const atsVendor = (this.get(p, ["AtsVendor","atsVendor"]) || "").toString().trim();
 
         const firstSeen = this.get(p, ["FirstSeenAt","PostedDate","CreatedAt"]) || "";
         const lastSeen  = this.get(p, ["LastSeenAt","UpdatedAt"]) || firstSeen || "";
@@ -804,7 +805,7 @@
           company, postingCompany: posting,
           remoteType: remote, firstSeenUtc:firstSeen, lastSeenUtc:lastSeen,
           repostCount, url, applyUrl,
-          foundOn, externalId: extId, provider, providerTenant: tenant,
+          foundOn, externalId: extId, provider, providerTenant: tenant, atsVendor,
           locations: locs
         };
 
@@ -872,12 +873,8 @@
         return geo;
       },
 
-      providerLine(){
-        const p = (this.meta.provider || "").toLowerCase();
-        if (!p || p === "corporate-site") return "";
-        return this.meta.providerTenant
-          ? `ATS: ${this.meta.provider}/${this.meta.providerTenant}`
-          : `ATS: ${this.meta.provider}`;
+      atsLine(){
+        return this.meta.atsVendor ? `ATS: ${this.meta.atsVendor}` : "";
       },
 
       seenPrefix(){ return (this.meta.repostCount||0) === 0 ? 'First seen' : 'Last seen'; },

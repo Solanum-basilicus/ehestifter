@@ -9,6 +9,6 @@ def test_jobs_get(base_url, auth_headers, shared_state):
     assert r.status_code == 200, r.text
     job = r.json()
     # DB-shaped keys present
-    for key in ["Id","Url","FoundOn","Provider","ProviderTenant","ExternalId","HiringCompanyName","IsDeleted","CreatedAt","FirstSeenAt"]:
+    for key in ["Id","Url","FoundOn","Provider","ProviderTenant","AtsVendor","ExternalId","HiringCompanyName","IsDeleted","CreatedAt","FirstSeenAt"]:
         assert key in job
     assert "locations" in job and isinstance(job["locations"], list)

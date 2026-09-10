@@ -149,6 +149,7 @@ New imported jobs use:
 
 ```text
 foundOn = "ats-discovery"
+atsVendor = <source ATS provider>
 ```
 
 Career-Ops remains the attributed upstream for selected provider code and design ideas, including the BambooHR and iCIMS adapters. job-board-aggregator remains the attributed source/reference for the Ashby/Greenhouse/Lever/Workday/BambooHR/iCIMS/Paylocity catalogs and selected resilience ideas. `kalil0321/ats-scrapers` is the attributed source for the Paylocity adapter and for Personio/SmartRecruiters/Softgarden/SuccessFactors tenant inventories. Product renaming must not remove source repository, recorded ref, license, or Ehestifter-change notices.

@@ -7,6 +7,7 @@ def test_jobs_update_fields_and_locations(base_url, system_headers, shared_state
     url = f"{base_url}/api/jobs/{job_id}"
     payload = {
         "title": "Product Manager (Test)",
+        "atsVendor": "greenhouse",
         "remoteType": "Remote",
         "locations": [
             {"countryName":"Germany","countryCode":"DE","cityName":"Berlin"},
@@ -24,6 +25,7 @@ def test_jobs_update_fields_and_locations(base_url, system_headers, shared_state
     assert r2.status_code == 200
     job = r2.json()
     assert job.get("Title") == "Product Manager (Test)"
+    assert job.get("AtsVendor") == "greenhouse"
     assert job.get("RemoteType") == "Remote"
     locs = job.get("locations") or []
     cities = {(l.get("countryCode"), l.get("cityName")) for l in locs}

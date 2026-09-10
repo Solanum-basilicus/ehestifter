@@ -188,6 +188,7 @@ def create_job_record(req: func.HttpRequest, cur, data: dict, analytics_meta: di
     foundOn = data.get("foundOn") or heur.get("foundOn") or "corporate-site"
     provider = data.get("provider") or heur.get("provider") or "corporate-site"
     providerTenant = data.get("providerTenant") or heur.get("providerTenant") or ""
+    atsVendor = (data.get("atsVendor") or "").strip() or None
     externalId = data.get("externalId") or heur.get("externalId")
     hiringCompanyName = data.get("hiringCompanyName") or heur.get("hiringCompanyName")
     postingCompanyName = data.get("postingCompanyName")
@@ -212,7 +213,7 @@ def create_job_record(req: func.HttpRequest, cur, data: dict, analytics_meta: di
     try:
         cur.execute("""
             INSERT INTO dbo.JobOfferings (
-              FoundOn, Provider, ProviderTenant, ExternalId,
+              FoundOn, Provider, ProviderTenant, AtsVendor, ExternalId,
               Url, ApplyUrl,
               HiringCompanyName, PostingCompanyName,
               Title, RemoteType, Description,
@@ -220,9 +221,9 @@ def create_job_record(req: func.HttpRequest, cur, data: dict, analytics_meta: di
               FirstSeenAt, CreatedAt
             )
             OUTPUT Inserted.Id
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, SYSDATETIME(), SYSDATETIME())
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, SYSDATETIME(), SYSDATETIME())
         """, (
-            foundOn, provider, providerTenant, externalId,
+            foundOn, provider, providerTenant, atsVendor, externalId,
             url, applyUrl,
             hiringCompanyName, postingCompanyName,
             title, remoteType, description,

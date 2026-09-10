@@ -10,6 +10,7 @@ function candidate(description) {
     url: 'https://job-boards.greenhouse.io/example/jobs/123',
     applyUrl: 'https://job-boards.greenhouse.io/example/jobs/123',
     foundOn: 'ats-discovery',
+    sourceProvider: 'greenhouse',
     hiringCompanyName: 'Example GmbH',
     postingCompanyName: null,
     title: 'Product Manager',

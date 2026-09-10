@@ -8,6 +8,7 @@ function candidate(overrides = {}) {
     url: 'https://example.test/jobs/1',
     applyUrl: 'https://example.test/jobs/1',
     foundOn: 'ats-discovery',
+    sourceProvider: 'greenhouse',
     title: 'Engineer',
     hiringCompanyName: 'Example',
     remoteType: 'Remote',

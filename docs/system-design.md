@@ -547,6 +547,10 @@ Required identity fields:
 - `ProviderTenant` `NOT NULL` with default `''`
 - `ExternalId` `NOT NULL`
 
+ATS metadata:
+- `AtsVendor` is nullable and identifies the ATS product when it is known;
+- `AtsVendor` is not part of canonical job identity.
+
 Creation behavior:
 - API attempts to infer these via `backend/jobs/helpers/url_helpers.py` using best effort from URL,
 - defaults are used where possible,
@@ -1655,6 +1659,7 @@ ATS Discovery preserves provider-native identity and acquisition evidence even w
 
 ```text
 foundOn = "ats-discovery"
+atsVendor = <source ATS provider>
 ```
 
 `foundOn` is the creation channel, not a complete observation history. Historical jobs and run artifacts created under the former product name remain unchanged as evidence.
@@ -1908,7 +1913,7 @@ Users discovery input:
 Jobs identity and persistence:
 - `GET /jobs/exists?url=<origin-url>` is authoritative for canonical identity preflight;
 - `POST /jobs` creates/reconciles the shared job;
-- imports carry system-actor context and `foundOn = "ats-discovery"`;
+- imports carry system-actor context, `foundOn = "ats-discovery"`, and the source ATS vendor when known;
 - no status endpoint is called by discovery.
 
 Enrichment:

@@ -12,6 +12,7 @@ from helpers.analytics import emit_jobs_event
 # mapping: JSON -> DB column
 _MAPPING = {
     "foundOn":"FoundOn","provider":"Provider","providerTenant":"ProviderTenant","externalId":"ExternalId",
+    "atsVendor":"AtsVendor",
     "url":"Url","applyUrl":"ApplyUrl","hiringCompanyName":"HiringCompanyName","postingCompanyName":"PostingCompanyName",
     "title":"Title","remoteType":"RemoteType","description":"Description"
 }
