@@ -560,6 +560,56 @@ test('BambooHR detail uses the public job detail endpoint', async () => {
   assert.match(result.description, /Build useful products/);
 });
 
+test('BambooHR detail keeps ATS location and location type evidence', async () => {
+  const source = candidate({
+    sourceProvider: 'bamboohr',
+    sourceTenant: 'anovasolutions',
+    url: 'https://anovasolutions.bamboohr.com/careers/473',
+    provenance: {
+      providerNativeId: '473',
+      sourceOrigin: 'https://anovasolutions.bamboohr.com',
+    },
+  });
+  const [result] = await enrichCandidateDetails([source], {
+    concurrency: 1,
+    maxFetches: 1,
+    timeoutMs: 1000,
+    async fetchImpl() {
+      return response({
+        result: {
+          jobOpening: {
+            description: '<p>Lead product work.</p>',
+            location: {
+              city: null,
+              state: null,
+              postalCode: null,
+              addressCountry: null,
+            },
+            atsLocation: {
+              country: 'United States',
+              countryId: '1',
+              state: 'Nebraska',
+              city: 'Blair',
+            },
+            isRemote: null,
+            locationType: '1',
+            jobOpeningShareUrl: 'https://anovasolutions.bamboohr.com/careers/473',
+          },
+        },
+      });
+    },
+  });
+
+  assert.equal(result.detailRawLocation, 'Blair, Nebraska, United States, Remote');
+  assert.equal(result.remoteType, 'Remote');
+  assert.deepEqual(result.locations, [{
+    countryName: 'United States',
+    countryCode: null,
+    cityName: 'Blair',
+    region: 'Nebraska',
+  }]);
+});
+
 test('BambooHR detail ignores a cross-origin share URL', async () => {
   const source = candidate({
     sourceProvider: 'bamboohr',

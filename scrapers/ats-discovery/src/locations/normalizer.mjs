@@ -424,13 +424,20 @@ function normalizeStructuredLocations(candidate, dictionary) {
   const unresolved = [];
   for (const item of candidate.locations ?? []) {
     const result = dictionary.canonicalizeLocation(item);
-    if (result.location) locations.push(result.location);
+    const providerCity = cleanText(item?.cityName);
+    const location = result.location
+      && !result.location.cityName
+      && providerCity
+      && result.unresolved.includes('city_unresolved_for_country')
+      ? { ...result.location, cityName: providerCity }
+      : result.location;
+    if (location) locations.push(location);
     observations.push({
       source: 'provider_structured',
       raw: item,
       kind: 'structured_location',
-      status: result.location ? 'resolved' : 'unresolved',
-      location: result.location,
+      status: location ? 'resolved' : 'unresolved',
+      location,
       issues: result.unresolved,
     });
     for (const reason of result.unresolved) {

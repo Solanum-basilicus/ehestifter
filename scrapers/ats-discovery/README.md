@@ -67,6 +67,9 @@ SuccessFactors is intentionally URL-identified. Its upstream `slug` values are n
 BambooHR uses the public tenant `careers/list` JSON endpoint. The list does not
 provide a complete description, so the shared detail stage requests the same
 tenant's `/careers/{id}/detail` endpoint after Jobs reports that the job is new.
+BambooHR location extraction prefers the primary `location` object and uses
+`atsLocation` when the primary object is empty. `locationType` supplies explicit
+On-Site, Remote, or Hybrid evidence; legacy `isRemote: true` remains a fallback.
 
 iCIMS has two acquisition modes. Classic `*.icims.com` portals keep the full
 portal host as the provider tenant because numeric job IDs are tenant-local. If

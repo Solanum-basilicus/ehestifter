@@ -12,6 +12,7 @@ export const sourceMeta = providerSourceMeta({
     'explicit tenant() and sourceOrigin() contracts for Ehestifter planning',
     'provider capabilities for the shared detail stage',
     'stable provider-native job ids for canonical identity and canary detail checks',
+    'ATS location fallback and explicit BambooHR work-arrangement extraction',
   ],
 });
 
@@ -32,6 +33,57 @@ export function resolveBambooHROrigin(entry) {
   return null;
 }
 
+function cleanBambooHRText(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+export function bambooHRRemoteType(job) {
+  const locationType = String(job?.locationType ?? '').trim();
+  if (locationType === '0') return 'On-Site';
+  if (locationType === '1') return 'Remote';
+  if (locationType === '2') return 'Hybrid';
+  return job?.isRemote === true ? 'Remote' : null;
+}
+
+export function bambooHRStructuredLocation(job) {
+  const primary = job?.location && typeof job.location === 'object' && !Array.isArray(job.location)
+    ? job.location
+    : null;
+  const ats = job?.atsLocation && typeof job.atsLocation === 'object' && !Array.isArray(job.atsLocation)
+    ? job.atsLocation
+    : null;
+
+  const source = primary && [
+    primary.city,
+    primary.state,
+    primary.province,
+    primary.addressCountry,
+    primary.country,
+  ].some((value) => cleanBambooHRText(value) !== '')
+    ? primary
+    : ats;
+  if (!source) return null;
+
+  const location = {
+    countryName: cleanBambooHRText(source.addressCountry ?? source.country) || null,
+    countryCode: cleanBambooHRText(source.countryCode ?? source.alpha2Code) || null,
+    cityName: cleanBambooHRText(source.city) || null,
+    region: cleanBambooHRText(source.state ?? source.province) || null,
+  };
+  return Object.values(location).some(Boolean) ? location : null;
+}
+
+export function bambooHRLocationText(job) {
+  const location = bambooHRStructuredLocation(job);
+  const remoteType = bambooHRRemoteType(job);
+  return [
+    location?.cityName,
+    location?.region,
+    location?.countryName ?? location?.countryCode,
+    remoteType,
+  ].filter(Boolean).join(', ');
+}
+
 export function parseBambooHRResponse(json, companyName, origin) {
   const rows = json?.result;
   if (!Array.isArray(rows)) return [];
@@ -43,18 +95,12 @@ export function parseBambooHRResponse(json, companyName, origin) {
     const title = String(row.jobOpeningName ?? '').trim();
     if (!id || !title || seen.has(id)) continue;
     seen.add(id);
-    const location = row.location && typeof row.location === 'object'
-      ? row.location
-      : {};
     jobs.push({
       id,
       title,
       url: `${origin}/careers/${encodeURIComponent(id)}`,
       company: companyName,
-      location: [location.city, location.state, row.isRemote ? 'Remote' : '']
-        .filter((value) => typeof value === 'string' && value.trim() !== '')
-        .map((value) => value.trim())
-        .join(', '),
+      location: bambooHRLocationText(row),
     });
   }
   return jobs;

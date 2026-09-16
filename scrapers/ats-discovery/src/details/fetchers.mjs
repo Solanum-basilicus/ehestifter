@@ -9,6 +9,11 @@ import {
   assertPublicHttpsUrl,
   sameOrigin,
 } from '../providers/_url-safety.mjs';
+import {
+  bambooHRLocationText,
+  bambooHRRemoteType,
+  bambooHRStructuredLocation,
+} from '../providers/bamboohr.mjs';
 
 const GREENHOUSE_HOST = 'boards-api.greenhouse.io';
 const ASHBY_HOST = 'api.ashbyhq.com';
@@ -270,6 +275,7 @@ async function fetchBambooHRDetails(candidate, context) {
   if (!job || typeof job !== 'object') {
     throw new Error('BambooHR detail endpoint omitted result.jobOpening');
   }
+  const location = bambooHRStructuredLocation(job);
   return {
     description: htmlToPlainText(job.description),
     descriptionStatus: 'bamboohr-detail-json',
@@ -277,8 +283,9 @@ async function fetchBambooHRDetails(candidate, context) {
       const applyUrl = safeApplyUrl(job.jobOpeningShareUrl);
       return applyUrl && sameOrigin(applyUrl, source.origin) ? applyUrl : candidate.url;
     })(),
-    locations: [],
-    remoteType: null,
+    rawLocation: bambooHRLocationText(job),
+    locations: location ? [location] : [],
+    remoteType: bambooHRRemoteType(job),
   };
 }
 

@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import bamboohr, {
+  bambooHRLocationText,
+  bambooHRRemoteType,
   parseBambooHRResponse,
   resolveBambooHROrigin,
 } from '../src/providers/bamboohr.mjs';
@@ -55,4 +57,41 @@ test('BambooHR fetch uses the public careers list endpoint', async () => {
   assert.equal(calls[0].url, 'https://acme.bamboohr.com/careers/list');
   assert.equal(calls[0].options.redirect, 'error');
   assert.equal(jobs[0].id, '7');
+});
+
+
+test('BambooHR parser uses ATS location when primary location is empty', () => {
+  const jobs = parseBambooHRResponse({
+    result: [{
+      id: '473',
+      jobOpeningName: 'Product Manager - Lead to Value',
+      location: { city: null, state: null },
+      atsLocation: {
+        country: 'United States',
+        state: 'Nebraska',
+        province: null,
+        city: 'Blair',
+      },
+      isRemote: null,
+      locationType: '1',
+    }],
+  }, 'Anova', 'https://anovasolutions.bamboohr.com');
+
+  assert.equal(jobs[0].location, 'Blair, Nebraska, United States, Remote');
+});
+
+test('BambooHR parser prefers primary location over ATS fallback', () => {
+  assert.equal(bambooHRLocationText({
+    location: { city: 'Berlin', state: 'Berlin' },
+    atsLocation: { country: 'United States', state: 'Nebraska', city: 'Blair' },
+    locationType: '2',
+  }), 'Berlin, Berlin, Hybrid');
+});
+
+test('BambooHR location type maps known values and keeps legacy remote fallback', () => {
+  assert.equal(bambooHRRemoteType({ locationType: '0' }), 'On-Site');
+  assert.equal(bambooHRRemoteType({ locationType: '1' }), 'Remote');
+  assert.equal(bambooHRRemoteType({ locationType: '2' }), 'Hybrid');
+  assert.equal(bambooHRRemoteType({ locationType: '9', isRemote: true }), 'Remote');
+  assert.equal(bambooHRRemoteType({ locationType: '9', isRemote: false }), null);
 });

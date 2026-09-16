@@ -185,6 +185,31 @@ test('provider structured locations are canonicalized instead of trusted verbati
 });
 
 
+test('provider structured location keeps explicit city when dictionary does not know it', () => {
+  const [result] = normalizeCandidateLocations([
+    candidate({
+      remoteType: 'Remote',
+      locations: [{
+        countryName: 'United States',
+        countryCode: null,
+        cityName: 'Blair',
+        region: 'Nebraska',
+      }],
+    }),
+  ], { locationScopeFilter });
+
+  assert.deepEqual(result.locations, [{
+    countryName: 'United States',
+    countryCode: 'US',
+    cityName: 'Blair',
+    region: 'Nebraska',
+  }]);
+  assert.ok(result.locationNormalization.unresolved.some(
+    (item) => item.reason === 'city_unresolved_for_country',
+  ));
+});
+
+
 test('raw provider location can refine a structured country location', () => {
   const [result] = normalizeCandidateLocations([
     candidate({
