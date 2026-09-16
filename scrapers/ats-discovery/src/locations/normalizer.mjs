@@ -623,6 +623,41 @@ function employerCountryHints(window, dictionary) {
   }));
 }
 
+function candidateScopeCountryHints(window, dictionary) {
+  if (negatesRequirement(window)) return [];
+
+  return dictionary.findCountryMentions(window)
+    .filter((country) => {
+      const term = escapeRegex(cleanText(country.matchedTerm)).replace(/\s+/gu, '\\s+');
+      if (term === '') return false;
+      const excluded = new RegExp(
+        `\\b(?:outside|excluding|exclude|except|other\\s+than|not\\s+(?:in|within|based\\s+in|located\\s+in))\\s+(?:the\\s+)?${term}(?![\\p{L}\\p{N}])`,
+        'iu',
+      ).test(window);
+      if (excluded) return false;
+
+      const candidateFirst = new RegExp(
+        `\\b(?:candidates?|applicants?|employees?)\\s+`+
+        `(?:must\\s+|should\\s+|need\\s+to\\s+|are\\s+required\\s+to\\s+|are\\s+|who\\s+|that\\s+)?`+
+        `(?:resid(?:e|ing)|live|living|located|based)\\s+`+
+        `(?:in|within)\\s+(?:anywhere\\s+)?(?:the\\s+)?${term}(?![\\p{L}\\p{N}])`,
+        'iu',
+      );
+      const countryFirst = new RegExp(
+        `(?<![\\p{L}\\p{N}])${term}[-\\s]+(?:based|located)[-\\s]+`+
+        `(?:candidates?|applicants?|employees?)(?![\\p{L}\\p{N}])`,
+        'iu',
+      );
+      return candidateFirst.test(window) || countryFirst.test(window);
+    })
+    .map((country) => ({
+      countryName: country.countryName,
+      countryCode: country.countryCode,
+      matchedTerm: country.matchedTerm,
+      text: window,
+    }));
+}
+
 function citizenshipScope(window, dictionary, allowedTerm, blockedTerm) {
   if (negatesRequirement(window)) return null;
   if (!/\b(?:citizens?|citizenship)\b/iu.test(window)) return null;
@@ -732,6 +767,7 @@ function descriptionEvidence(candidate, primaryLocations, dictionary, scopeFilte
 
   for (const window of windows) {
     countryHints.push(...employerCountryHints(window, dictionary));
+    countryHints.push(...candidateScopeCountryHints(window, dictionary));
     const descriptionArrangement = workArrangementFromDescriptionPolicy(window);
     if (descriptionArrangement) {
       descriptionArrangements.push(descriptionArrangement);

@@ -608,6 +608,140 @@ test('city-only provider metadata is refined by strong employer country evidence
   ));
 });
 
+test('candidate residence scope refines a provider city', () => {
+  const [result] = normalizeCandidateLocations([
+    candidate({
+      rawLocation: 'Remote - Dallas',
+      remoteType: 'Remote',
+      description: 'This role is open to candidates residing in the US.',
+    }),
+  ], { locationScopeFilter });
+
+  assert.equal(result.remoteType, 'Remote');
+  assert.deepEqual(result.locations, [{
+    countryName: 'United States',
+    countryCode: 'US',
+    cityName: 'Dallas',
+    region: null,
+  }]);
+  assert.equal(result.locationNormalization.consistency, 'refined');
+  assert.ok(result.locationNormalization.observations.some(
+    (item) => item.kind === 'provider_city_with_description_country_hint',
+  ));
+});
+
+test('candidate residence scope refines a provider city when filtering is off', () => {
+  const [result] = normalizeCandidateLocations([
+    candidate({
+      rawLocation: 'Remote - Dallas',
+      remoteType: 'Remote',
+      description: 'This role is open to candidates residing in the US.',
+    }),
+  ], { locationScopeFilter: { ...locationScopeFilter, enabled: false } });
+
+  assert.deepEqual(result.locations, [{
+    countryName: 'United States',
+    countryCode: 'US',
+    cityName: 'Dallas',
+    region: null,
+  }]);
+  assert.equal(result.locationEligibility.status, 'unclear');
+  assert.equal(result.locationEligibility.reason, 'location_scope_filter_disabled');
+});
+
+test('customer country text does not refine a provider city', () => {
+  const [result] = normalizeCandidateLocations([
+    candidate({
+      rawLocation: 'Remote - Dallas',
+      remoteType: 'Remote',
+      description: 'You will support customers in the United States.',
+    }),
+  ], { locationScopeFilter });
+
+  assert.deepEqual(result.locations, []);
+});
+
+test('partner country text does not refine a provider city', () => {
+  const [result] = normalizeCandidateLocations([
+    candidate({
+      rawLocation: 'Remote - Dallas',
+      remoteType: 'Remote',
+      description: 'Candidates only work with US partner teams.',
+    }),
+  ], { locationScopeFilter });
+
+  assert.deepEqual(result.locations, []);
+});
+
+test('customer office text does not refine a provider city', () => {
+  const [result] = normalizeCandidateLocations([
+    candidate({
+      rawLocation: 'Remote - Dallas',
+      remoteType: 'Remote',
+      description: 'Candidates will support customers based in the United States.',
+    }),
+  ], { locationScopeFilter });
+
+  assert.deepEqual(result.locations, []);
+});
+
+test('unrelated country text does not refine a candidate residence statement', () => {
+  const [result] = normalizeCandidateLocations([
+    candidate({
+      rawLocation: 'Remote - Dallas',
+      remoteType: 'Remote',
+      description: 'Candidates residing near the office will support customers in the United States.',
+    }),
+  ], { locationScopeFilter });
+
+  assert.deepEqual(result.locations, []);
+});
+
+test('excluded residence country does not refine a provider city', () => {
+  const [result] = normalizeCandidateLocations([
+    candidate({
+      rawLocation: 'Remote - Dallas',
+      remoteType: 'Remote',
+      description: 'Candidates residing outside the United States can apply.',
+    }),
+  ], { locationScopeFilter });
+
+  assert.deepEqual(result.locations, []);
+});
+
+test('country scope with a local exception can refine a provider city', () => {
+  const [result] = normalizeCandidateLocations([
+    candidate({
+      rawLocation: 'Remote - Dallas',
+      remoteType: 'Remote',
+      description: 'This role is open to candidates residing in the US except the San Francisco Bay Area.',
+    }),
+  ], { locationScopeFilter });
+
+  assert.deepEqual(result.locations, [{
+    countryName: 'United States',
+    countryCode: 'US',
+    cityName: 'Dallas',
+    region: null,
+  }]);
+});
+
+test('conflicting candidate residence scopes do not refine a provider city', () => {
+  const [result] = normalizeCandidateLocations([
+    candidate({
+      rawLocation: 'Remote - Dallas',
+      remoteType: 'Remote',
+      description: 'Candidates must reside in the United States. Applicants must reside in Germany.',
+    }),
+  ], { locationScopeFilter });
+
+  assert.ok(!result.locations.some((item) => item.cityName === 'Dallas'));
+  assert.deepEqual(
+    result.locations.map((item) => item.countryCode).sort(),
+    ['DE', 'US'],
+  );
+});
+
 test('US citizenship restriction clarifies naked Remote scope', () => {
   const [result] = normalizeCandidateLocations([
     candidate({
