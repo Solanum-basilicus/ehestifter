@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 2,
+  "buildVersion": 1,
+  "catalogVersion": "1de6612eef2c100cf32d",
+  "referenceYear": 2026,
+  "tzdata": "system-2026c",
+  "counts": {
+    "regions": 30,
+    "countries": 248,
+    "adminRegions": 3854,
+    "cities": 235678
+  },
+  "sources": {
+    "geonamesCities500": {
+      "source": "https://download.geonames.org/export/dump/cities500.zip",
+      "sha256": "af489027298fff094bc86f7a2451ee4cb825e202206febd70e3e3cb98741c042"
+    },
+    "geonamesAdmin1": {
+      "source": "https://download.geonames.org/export/dump/admin1CodesASCII.txt",
+      "sha256": "1da92a6323a5fec3176f3f743bf4cf4040fd56a876da55e46fbca23c863aa60a"
+    },
+    "geonamesTimeZones": {
+      "source": "https://download.geonames.org/export/dump/timeZones.txt",
+      "sha256": "ea6f8bdcc259c21c562e8f7e7e0b0457cb89403bed60c76aac49ccee9a9ed18c"
+    },
+    "unM49": {
+      "source": "https://unstats.un.org/unsd/methodology/m49/overview",
+      "sha256": "b9048114f6e7f2abda83bf03d4263c9d7cd1bd7230e3d0461025ee7839a7a1fb"
+    },
+    "legacyGeo": {
+      "source": "backend/core/static/data/geo.sample8.json",
+      "sha256": "a2d0aa99695dc606d6e579f28a45c7b4144365353adbe8c827361bbed9d5377e"
+    }
+  }
+}

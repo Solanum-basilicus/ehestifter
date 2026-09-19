@@ -1,0 +1,11 @@
+Locations v2 reference data uses:
+
+GeoNames Gazetteer data
+https://www.geonames.org/
+Licensed under Creative Commons Attribution 4.0 (CC BY 4.0).
+https://creativecommons.org/licenses/by/4.0/
+
+United Nations Statistics Division M49 geographic regions
+https://unstats.un.org/unsd/methodology/m49/
+See the United Nations Terms of Use for source-data terms.
+https://www.un.org/en/about-us/terms-of-use
