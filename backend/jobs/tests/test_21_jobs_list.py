@@ -54,3 +54,18 @@ def test_jobs_list_my_returns_success_and_items_have_expected_shape(base_url, us
         assert "AtsVendor" in first
         assert "locations" in first
         assert isinstance(first["locations"], list)
+
+
+def test_jobs_list_all_without_user_context(base_url, auth_headers):
+    url = f"{base_url}/api/jobs?category=all&sort=created_desc&limit=5&offset=0"
+    r = requests.get(url, headers=auth_headers)
+
+    print("Response text:", r.text, " with status ", r.status_code, end=" ")
+    assert r.status_code == 200, r.text
+
+    payload = r.json()
+    assert payload.get("category") == "all"
+    assert isinstance(payload.get("items"), list)
+    for item in payload["items"]:
+        assert item.get("UserStatus") is None
+        assert item.get("UserStatusLastUpdated") is None

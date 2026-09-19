@@ -99,3 +99,30 @@ def test_unknown_country_keeps_no_false_geographic_fact():
     assert result["facts"] == []
     assert result["utcOffsets"] == []
     assert result["unresolvedCount"] == 1
+
+
+def test_legacy_country_name_variants_resolve_without_country_code():
+    catalog = LocationsV2Catalog(CATALOG)
+
+    cases = [
+        ("US", "iso3166:US"),
+        ("USA", "iso3166:US"),
+        ("U.S.A", "iso3166:US"),
+        ("Deutschland", "iso3166:DE"),
+        ("Remote - Global", "m49:001"),
+    ]
+
+    for index, (country_name, expected_id) in enumerate(cases, start=10):
+        result = project_legacy_locations(
+            catalog,
+            [{
+                "id": index,
+                "countryName": country_name,
+                "countryCode": None,
+                "cityName": None,
+                "region": None,
+            }],
+        )
+
+        assert result["direct"][0]["locationId"] == expected_id
+        assert result["unresolvedCount"] == 0

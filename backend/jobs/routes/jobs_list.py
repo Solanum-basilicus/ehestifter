@@ -145,6 +145,15 @@ def register(app: func.FunctionApp):
                 params.append(user_id)
                 params_count.append(user_id)
 
+            if user_id:
+                user_status_expr = "us.Status"
+                user_status_updated_expr = "us.LastUpdated"
+                last_update_expr = "COALESCE(us.LastUpdated, j.UpdatedAt, j.CreatedAt)"
+            else:
+                user_status_expr = "CAST(NULL AS NVARCHAR(100))"
+                user_status_updated_expr = "CAST(NULL AS DATETIME2)"
+                last_update_expr = "COALESCE(j.UpdatedAt, j.CreatedAt)"
+
             # Compatibility join only when needed for category 'open'
             if category == "open":
                 joins.append("""
@@ -300,13 +309,12 @@ def register(app: func.FunctionApp):
 
             # Date filters
             if date_kind == "updated":
-                updated_expr = "COALESCE(us.LastUpdated, j.UpdatedAt, j.CreatedAt)"
                 if date_from:
-                    where.append(f"{updated_expr} >= ?")
+                    where.append(f"{last_update_expr} >= ?")
                     params.append(date_from)
                     params_count.append(date_from)
                 if date_to:
-                    where.append(f"{updated_expr} < ?")
+                    where.append(f"{last_update_expr} < ?")
                     params.append(date_to)
                     params_count.append(date_to)
             else:  # created
@@ -328,9 +336,9 @@ def register(app: func.FunctionApp):
             elif sort == "created_asc":
                 order_sql = "ORDER BY j.CreatedAt ASC"
             elif sort == "updated_desc":
-                order_sql = "ORDER BY COALESCE(us.LastUpdated, j.UpdatedAt, j.CreatedAt) DESC"
+                order_sql = f"ORDER BY {last_update_expr} DESC"
             elif sort == "updated_asc":
-                order_sql = "ORDER BY COALESCE(us.LastUpdated, j.UpdatedAt, j.CreatedAt) ASC"
+                order_sql = f"ORDER BY {last_update_expr} ASC"
             elif sort == "location_az":
                 order_sql = """
                     ORDER BY (
@@ -341,9 +349,9 @@ def register(app: func.FunctionApp):
                     ) ASC, j.CreatedAt DESC
                 """
             elif sort == "status_progression":
-                order_sql = """
+                order_sql = f"""
                     ORDER BY
-                      CASE LOWER(COALESCE(us.Status, ''))
+                      CASE LOWER(COALESCE({user_status_expr}, ''))
                         WHEN 'offer' THEN 6
                         WHEN 'interview' THEN 5
                         WHEN 'screening planned' THEN 4
@@ -351,7 +359,7 @@ def register(app: func.FunctionApp):
                         WHEN '' THEN 2
                         ELSE 1
                       END DESC,
-                      COALESCE(us.LastUpdated, j.UpdatedAt, j.CreatedAt) DESC
+                      {last_update_expr} DESC
                 """
             else:
                 order_sql = "ORDER BY j.CreatedAt DESC"
@@ -384,9 +392,9 @@ def register(app: func.FunctionApp):
                   j.FirstSeenAt,
                   j.CreatedAt,
                   j.UpdatedAt,
-                  us.Status AS UserStatus,
-                  us.LastUpdated AS UserStatusLastUpdated,
-                  COALESCE(us.LastUpdated, j.UpdatedAt, j.CreatedAt) AS LastUpdateAt
+                  {user_status_expr} AS UserStatus,
+                  {user_status_updated_expr} AS UserStatusLastUpdated,
+                  {last_update_expr} AS LastUpdateAt
                 FROM dbo.JobOfferings j
                 {join_sql}
                 WHERE {where_sql}

@@ -18,6 +18,11 @@ from typing import Iterable
 
 DEFAULT_CATALOG_PATH = Path(__file__).resolve().parents[1] / "reference" / "locations-v2.catalog.json.gz"
 SUPPORTED_KINDS = {"city", "adminRegion", "country", "globalRegion"}
+LEGACY_COUNTRY_NAME_TO_CODE = {
+    "usa": "US",
+    "deutschland": "DE",
+}
+LEGACY_WORLD_NAMES = {"global", "world", "worldwide", "remote - global"}
 
 
 def _clean(value) -> str:
@@ -89,12 +94,30 @@ class LocationsV2Catalog:
 
     def resolve_country(self, country_code: str | None, country_name: str | None) -> dict | None:
         code = _clean(country_code).upper()
-        if code == "EU" or _key(country_name) == "european union":
+        name = _clean(country_name)
+        name_key = _key(name)
+
+        if code == "EU" or name_key in {"eu", "european union"}:
             return self.by_id.get("m49:150")
+        if name_key in LEGACY_WORLD_NAMES:
+            return self.by_id.get("m49:001")
         if len(code) == 2 and code in self.countries_by_code:
             return self.countries_by_code[code]
 
-        candidates = self.country_aliases.get(_key(country_name), set())
+        # Legacy rows sometimes store the country code in CountryName.
+        name_as_code = name.upper()
+        if len(name_as_code) == 2 and name_as_code in self.countries_by_code:
+            return self.countries_by_code[name_as_code]
+
+        # Accept punctuation around legacy code-like names such as U.S.A.
+        compact_name = re.sub(r"[^A-Z]", "", name.upper())
+        mapped_code = LEGACY_COUNTRY_NAME_TO_CODE.get(compact_name.casefold())
+        if mapped_code is None:
+            mapped_code = LEGACY_COUNTRY_NAME_TO_CODE.get(name_key)
+        if mapped_code and mapped_code in self.countries_by_code:
+            return self.countries_by_code[mapped_code]
+
+        candidates = self.country_aliases.get(name_key, set())
         if len(candidates) == 1:
             return self.countries_by_code[next(iter(candidates))]
         return None
