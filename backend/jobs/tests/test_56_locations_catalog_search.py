@@ -3,7 +3,7 @@ import requests
 
 def test_locations_search_disambiguates_london_ontario(base_url, auth_headers):
     response = requests.get(
-        f"{base_url}/jobs/locations/search",
+        f"{base_url}/api/jobs/locations/search",
         headers=auth_headers,
         params={"q": "London Ontario", "limit": 8},
     )
@@ -21,7 +21,7 @@ def test_locations_search_disambiguates_london_ontario(base_url, auth_headers):
 
 def test_locations_lookup_returns_canonical_presentation(base_url, auth_headers):
     response = requests.post(
-        f"{base_url}/jobs/locations/lookup",
+        f"{base_url}/api/jobs/locations/lookup",
         headers=auth_headers,
         json={
             "locations": [
