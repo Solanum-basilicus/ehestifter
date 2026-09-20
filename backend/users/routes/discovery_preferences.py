@@ -54,7 +54,10 @@ def register(app):
             else:
                 if row[0] != SCHEMA_VERSION:
                     raise ValueError("Stored discovery-preference schema version is not supported")
-                stored = normalize_discovery_preferences(json.loads(row[1]))
+                stored = normalize_discovery_preferences(
+                    json.loads(row[1]),
+                    reject_location_conflicts=False,
+                )
                 payload = {
                     **stored,
                     "LastUpdated": row[2].isoformat() if row[2] else None,

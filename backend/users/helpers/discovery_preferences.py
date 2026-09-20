@@ -206,7 +206,12 @@ def _normalize_ranges(value: Any, path: str) -> list[dict]:
     return result
 
 
-def _normalize_group(value: Any, path: str) -> dict:
+def _normalize_group(
+    value: Any,
+    path: str,
+    *,
+    reject_location_conflicts: bool = True,
+) -> dict:
     if not isinstance(value, dict):
         raise ValueError(f"{path} must be an object")
     unknown = set(value) - GROUP_FIELDS
@@ -226,7 +231,7 @@ def _normalize_group(value: Any, path: str) -> dict:
     include_keys = {(item["kind"], item["locationId"]) for item in include_locations}
     exclude_keys = {(item["kind"], item["locationId"]) for item in exclude_locations}
     contradiction = sorted(include_keys & exclude_keys)
-    if contradiction:
+    if reject_location_conflicts and contradiction:
         kind, location_id = contradiction[0]
         raise ValueError(
             f"The same location cannot be included and excluded in {path}: "
@@ -246,8 +251,16 @@ def _normalize_group(value: Any, path: str) -> dict:
     }
 
 
-def normalize_discovery_preferences(value: Any) -> dict:
-    """Return the stable persisted discovery-preference document."""
+def normalize_discovery_preferences(
+    value: Any,
+    *,
+    reject_location_conflicts: bool = True,
+) -> dict:
+    """Return the stable persisted discovery-preference document.
+
+    ``reject_location_conflicts`` is disabled only when reading legacy stored
+    documents. New writes must keep it enabled.
+    """
     if not isinstance(value, dict):
         raise ValueError("Discovery preferences must be a JSON object")
     unknown = set(value) - {"schemaVersion", "title", "eligibility"}
@@ -290,7 +303,9 @@ def normalize_discovery_preferences(value: Any) -> dict:
             )
         eligibility = {
             group_name: _normalize_group(
-                group_value, f"eligibility.{group_name}"
+                group_value,
+                f"eligibility.{group_name}",
+                reject_location_conflicts=reject_location_conflicts,
             )
             for group_name, group_value in raw_eligibility.items()
         }

@@ -211,3 +211,35 @@ def test_preferences_allow_parent_include_and_child_exclude():
 
     assert normalized["eligibility"]["remote"]["includeLocations"][0]["locationId"] == "m49:150"
     assert normalized["eligibility"]["remote"]["excludeLocations"][0]["locationId"] == "iso3166:BG"
+
+
+def test_preferences_can_read_legacy_location_conflict_without_accepting_new_write():
+    legacy = {
+        "schemaVersion": 1,
+        "title": {"positive": [], "negative": []},
+        "eligibility": {
+            "remote": {
+                "includeLocations": [
+                    {"kind": "globalRegion", "locationId": "m49:150"}
+                ],
+                "excludeLocations": [
+                    {"kind": "globalRegion", "locationId": "m49:150"}
+                ],
+            }
+        },
+    }
+
+    normalized = normalize_discovery_preferences(
+        legacy,
+        reject_location_conflicts=False,
+    )
+
+    assert normalized["eligibility"]["remote"]["includeLocations"] == [
+        {"kind": "globalRegion", "locationId": "m49:150"}
+    ]
+    assert normalized["eligibility"]["remote"]["excludeLocations"] == [
+        {"kind": "globalRegion", "locationId": "m49:150"}
+    ]
+
+    with pytest.raises(ValueError, match="same location cannot be included and excluded"):
+        normalize_discovery_preferences(legacy)

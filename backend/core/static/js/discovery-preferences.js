@@ -871,12 +871,31 @@
       }
 
       const missing = Array.isArray(payload.missingLocations) ? payload.missingLocations : [];
-      setWarning(missing.length
-        ? 'Some saved locations are no longer in the current catalog. Remove or replace the marked values before saving.'
-        : '');
-      baseline = stableDocument(buildDocument());
+      const loadedDocument = buildDocument();
+      const locationContradiction = findLocationContradiction(loadedDocument);
+      const warnings = [];
+      if (missing.length) {
+        warnings.push('Some saved locations are no longer in the current catalog. Remove or replace the marked values before saving.');
+      }
+      if (locationContradiction) {
+        warnings.push('These saved preferences contain a location that is both included and excluded. Remove one copy before saving.');
+      }
+      setWarning(warnings.join(' '));
+      baseline = stableDocument(loadedDocument);
       renderLinkGroups();
       syncDisabled();
+    }
+
+    function findLocationContradiction(document) {
+      for (const [key, label] of ARRANGEMENTS) {
+        const group = document.eligibility?.[key];
+        if (!group) continue;
+        const includeKeys = new Set(group.includeLocations.map(selectorKey));
+        const contradiction = group.excludeLocations.find((item) => includeKeys.has(selectorKey(item)));
+        if (!contradiction) continue;
+        return { key, label, selector: contradiction };
+      }
+      return null;
     }
 
     function validateBeforeSave(document) {
@@ -888,19 +907,15 @@
         throw new Error(`The title term "${titleContradiction}" is both included and excluded.`);
       }
 
-      for (const [key, label] of ARRANGEMENTS) {
-        const group = document.eligibility?.[key];
-        if (!group) continue;
-        const includeKeys = new Set(group.includeLocations.map(selectorKey));
-        const contradiction = group.excludeLocations.find((item) => includeKeys.has(selectorKey(item)));
-        if (!contradiction) continue;
-        const editor = activeEditorFor(key);
+      const locationContradiction = findLocationContradiction(document);
+      if (locationContradiction) {
+        const editor = activeEditorFor(locationContradiction.key);
         const detail = [
           ...editor.includePicker.getItems(),
           ...editor.excludePicker.getItems(),
-        ].find((item) => selectorKey(item) === selectorKey(contradiction));
-        const locationLabel = detail?.label || detail?.displayName || contradiction.locationId;
-        const groupLabel = editor.labelEl?.textContent || label;
+        ].find((item) => selectorKey(item) === selectorKey(locationContradiction.selector));
+        const locationLabel = detail?.label || detail?.displayName || locationContradiction.selector.locationId;
+        const groupLabel = editor.labelEl?.textContent || locationContradiction.label;
         throw new Error(`The location "${locationLabel}" is both included and excluded for ${groupLabel}.`);
       }
     }
