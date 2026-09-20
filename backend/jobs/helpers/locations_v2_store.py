@@ -166,7 +166,25 @@ def replace_work_time_constraints_v2(cur, job_id: str, rows: list[dict]) -> list
     return normalized
 
 
-def fetch_locations_v2(cur, job_id: str) -> list[dict]:
+def _read_location_v2(row, catalog=None) -> dict:
+    result = {
+        "kind": row[0],
+        "locationId": row[1],
+        "displayName": row[2],
+        "countryCode": row[3],
+        "catalogVersion": row[4],
+    }
+    if catalog is None:
+        return result
+    item = catalog.get_location(row[0], row[1])
+    if item is None:
+        return result
+    presentation = catalog.location_presentation(item)
+    presentation["catalogVersion"] = row[4]
+    return presentation
+
+
+def fetch_locations_v2(cur, job_id: str, catalog=None) -> list[dict]:
     cur.execute(
         """
         SELECT LocationKind, LocationId, DisplayName, CountryCode, CatalogVersion
@@ -176,16 +194,7 @@ def fetch_locations_v2(cur, job_id: str) -> list[dict]:
         """,
         (job_id,),
     )
-    return [
-        {
-            "kind": row[0],
-            "locationId": row[1],
-            "displayName": row[2],
-            "countryCode": row[3],
-            "catalogVersion": row[4],
-        }
-        for row in cur.fetchall()
-    ]
+    return [_read_location_v2(row, catalog) for row in cur.fetchall()]
 
 
 def fetch_work_time_constraints_v2(cur, job_id: str) -> list[dict]:
@@ -207,7 +216,7 @@ def fetch_work_time_constraints_v2(cur, job_id: str) -> list[dict]:
     ]
 
 
-def fetch_locations_v2_map(cur, job_ids: list[str]) -> dict[str, list[dict]]:
+def fetch_locations_v2_map(cur, job_ids: list[str], catalog=None) -> dict[str, list[dict]]:
     result = {job_id: [] for job_id in job_ids}
     if not job_ids:
         return result
@@ -224,13 +233,7 @@ def fetch_locations_v2_map(cur, job_ids: list[str]) -> dict[str, list[dict]]:
     for row in cur.fetchall():
         job_id = normalize_guid(str(row[0]))
         result.setdefault(job_id, []).append(
-            {
-                "kind": row[1],
-                "locationId": row[2],
-                "displayName": row[3],
-                "countryCode": row[4],
-                "catalogVersion": row[5],
-            }
+            _read_location_v2((row[1], row[2], row[3], row[4], row[5]), catalog)
         )
     return result
 

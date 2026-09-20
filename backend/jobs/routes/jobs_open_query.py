@@ -164,7 +164,10 @@ def register(app: func.FunctionApp):
                         }
                     )
 
-            v2_map = fetch_locations_v2_map(cur, job_ids)
+            read_catalog = catalog
+            if location_model == "v2" and read_catalog is None:
+                read_catalog = load_locations_v2_catalog()
+            v2_map = fetch_locations_v2_map(cur, job_ids, catalog=read_catalog)
             for job in jobs:
                 job["locations"] = v1_map.get(job["Id"], [])
                 job["locationsV2"] = v2_map.get(job["Id"], [])

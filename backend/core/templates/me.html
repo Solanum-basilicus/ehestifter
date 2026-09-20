@@ -59,6 +59,53 @@
   .muted { color:#6b7280; font-size:12px; }
   .card { border:1px solid #e5e7eb; border-radius:12px; background:#fff; padding:16px; overflow:hidden; }
   pre { overflow-x: auto; }
+
+  .span-full { grid-column:1 / -1; }
+  .discovery-section { margin-top:16px; padding-top:16px; border-top:1px solid #e5e7eb; }
+  .discovery-grid { display:grid; gap:14px; grid-template-columns:1fr; }
+  @media (min-width: 900px) { .discovery-grid.two { grid-template-columns:1fr 1fr; } }
+  .discovery-field { display:grid; gap:6px; }
+  .discovery-field-label { font-weight:600; font-size:14px; }
+  .discovery-input, .discovery-select {
+    box-sizing:border-box; border:1px solid #d1d5db; border-radius:8px; background:#fff;
+    color:#111827; font:inherit; font-size:14px; padding:8px 10px;
+  }
+  .discovery-input { width:100%; }
+  .term-add-row, .range-controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .term-add-row .discovery-input { flex:1; min-width:220px; }
+  .term-chips, .location-picker-selected, .range-list { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px; }
+  .term-chip, .location-chip, .range-chip {
+    display:inline-flex; align-items:center; gap:6px; border:1px solid #d1d5db;
+    background:#f9fafb; border-radius:999px; padding:4px 8px; font-size:12px;
+  }
+  .term-chip button, .location-chip-remove, .range-chip button {
+    border:0; background:transparent; color:#6b7280; cursor:pointer; padding:0 2px; font:inherit;
+  }
+  .location-chip.is-stale { border-color:#f59e0b; background:#fffbeb; }
+  .location-picker { position:relative; }
+  .location-picker-input-row { position:relative; }
+  .location-picker-menu {
+    position:absolute; z-index:50; top:100%; left:0; right:0; max-height:280px; overflow:auto;
+    background:#fff; border:1px solid #d1d5db; border-radius:8px; box-shadow:0 8px 20px rgba(15,23,42,.12);
+    margin-top:4px;
+  }
+  .location-picker-option { padding:9px 10px; cursor:pointer; border-bottom:1px solid #f3f4f6; }
+  .location-picker-option:last-child { border-bottom:0; }
+  .location-picker-option:hover, .location-picker-option.is-active { background:#f3f4f6; }
+  .location-picker-option-main { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .location-kind { color:#6b7280; font-size:11px; white-space:nowrap; }
+  .location-picker-empty { padding:10px; color:#6b7280; font-size:12px; }
+  .location-picker-hint { margin-top:4px; }
+  .location-picker.is-disabled { opacity:.65; }
+  .arrangements { display:grid; gap:10px; }
+  .arrangement { border:1px solid #e5e7eb; border-radius:10px; padding:10px 12px; }
+  .arrangement-toggle { display:flex; gap:8px; align-items:center; font-weight:600; }
+  .arrangement-body { display:grid; gap:14px; margin-top:12px; padding-left:24px; }
+  .unknown-location-label { display:flex; gap:8px; align-items:flex-start; }
+  .advanced-rules { border-top:1px dashed #d1d5db; padding-top:10px; }
+  .advanced-rules summary { cursor:pointer; font-size:13px; color:#4b5563; }
+  .advanced-rules > div { margin-top:12px; }
+  .discovery-warning { color:#92400e; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:8px 10px; }
 </style>
 {% endblock %}
 
@@ -66,7 +113,7 @@
   <div class="container">
     <h1 style="margin:0 0 12px;">Your profile</h1>
     <p class="subtle" style="margin:0 0 20px;">
-      This page shows your in‑app user info. Filters are not implemented yet.
+      Manage your profile, CV, and discovery preferences.
     </p>
 
     <div class="grid">
@@ -171,21 +218,65 @@
 
 
       
-      <!-- Filters placeholder -->
-      <section class="card">
-        <h2 style="margin:0 0 8px; font-size:18px;">Your filters</h2>
-        <p class="subtle" id="user-filters-span">Filters are not implemented yet.</p>
-      </section>
-
-      <!-- Preferences card (CV rich text) -->
-      <section id="prefs" class="card" aria-busy="true">
-        <h2 style="margin:0 0 8px; font-size:18px;">Preferences</h2>
+      <!-- Discovery preferences -->
+      <section id="discovery-prefs" class="card span-full" aria-busy="true">
+        <h2 style="margin:0 0 8px; font-size:18px;">Discovery preferences</h2>
         <p class="subtle" style="margin:0 0 12px;">
-          CV is stored as rich text (Quill delta). Other fields are shown for debugging.
+          These rules guide vacancy discovery. Location choices use the shared canonical location catalog.
         </p>
 
         <div class="btn-row" style="align-items:center; margin-bottom:8px;">
-          <button id="btn-save-prefs" class="btn primary" type="button" disabled>Save changes</button>
+          <button id="btn-save-discovery" class="btn primary" type="button" disabled>Save discovery preferences</button>
+          <span id="discovery-status" class="subtle small" hidden></span>
+        </div>
+        <div id="discovery-error" class="err" hidden></div>
+        <div id="discovery-warning" class="discovery-warning small" hidden></div>
+
+        <div class="discovery-section" style="margin-top:8px; padding-top:8px; border-top:0;">
+          <h3 style="margin:0 0 6px; font-size:15px;">Job titles</h3>
+          <p class="subtle" style="margin:0 0 10px;">
+            If Include has values, a title must match at least one of them. Any Exclude match rejects the title.
+            Overlapping but different terms are valid; the same normalized term cannot be in both lists.
+          </p>
+          <div class="discovery-grid two">
+            <div class="discovery-field">
+              <div class="discovery-field-label">Include</div>
+              <div id="title-positive"></div>
+            </div>
+            <div class="discovery-field">
+              <div class="discovery-field-label">Exclude</div>
+              <div id="title-negative"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="discovery-section">
+          <h3 style="margin:0 0 6px; font-size:15px;">Work arrangement and location</h3>
+          <label style="display:flex; gap:8px; align-items:flex-start; font-size:14px;">
+            <input id="eligibility-enabled" type="checkbox">
+            <span>
+              Limit jobs by work arrangement or location
+              <span class="subtle" style="display:block; margin-top:2px;">Leave this off to allow all work arrangements and locations.</span>
+            </span>
+          </label>
+          <div id="eligibility-panel" style="margin-top:12px;" hidden>
+            <p class="subtle" style="margin:0 0 10px;">
+              Enable each work arrangement that you want to accept. Location rules are evaluated inside that arrangement.
+            </p>
+            <div id="discovery-work-arrangements" class="arrangements"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- CV card -->
+      <section id="prefs" class="card span-full" aria-busy="true">
+        <h2 style="margin:0 0 8px; font-size:18px;">CV</h2>
+        <p class="subtle" style="margin:0 0 12px;">
+          Your CV is stored as rich text and normalized plaintext for compatibility analysis.
+        </p>
+
+        <div class="btn-row" style="align-items:center; margin-bottom:8px;">
+          <button id="btn-save-prefs" class="btn primary" type="button" disabled>Save CV</button>
           <span id="prefs-status" class="subtle small" hidden>Wait for it…</span>
         </div>
         <div id="prefs-error" class="err" hidden></div>
@@ -229,7 +320,7 @@
 
         <!-- Debug: collapsed by default -->
         <details style="margin-top:12px;">
-          <summary class="subtle">Debug (raw preferences payload)</summary>
+          <summary class="subtle">Debug (raw CV payload)</summary>
           <pre id="prefs-debug" class="mono" style="white-space:pre-wrap; margin-top:8px;"></pre>
         </details>
       </section>
@@ -241,6 +332,8 @@
   </div>
 
 <script src="{{ url_for('static', filename='js/quill.min.js') }}"></script>
+<script src="{{ url_for('static', filename='js/location-picker.js') }}"></script>
+<script src="{{ url_for('static', filename='js/discovery-preferences.js') }}"></script>
 
 
 <script>
@@ -529,7 +622,7 @@
       }
 
       try {
-        const data = await window.fetchWithRetry('/ui/users/preferences', 4, 750);
+        const data = await window.fetchWithRetry('/ui/users/cv', 4, 750);
         // Fill editor with CV delta
         const delta = safeDeltaFromUpstream(data?.CVQuillDelta);
         cvQuill.setContents(delta);
@@ -565,7 +658,7 @@
         const payload = { CVQuillDelta: cvQuill.getContents() || { ops: [] } };
 
         const resp = await window.fetchWithRetry(
-          '/ui/users/preferences',
+          '/ui/users/cv',
           2,      // attempts: don't spam writes
           750,    // baseDelay
           {

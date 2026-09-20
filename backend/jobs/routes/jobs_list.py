@@ -522,7 +522,8 @@ def register(app: func.FunctionApp):
                         "region": region
                     })
 
-            loc_v2_map = fetch_locations_v2_map(cur, norm_ids)
+            catalog = load_locations_v2_catalog() if location_model == "v2" else None
+            loc_v2_map = fetch_locations_v2_map(cur, norm_ids, catalog=catalog)
 
             for j in jobs:
                 j["locations"] = loc_map.get(j["Id"], [])

@@ -19,6 +19,8 @@ from .ui_enrichment_history_get import create_blueprint as bp_enrichment_history
 from .ui_enrichment_runs_post import create_blueprint as bp_enrichment_runs_post
 from .ui_jobs_compatibility_bulk import create_blueprint as bp_jobs_compatibility_bulk
 from .ui_jobs_open_query import create_blueprint as bp_jobs_open_query
+from .ui_locations_search import create_blueprint as bp_locations_search
+from .ui_users_discovery_preferences import create_blueprint as bp_users_discovery_preferences
 
 
 def register_all(app, auth):
@@ -41,3 +43,6 @@ def register_all(app, auth):
     app.register_blueprint(bp_enrichment_history_get(auth))
     app.register_blueprint(bp_enrichment_runs_post(auth))
     app.register_blueprint(bp_jobs_compatibility_bulk(auth))
+    app.register_blueprint(bp_jobs_open_query(auth))
+    app.register_blueprint(bp_locations_search(auth))
+    app.register_blueprint(bp_users_discovery_preferences(auth))

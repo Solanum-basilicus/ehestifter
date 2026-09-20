@@ -9,6 +9,7 @@ import azure.functions as func
 
 from helpers.db import get_connection
 from helpers.discovery_filters import normalize_discovery_profile
+from helpers.discovery_preferences import normalize_discovery_preferences
 from helpers.guid import normalize_guid
 
 
@@ -38,6 +39,16 @@ def _iso(value):
     except Exception:
         return str(value)
 
+
+
+def _stored_discovery_preferences(raw):
+    if not raw:
+        return None, False
+    try:
+        return normalize_discovery_preferences(json.loads(raw)), False
+    except (TypeError, ValueError, json.JSONDecodeError):
+        logging.warning("Ignoring invalid stored discovery preferences")
+        return None, True
 
 def _limit(req: func.HttpRequest) -> int:
     raw = (req.params or {}).get("limit", "100")
@@ -112,11 +123,15 @@ def register(app: func.FunctionApp):
                     u.CVVersionId,
                     u.LastUpdated,
                     f.Id,
-                    f.NormalizedJson
+                    f.NormalizedJson,
+                    dp.PreferencesJson,
+                    dp.LastUpdated
                 FROM EligibleUsers AS u
                 LEFT JOIN RankedFilters AS f
                     ON f.UserId = u.Id
                    AND f.FilterRank <= 20
+                LEFT JOIN dbo.UserDiscoveryPreferences AS dp
+                    ON dp.UserId = u.Id
                 ORDER BY u.Id, f.FilterRank
                 """
             )
@@ -127,17 +142,23 @@ def register(app: func.FunctionApp):
                 if user_id.lower() in excluded:
                     excluded_actual.add(user_id.lower())
                     continue
-                user = users_by_id.setdefault(
-                    user_id,
-                    {
+                user = users_by_id.get(user_id)
+                if user is None:
+                    discovery_preferences, discovery_preferences_invalid = (
+                        _stored_discovery_preferences(row[5])
+                    )
+                    user = {
                         "userId": user_id,
                         "cvVersionId": str(row[1]).strip(),
                         "cvLastUpdatedUtc": _iso(row[2]),
                         "hasSavedFilters": False,
                         "profiles": [],
                         "invalidProfileCount": 0,
-                    },
-                )
+                        "discoveryPreferences": discovery_preferences,
+                        "discoveryPreferencesInvalid": discovery_preferences_invalid,
+                        "discoveryPreferencesLastUpdatedUtc": _iso(row[6]),
+                    }
+                    users_by_id[user_id] = user
                 filter_id = row[3]
                 if filter_id is None:
                     continue
@@ -163,6 +184,9 @@ def register(app: func.FunctionApp):
                     ),
                     "invalidProfiles": sum(
                         user["invalidProfileCount"] for user in users
+                    ),
+                    "invalidDiscoveryPreferences": sum(
+                        1 for user in users if user["discoveryPreferencesInvalid"]
                     ),
                     "excluded": len(excluded_actual),
                     "excludedConfigured": len(excluded),

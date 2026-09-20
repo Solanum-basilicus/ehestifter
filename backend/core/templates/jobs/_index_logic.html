@@ -392,14 +392,8 @@
     if (activeLocationModel === 'v2') {
       const locsV2 = Array.isArray(row.locationsV2) ? row.locationsV2 : [];
       if (!locsV2.length) return `·&nbsp;&nbsp;${remote}` || '';
-      const parts = locsV2.slice(0, 4).map((loc) => {
-        const name = String(loc.displayName || '').trim();
-        const code = String(loc.countryCode || '').trim().toUpperCase();
-        if (!name) return code;
-        if (code && (loc.kind === 'city' || loc.kind === 'adminRegion')) return `${code}: ${name}`;
-        return name;
-      }).filter(Boolean);
-      if (locsV2.length > 4) parts.push('…');
+      const parts = locsV2.slice(0, 2).map(locationV2Label).filter(Boolean);
+      if (locsV2.length > 2) parts.push(`+${locsV2.length - 2} locations`);
       const geo = parts.join('; ');
       return remote ? `·&nbsp;&nbsp;${geo} · ${remote}` : `·&nbsp;&nbsp;${geo}`;
     }
@@ -409,7 +403,7 @@
 
     const byCountry = new Map();
     for (const l of locs) {
-      const key = (l.countryCode || '').toUpperCase() || (l.countryName || '').trim();
+      const key = (l.countryName || '').trim() || (l.countryCode || '').toUpperCase();
       const city = (l.cityName || '').trim();
       if (!key) continue;
       if (!byCountry.has(key)) byCountry.set(key, new Set());
@@ -429,6 +423,34 @@
 
     const geo = parts.join('; ');
     return remote ? `·&nbsp;&nbsp;${geo} · ${remote}` : `·&nbsp;&nbsp;${geo}`;
+  }
+
+  function locationV2Label(loc) {
+    const label = String(loc.label || '').trim();
+    if (label) return label;
+    const name = String(loc.displayName || '').trim();
+    const region = String(loc.adminRegionName || '').trim();
+    const country = String(loc.countryName || loc.countryCode || '').trim();
+    const parts = [name];
+    if (region && region !== name) parts.push(region);
+    if (country && country !== name && country !== region) parts.push(country);
+    return parts.filter(Boolean).join(', ');
+  }
+
+  function fullLocationLabels(row) {
+    if (activeLocationModel === 'v2') {
+      return (Array.isArray(row.locationsV2) ? row.locationsV2 : [])
+        .map(locationV2Label)
+        .filter(Boolean);
+    }
+    return (Array.isArray(row.locations) ? row.locations : [])
+      .map((loc) => {
+        const country = String(loc.countryName || loc.countryCode || '').trim();
+        const region = String(loc.region || '').trim();
+        const city = String(loc.cityName || '').trim();
+        return [city, region, country].filter((value, index, values) => value && values.indexOf(value) === index).join(', ');
+      })
+      .filter(Boolean);
   }
 
   function displayTitle(row) {
@@ -452,6 +474,10 @@
       : (`<b>${company}</b>` || (posting ? `through <b>${posting}</b>` : ''));
 
     const geo = summarizeLocations(row);
+    const fullLocations = fullLocationLabels(row);
+    const locationsDisclosure = fullLocations.length > 2
+      ? `<details class="job-location-details"><summary>All locations (${fullLocations.length})</summary><div class="muted" style="margin-top:4px; font-size:12px;">${fullLocations.map(escapeHtml).join(' · ')}</div></details>`
+      : '';
     const firstSeen = row.FirstSeenAt || row.CreatedAt || row.LastUpdateAt || '';
     const via = (row.FoundOn || '').trim();
     const atsVendor = (row.AtsVendor || '').trim();
@@ -475,6 +501,7 @@
               ${via ? `<span class="chip muted" title="Found on">${escq(via)}</span>` : ''}
               ${atsVendor ? `<span class="chip muted" title="ATS vendor">ATS: ${escapeHtml(atsVendor)}</span>` : ''}
             </div>
+            ${locationsDisclosure}
           </div>
 
           <div style="text-align:right;">

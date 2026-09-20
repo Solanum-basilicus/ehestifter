@@ -323,7 +323,8 @@ Owns:
 
 Current user-related data in scope:
 - basic info: name, email, role,
-- preferences: CV in Quill Delta format and plaintext,
+- CV in Quill Delta format and plaintext,
+- normalized discovery preferences for title and Locations v2 eligibility,
 - telegram link code,
 - linked telegram account ID,
 - blob paths and metadata for current CV version.
@@ -808,7 +809,8 @@ Users domain currently owns:
 - returning user basic profile information,
 - Telegram link code generation and display,
 - Telegram link and unlink,
-- user preferences, currently primarily CV plus discovery filters,
+- CV storage and its public web contract,
+- normalized discovery preferences,
 - bounded discovery-eligible profile output for ATS Discovery,
 - user-related blob management for CV storage,
 - internal plaintext CV snapshot retrieval for enrichment,
@@ -822,6 +824,7 @@ Stored in SQL:
 - blob paths,
 - telegram link metadata,
 - CV version metadata.
+- one normalized discovery-preference JSON document per user.
 
 Stored in Blob Storage:
 - CV Quill Delta blob,
@@ -863,9 +866,20 @@ Agent rule:
 | `POST /users/link-telegram` | link Telegram account to internal user | telegram bot |
 | `POST /users/unlink-telegram` | unlink Telegram account | telegram bot |
 | `GET /users/by-telegram/{telegram_user_id}` | resolve Telegram account to internal user | telegram bot |
-| `POST /users/preferences` | update user preferences including CV | web core |
+| `GET/POST /users/cv` | read or update the current CV | web core |
+| `GET/PUT /users/discovery-preferences` | read or replace normalized discovery preferences | web core |
 | `GET /users/internal/{userId}/cv-snapshot` | provide plaintext CV snapshot for enrichment | Enrichment Core |
-| `GET /users/internal/discovery-eligible` | return bounded discovery-eligible profiles and saved filters without CV text | ATS Discovery |
+| `GET /users/internal/discovery-eligible` | return bounded discovery data without CV text; legacy profiles stay present until issue #19 switches to `discoveryPreferences` | ATS Discovery |
+
+`GET/POST /users/preferences` remains a temporary compatibility alias for the CV
+contract during the Core/Users deployment transition. New callers must use
+`/users/cv`.
+
+The browser does not call Users or Jobs Functions directly. For discovery
+preference writes, Web Core first validates canonical location selectors
+with the Jobs-owned Locations v2 catalog, then sends the document to Users.
+Users validates the complete document shape and stores normalized JSON. Users
+does not own or copy the Jobs location catalog.
 
 ---
 
@@ -880,6 +894,7 @@ Jobs domain owns:
 - job history,
 - location storage and presentation,
 - Locations v2 storage, branch-aware query facts, native API contracts, and migration endpoint,
+- Locations v2 selector search and canonical lookup endpoints,
 - compatibility score storage and exposure,
 - user-specific shaping of job lists and details,
 - emitting safe web-originated Jobs analytics events after successful owner-domain writes.

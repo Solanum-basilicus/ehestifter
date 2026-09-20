@@ -218,7 +218,22 @@ There is no v2-to-v1 shadow write. If an operator returns to v1 after native v2-
 
 Jobs reads return both representations when they exist. The response also returns `activeLocationModel`. Web uses that value for location presentation.
 
-Issue #21 does not add a manual canonical-location selector or a catalog-search endpoint. Issue #8 owns that UX. Core can already pass canonical `locationsV2` values when a later selector supplies them.
+Issue #8 adds the manual selector contract owned by Jobs:
+
+```text
+GET  /jobs/locations/search?q=<text>&limit=<n>
+POST /jobs/locations/lookup
+```
+
+Search returns small user-facing records with canonical identity plus derived
+presentation fields such as country name and administrative-region context.
+Lookup resolves already-selected canonical IDs and reports missing IDs without
+changing them. Web Core proxies search to the browser and uses lookup before it
+saves discovery preferences. Users does not copy or query the location catalog.
+
+Search ranking can use population to order otherwise comparable same-name city
+results. Population is presentation metadata only. It must never silently
+change a selected canonical identity or resolve an ambiguous ingestion claim.
 
 ## Open Opportunities eligibility contract
 

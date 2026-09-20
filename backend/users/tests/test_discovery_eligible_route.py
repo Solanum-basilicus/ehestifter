@@ -96,9 +96,24 @@ def load_route_module(connection_factory):
     )
     discovery_filters_spec.loader.exec_module(discovery_filters_module)
 
+    discovery_preferences_path = (
+        Path(__file__).parents[1]
+        / "helpers"
+        / "discovery_preferences.py"
+    )
+    discovery_preferences_spec = importlib.util.spec_from_file_location(
+        "helpers.discovery_preferences",
+        discovery_preferences_path,
+    )
+    discovery_preferences_module = importlib.util.module_from_spec(
+        discovery_preferences_spec
+    )
+    discovery_preferences_spec.loader.exec_module(discovery_preferences_module)
+
     helpers_module.db = db_module
     helpers_module.guid = guid_module
     helpers_module.discovery_filters = discovery_filters_module
+    helpers_module.discovery_preferences = discovery_preferences_module
 
     module_path = (
         Path(__file__).parents[1]
@@ -119,6 +134,7 @@ def load_route_module(connection_factory):
             "helpers.db": db_module,
             "helpers.guid": guid_module,
             "helpers.discovery_filters": discovery_filters_module,
+            "helpers.discovery_preferences": discovery_preferences_module,
         },
     ):
         spec.loader.exec_module(module)
@@ -137,6 +153,12 @@ class DiscoveryEligibleRouteTests(unittest.TestCase):
                 datetime(2026, 7, 24, 10, 0, 0),
                 "33333333-3333-4333-8333-333333333333",
                 json.dumps({"title": {"positive": ["Manager"]}}),
+                json.dumps({
+                    "schemaVersion": 1,
+                    "title": {"positive": ["Manager"], "negative": []},
+                    "eligibility": None,
+                }),
+                datetime(2026, 9, 20, 10, 0, 0),
             ),
             (
                 excluded_id,
@@ -144,6 +166,8 @@ class DiscoveryEligibleRouteTests(unittest.TestCase):
                 datetime(2026, 7, 24, 10, 0, 0),
                 "44444444-4444-4444-8444-444444444444",
                 json.dumps({"title": {"positive": ["Engineer"]}}),
+                None,
+                None,
             ),
             # A joined second filter row must not double-count one exclusion.
             (
@@ -152,6 +176,8 @@ class DiscoveryEligibleRouteTests(unittest.TestCase):
                 datetime(2026, 7, 24, 10, 0, 0),
                 "55555555-5555-4555-8555-555555555555",
                 "not-json",
+                None,
+                None,
             ),
         ]
         connection = FakeConnection(rows)
@@ -174,6 +200,12 @@ class DiscoveryEligibleRouteTests(unittest.TestCase):
         self.assertEqual(payload["users"][0]["userId"], user_id)
         self.assertEqual(payload["users"][0]["cvVersionId"], cv_version)
         self.assertEqual(payload["users"][0]["profiles"][0]["title"]["positive"], ["Manager"])
+        self.assertEqual(
+            payload["users"][0]["discoveryPreferences"]["title"]["positive"],
+            ["Manager"],
+        )
+        self.assertFalse(payload["users"][0]["discoveryPreferencesInvalid"])
+        self.assertEqual(payload["counts"]["invalidDiscoveryPreferences"], 0)
         serialized = json.dumps(payload).lower()
         self.assertNotIn("cvplaintext", serialized)
         self.assertNotIn("cvtextblobpath", serialized)

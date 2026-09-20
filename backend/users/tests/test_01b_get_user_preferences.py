@@ -1,7 +1,7 @@
 import requests
 
 
-def test_get_user_preferences_includes_cv_content(base_url, auth_headers, default_user, shared_state):
+def test_get_user_cv_includes_cv_content(base_url, auth_headers, default_user, shared_state):
     assert shared_state["Has_connection"]
 
     # Ensure test_01 ran and set values
@@ -15,11 +15,11 @@ def test_get_user_preferences_includes_cv_content(base_url, auth_headers, defaul
     assert cv_text_blob_path is not None
     assert cv_version_id is not None
 
-    url = f"{base_url}/users/preferences"
+    url = f"{base_url}/users/cv"
     headers = {"x-user-sub": default_user, **auth_headers}
 
     r_get = requests.get(url, headers=headers)
-    print("Preferences get response:", r_get.status_code, r_get.text)
+    print("CV get response:", r_get.status_code, r_get.text)
 
     assert r_get.status_code == 200
     body = r_get.json()

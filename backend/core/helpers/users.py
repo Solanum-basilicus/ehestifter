@@ -99,15 +99,15 @@ def _fx_headers_for_user_actor(context: dict, *, user_id: str | None = None) -> 
             h["X-Actor-Type"] = "system"
     return h
 
-def get_preferences(context: dict) -> dict:
+def get_cv(context: dict) -> dict:
     """
-    GET /users/preferences from Users Function.
-    If preferences don't exist yet (404), return an empty defaults payload for UI.
+    GET /users/cv from Users Function.
+    If the CV does not exist yet, return an empty payload for UI.
     """
     if not base_url or not fxkey:
         raise ValueError("Users API env is not configured")
 
-    url = f"{base_url}/users/preferences"
+    url = f"{base_url}/users/cv"
     headers = _b2c_headers_from_context(context)
     headers["Content-Type"] = "application/json"
 
@@ -123,7 +123,7 @@ def get_preferences(context: dict) -> dict:
             "LastUpdated": None,
             "CVQuillDelta": {"ops": []},
             "CVPlainText": None,
-            "PreferencesMissing": True,
+            "CVMissing": True,
         }
 
     r.raise_for_status()
@@ -131,15 +131,15 @@ def get_preferences(context: dict) -> dict:
 
 
 
-def set_preferences(context: dict, *, cv_quill_delta) -> dict:
+def set_cv(context: dict, *, cv_quill_delta) -> dict:
     """
-    POST /users/preferences with {"CVQuillDelta": <delta>}
+    POST /users/cv with {"CVQuillDelta": <delta>}
     Auth: B2C headers (x-user-sub etc.) via get_b2c_headers(req) upstream.
     """
     if not base_url or not fxkey:
         raise ValueError("Users API env is not configured")
 
-    url = f"{base_url}/users/preferences"
+    url = f"{base_url}/users/cv"
     headers = _b2c_headers_from_context(context)
     headers["Content-Type"] = "application/json"
 
@@ -147,3 +147,30 @@ def set_preferences(context: dict, *, cv_quill_delta) -> dict:
     r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=20)
     r.raise_for_status()
     return r.json()
+
+
+def get_discovery_preferences(context: dict) -> dict:
+    if not base_url or not fxkey:
+        raise ValueError("Users API env is not configured")
+    url = f"{base_url}/users/discovery-preferences"
+    headers = _b2c_headers_from_context(context)
+    r = requests.get(url, headers=headers, timeout=10)
+    r.raise_for_status()
+    return r.json()
+
+
+def set_discovery_preferences(context: dict, payload: dict) -> dict:
+    if not base_url or not fxkey:
+        raise ValueError("Users API env is not configured")
+    url = f"{base_url}/users/discovery-preferences"
+    headers = _b2c_headers_from_context(context)
+    headers["Content-Type"] = "application/json"
+    r = requests.put(url, headers=headers, json=payload, timeout=15)
+    if not r.ok:
+        raise UpstreamHttpError(r.status_code, r.text)
+    return r.json()
+
+
+# Temporary Core compatibility names while route modules move to /ui/users/cv.
+get_preferences = get_cv
+set_preferences = set_cv

@@ -250,6 +250,13 @@
             </div>
           </template>
         </div>
+
+        <template x-if="fullLocationLabels().length > 2">
+          <details style="margin-top:6px; font-size:12px; color:#4b5563;">
+            <summary style="cursor:pointer;" x-text="'All locations (' + fullLocationLabels().length + ')'" ></summary>
+            <div style="margin-top:4px;" x-text="fullLocationLabels().join(' · ')"></div>
+          </details>
+        </template>
       </div>
 
       <div style="text-align:right;">
@@ -787,7 +794,10 @@
           kind: String(it.kind || ''),
           locationId: String(it.locationId || ''),
           displayName: String(it.displayName || ''),
-          countryCode: it.countryCode ? String(it.countryCode).toUpperCase() : null
+          adminRegionName: it.adminRegionName ? String(it.adminRegionName) : null,
+          countryCode: it.countryCode ? String(it.countryCode).toUpperCase() : null,
+          countryName: it.countryName ? String(it.countryName) : null,
+          label: it.label ? String(it.label) : null
         })) : [];
 
         let locs = Array.isArray(p.locations) ? p.locations : [];
@@ -859,23 +869,45 @@
       },
 
       // Render the active location representation.
+      locationV2Label(loc){
+        const ready = String(loc.label || '').trim();
+        if (ready) return ready;
+        const name = String(loc.displayName || '').trim();
+        const region = String(loc.adminRegionName || '').trim();
+        const country = String(loc.countryName || loc.countryCode || '').trim();
+        return [name, region, country]
+          .filter((value, index, values) => value && values.indexOf(value) === index)
+          .join(', ');
+      },
+
+      fullLocationLabels(){
+        if (this.meta.activeLocationModel === 'v2') {
+          return (this.meta.locationsV2 || []).map(loc => this.locationV2Label(loc)).filter(Boolean);
+        }
+        return (this.meta.locations || []).map(loc => {
+          const country = String(loc.countryName || loc.countryCode || '').trim();
+          const region = String(loc.region || '').trim();
+          const city = String(loc.cityName || '').trim();
+          return [city, region, country]
+            .filter((value, index, values) => value && values.indexOf(value) === index)
+            .join(', ');
+        }).filter(Boolean);
+      },
+
       geoLine(){
         const parts = [];
         if (this.meta.activeLocationModel === 'v2') {
           const locsV2 = this.meta.locationsV2 || [];
           for (const loc of locsV2) {
-            const name = String(loc.displayName || '').trim();
-            const code = String(loc.countryCode || '').trim();
-            if (!name && !code) continue;
-            if (code && (loc.kind === 'city' || loc.kind === 'adminRegion')) parts.push(`${code}: ${name || code}`);
-            else parts.push(name || code);
+            const label = this.locationV2Label(loc);
+            if (label) parts.push(label);
           }
         } else {
           const locs = this.meta.locations || [];
           if (locs.length) {
           const groups = new Map(); // label -> [cities]
           for (const it of locs) {
-            const label = (it.countryCode || it.countryName || "").toString().trim();
+            const label = (it.countryName || it.countryCode || "").toString().trim();
             if (!label) continue;
             if (!groups.has(label)) groups.set(label, []);
             if (it.cityName) groups.get(label).push(it.cityName);

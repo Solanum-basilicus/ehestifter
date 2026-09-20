@@ -5,6 +5,7 @@ from helpers.db import get_connection
 from helpers.history import DatetimeEncoder
 from helpers.ids import normalize_guid, normalize_guid_in_dict
 from helpers.location_mode import active_location_model
+from helpers.locations_v2 import load_locations_v2_catalog
 from helpers.locations_v2_store import fetch_locations_v2, fetch_work_time_constraints_v2
 
 def register(app: func.FunctionApp):
@@ -35,9 +36,11 @@ def register(app: func.FunctionApp):
                 {"countryName": r[0], "countryCode": r[1], "cityName": r[2], "region": r[3]}
                 for r in cur.fetchall()
             ]
-            job["locationsV2"] = fetch_locations_v2(cur, job_id)
+            location_model = active_location_model()
+            catalog = load_locations_v2_catalog() if location_model == "v2" else None
+            job["locationsV2"] = fetch_locations_v2(cur, job_id, catalog=catalog)
             job["workTimeConstraintsV2"] = fetch_work_time_constraints_v2(cur, job_id)
-            job["activeLocationModel"] = active_location_model()
+            job["activeLocationModel"] = location_model
 
             return func.HttpResponse(json.dumps(job, cls=DatetimeEncoder), mimetype="application/json")
         except Exception as e:
