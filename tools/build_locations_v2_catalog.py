@@ -15,6 +15,7 @@ import hashlib
 import io
 import json
 import re
+import sqlite3
 import sys
 import zipfile
 from collections import defaultdict
@@ -35,6 +36,7 @@ M49_OVERVIEW_URL = "https://unstats.un.org/unsd/methodology/m49/overview"
 LEGACY_GEO_DEFAULT = Path("backend/core/static/data/geo.sample8.json")
 CATALOG_DEFAULT = Path("backend/jobs/reference/locations-v2.catalog.json.gz")
 MANIFEST_DEFAULT = Path("backend/jobs/reference/locations-v2.catalog.manifest.json")
+SEARCH_INDEX_DEFAULT = Path("backend/jobs/reference/locations-v2.search.sqlite3")
 
 
 class M49TableParser(HTMLParser):
@@ -456,6 +458,191 @@ def _write_gzip_json(path: Path, value: dict) -> None:
             compressed.write(payload)
 
 
+def _search_key(value: str | None) -> str:
+    return re.sub(r"[^\w]+", " ", _clean_text(value).casefold(), flags=re.UNICODE).strip()
+
+
+def _search_index_country_display_name(country: dict) -> str:
+    aliases = [_clean_text(value) for value in country.get("aliases", []) if _clean_text(value)]
+    if aliases:
+        return min(aliases, key=lambda value: (len(value), value.casefold()))
+    return _clean_text(country.get("name"))
+
+
+def _write_search_index(path: Path, catalog: dict) -> None:
+    """Build the read-only selector index from the canonical catalog."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        path.unlink()
+
+    collections = ("regions", "countries", "adminRegions", "cities")
+    by_id = {
+        item["id"]: item
+        for collection in collections
+        for item in catalog.get(collection, [])
+    }
+    countries_by_code = {
+        item.get("countryCode"): item
+        for item in catalog.get("countries", [])
+        if item.get("countryCode")
+    }
+
+    def presentation(item: dict) -> tuple[str, str | None, str | None, str | None, str, str]:
+        kind = item["kind"]
+        display_name = _clean_text(item.get("name"))
+        country_code = _clean_text(item.get("countryCode")).upper() or None
+        country = countries_by_code.get(country_code)
+        country_name = _search_index_country_display_name(country) if country else None
+        admin_region_name = None
+        if kind == "city":
+            admin = by_id.get(item.get("admin1Id") or item.get("parentId"))
+            if admin and admin.get("kind") == "adminRegion":
+                admin_region_name = _clean_text(admin.get("name")) or None
+        elif kind == "adminRegion":
+            admin_region_name = display_name or None
+        if kind == "country" and country_name:
+            display_name = country_name
+
+        context_parts = []
+        if kind == "city" and admin_region_name:
+            context_parts.append(admin_region_name)
+        if kind in {"city", "adminRegion"} and country_name:
+            context_parts.append(country_name)
+        if kind == "globalRegion":
+            parent = by_id.get(item.get("parentId"))
+            if parent and parent.get("id") != "m49:001":
+                context_parts.append(_clean_text(parent.get("name")))
+
+        label_parts = [display_name]
+        label_parts.extend(
+            value for value in context_parts if value and value != display_name
+        )
+        return (
+            display_name,
+            admin_region_name,
+            country_code,
+            country_name,
+            " · ".join(context_parts),
+            ", ".join(value for value in label_parts if value),
+        )
+
+    conn = sqlite3.connect(path)
+    try:
+        cursor = conn.cursor()
+        cursor.executescript(
+            """
+            PRAGMA journal_mode=OFF;
+            PRAGMA synchronous=OFF;
+            PRAGMA temp_store=MEMORY;
+            CREATE TABLE metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            ) WITHOUT ROWID;
+            CREATE TABLE locations (
+                location_id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                admin_region_name TEXT,
+                country_code TEXT,
+                country_name TEXT,
+                context_label TEXT NOT NULL,
+                label TEXT NOT NULL,
+                population INTEGER NOT NULL,
+                search_blob TEXT NOT NULL
+            ) WITHOUT ROWID;
+            CREATE TABLE names (
+                search_name TEXT NOT NULL,
+                location_id TEXT NOT NULL,
+                PRIMARY KEY (search_name, location_id)
+            ) WITHOUT ROWID;
+            CREATE TABLE country_regions (
+                country_id TEXT NOT NULL,
+                region_id TEXT NOT NULL,
+                is_top INTEGER NOT NULL,
+                PRIMARY KEY (country_id, region_id)
+            ) WITHOUT ROWID;
+            """
+        )
+        cursor.execute(
+            "INSERT INTO metadata (key, value) VALUES ('catalogVersion', ?)",
+            (catalog["catalogVersion"],),
+        )
+
+        location_rows = []
+        name_rows = []
+        country_region_rows = []
+        for item in by_id.values():
+            (
+                display_name,
+                admin_region_name,
+                country_code,
+                country_name,
+                context_label,
+                label,
+            ) = presentation(item)
+            search_names = []
+            for raw_name in [item.get("name"), *item.get("aliases", [])]:
+                normalized = _search_key(raw_name)
+                if normalized and normalized not in search_names:
+                    search_names.append(normalized)
+            search_blob = " ".join(
+                dict.fromkeys(
+                    [
+                        *search_names,
+                        _search_key(admin_region_name),
+                        _search_key(country_name),
+                        _search_key(country_code),
+                    ]
+                )
+            ).strip()
+            location_rows.append(
+                (
+                    item["id"],
+                    item["kind"],
+                    display_name,
+                    admin_region_name,
+                    country_code,
+                    country_name,
+                    context_label,
+                    label,
+                    int(item.get("population") or 0),
+                    search_blob,
+                )
+            )
+            name_rows.extend((name, item["id"]) for name in search_names)
+            if item["kind"] == "country":
+                for ancestor_id in item.get("ancestors", []):
+                    ancestor = by_id.get(ancestor_id)
+                    if not ancestor or ancestor.get("kind") != "globalRegion":
+                        continue
+                    country_region_rows.append(
+                        (
+                            item["id"],
+                            ancestor_id,
+                            1 if ancestor.get("parentId") == "m49:001" else 0,
+                        )
+                    )
+
+        cursor.executemany(
+            "INSERT INTO locations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            location_rows,
+        )
+        cursor.executemany(
+            "INSERT INTO names VALUES (?, ?)",
+            name_rows,
+        )
+        cursor.executemany(
+            "INSERT INTO country_regions VALUES (?, ?, ?)",
+            country_region_rows,
+        )
+        conn.commit()
+        cursor.execute("ANALYZE")
+        conn.commit()
+        cursor.execute("VACUUM")
+    finally:
+        conn.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build the Ehestifter Locations v2 catalog")
     parser.add_argument("--cities500", help="Local GeoNames cities500.zip. Download when omitted.")
@@ -466,6 +653,7 @@ def main() -> int:
     parser.add_argument("--reference-year", type=int, default=datetime.now(timezone.utc).year)
     parser.add_argument("--out", default=str(CATALOG_DEFAULT))
     parser.add_argument("--manifest-out", default=str(MANIFEST_DEFAULT))
+    parser.add_argument("--search-index-out", default=str(SEARCH_INDEX_DEFAULT))
     args = parser.parse_args()
 
     if args.reference_year < 2000 or args.reference_year > 2200:
@@ -499,6 +687,8 @@ def main() -> int:
 
     out_path = Path(args.out)
     _write_gzip_json(out_path, catalog)
+    search_index_path = Path(args.search_index_out)
+    _write_search_index(search_index_path, catalog)
 
     manifest = {
         "schemaVersion": SCHEMA_VERSION,
@@ -519,6 +709,7 @@ def main() -> int:
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     print(f"Wrote {out_path}")
+    print(f"Wrote {search_index_path}")
     print(f"Wrote {manifest_path}")
     print(json.dumps(manifest["counts"], sort_keys=True))
     return 0

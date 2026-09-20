@@ -73,6 +73,7 @@ def test_preferences_keep_overlapping_but_different_title_terms():
 
     assert normalized["title"] == {
         "positive": ["Product Manager"],
+        "positivePatterns": [],
         "negative": ["Junior Product Manager"],
     }
 
@@ -103,3 +104,110 @@ def test_preferences_reject_out_of_range_utc_values():
                 },
             }
         )
+
+
+def test_preferences_accept_flexible_positive_title_patterns():
+    normalized = normalize_discovery_preferences(
+        {
+            "schemaVersion": 1,
+            "title": {
+                "positive": ["Head of Product"],
+                "positivePatterns": [
+                    {
+                        "type": "orderedGap",
+                        "left": [" Engineering ", "Engineering"],
+                        "right": ["Manager", "Lead"],
+                        "maxGapWords": 2,
+                    }
+                ],
+                "negative": ["Intern"],
+            },
+            "eligibility": None,
+        }
+    )
+
+    assert normalized["title"]["positivePatterns"] == [
+        {
+            "type": "orderedGap",
+            "left": ["Engineering"],
+            "right": ["Manager", "Lead"],
+            "maxGapWords": 2,
+        }
+    ]
+
+
+def test_preferences_reject_unsupported_title_pattern_gap():
+    with pytest.raises(ValueError, match="maxGapWords must be 2"):
+        normalize_discovery_preferences(
+            {
+                "schemaVersion": 1,
+                "title": {
+                    "positive": [],
+                    "positivePatterns": [
+                        {
+                            "type": "orderedGap",
+                            "left": ["Engineering"],
+                            "right": ["Manager"],
+                            "maxGapWords": 4,
+                        }
+                    ],
+                    "negative": [],
+                },
+                "eligibility": None,
+            }
+        )
+
+
+def test_preferences_accept_more_than_fifty_title_phrases_for_bulk_edit():
+    terms = [f"Product role {index}" for index in range(60)]
+    normalized = normalize_discovery_preferences(
+        {
+            "schemaVersion": 1,
+            "title": {"positive": terms, "negative": []},
+            "eligibility": None,
+        }
+    )
+
+    assert normalized["title"]["positive"] == terms
+
+
+def test_preferences_reject_same_location_in_include_and_exclude():
+    with pytest.raises(ValueError, match="same location cannot be included and excluded"):
+        normalize_discovery_preferences(
+            {
+                "schemaVersion": 1,
+                "title": {"positive": [], "negative": []},
+                "eligibility": {
+                    "remote": {
+                        "includeLocations": [
+                            {"kind": "globalRegion", "locationId": "m49:150"}
+                        ],
+                        "excludeLocations": [
+                            {"kind": "globalRegion", "locationId": "m49:150"}
+                        ],
+                    }
+                },
+            }
+        )
+
+
+def test_preferences_allow_parent_include_and_child_exclude():
+    normalized = normalize_discovery_preferences(
+        {
+            "schemaVersion": 1,
+            "title": {"positive": [], "negative": []},
+            "eligibility": {
+                "remote": {
+                    "includeLocations": [
+                        {"kind": "globalRegion", "locationId": "m49:150"}
+                    ],
+                    "excludeLocations": [
+                        {"kind": "country", "locationId": "iso3166:BG"}
+                    ],
+                }
+            },
+        }
+    )
+
+    assert normalized["eligibility"]["remote"]["includeLocations"][0]["locationId"] == "m49:150"
+    assert normalized["eligibility"]["remote"]["excludeLocations"][0]["locationId"] == "iso3166:BG"

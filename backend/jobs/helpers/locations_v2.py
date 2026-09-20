@@ -10,7 +10,6 @@ import gzip
 import json
 import os
 import re
-from collections import defaultdict
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -33,10 +32,6 @@ def _clean(value) -> str:
 def _key(value) -> str:
     return _clean(value).casefold()
 
-
-def _search_key(value) -> str:
-    """Normalize text for catalog search without changing stored identity."""
-    return re.sub(r"[^\w]+", " ", _key(value), flags=re.UNICODE).strip()
 
 
 @dataclass(frozen=True)
@@ -66,7 +61,6 @@ class LocationsV2Catalog:
         self.country_aliases: dict[str, set[str]] = {}
         self.admin_by_country_name: dict[tuple[str, str], list[dict]] = {}
         self.city_by_country_name: dict[tuple[str, str], list[dict]] = {}
-        self._search_buckets: dict[str, tuple[str, ...]] | None = None
 
         for collection_name in ("regions", "countries", "adminRegions", "cities"):
             for item in payload.get(collection_name, []):
@@ -223,85 +217,6 @@ class LocationsV2Catalog:
             "label": ", ".join(part for part in label_parts if part),
             "catalogVersion": self.catalog_version,
         }
-
-    def _search_text(
-        self, item: dict, presentation: dict | None = None
-    ) -> tuple[list[str], str]:
-        presentation = presentation or self.location_presentation(item)
-        names = [_search_key(item.get("name"))]
-        names.extend(_search_key(alias) for alias in item.get("aliases", []))
-        names = [name for name in names if name]
-        context = [
-            _search_key(presentation.get("adminRegionName")),
-            _search_key(presentation.get("countryName")),
-            _search_key(presentation.get("countryCode")),
-        ]
-        haystack = " ".join(dict.fromkeys([*names, *[value for value in context if value]]))
-        return names, haystack
-
-    def _ensure_search_buckets(self) -> dict[str, tuple[str, ...]]:
-        if self._search_buckets is not None:
-            return self._search_buckets
-
-        buckets: dict[str, list[str]] = defaultdict(list)
-        for item in self.by_id.values():
-            prefixes = set()
-            for raw_name in [item.get("name"), *item.get("aliases", [])]:
-                name = _search_key(raw_name)
-                if len(name) >= 3:
-                    prefixes.add(name[:3])
-            for prefix in prefixes:
-                buckets[prefix].append(item["id"])
-        self._search_buckets = {
-            prefix: tuple(location_ids)
-            for prefix, location_ids in buckets.items()
-        }
-        return self._search_buckets
-
-    def search_locations(self, query: str, limit: int = 8) -> list[dict]:
-        """Search canonical locations for a user-facing selector."""
-        query_key = _search_key(query)
-        if not query_key:
-            return []
-
-        exact_code = query_key.upper()
-        if len(query_key) == 2 and exact_code in self.countries_by_code:
-            return [self.location_presentation(self.countries_by_code[exact_code])]
-        if len(query_key) < 3:
-            return []
-
-        candidate_ids = self._ensure_search_buckets().get(query_key[:3], ())
-        query_terms = query_key.split()
-        ranked = []
-        for location_id in candidate_ids:
-            item = self.by_id[location_id]
-            presentation = self.location_presentation(item)
-            names, haystack = self._search_text(item, presentation)
-            if not all(term in haystack for term in query_terms):
-                continue
-
-            exact = query_key in names
-            prefix = any(name.startswith(query_key) for name in names)
-            if exact:
-                match_rank = 0
-            elif prefix:
-                match_rank = 1
-            else:
-                match_rank = 2
-
-            population = int(item.get("population") or 0)
-            ranked.append(
-                (
-                    match_rank,
-                    -population,
-                    presentation["label"].casefold(),
-                    item["id"],
-                    presentation,
-                )
-            )
-
-        ranked.sort(key=lambda value: value[:4])
-        return [value[4] for value in ranked[:limit]]
 
     def facts_for_location(self, location: dict) -> list[tuple[str, str]]:
         facts = {(location["kind"], location["id"])}

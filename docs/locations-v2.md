@@ -223,13 +223,26 @@ Issue #8 adds the manual selector contract owned by Jobs:
 ```text
 GET  /jobs/locations/search?q=<text>&limit=<n>
 POST /jobs/locations/lookup
+POST /jobs/locations/coverage
 ```
 
 Search returns small user-facing records with canonical identity plus derived
 presentation fields such as country name and administrative-region context.
 Lookup resolves already-selected canonical IDs and reports missing IDs without
-changing them. Web Core proxies search to the browser and uses lookup before it
-saves discovery preferences. Users does not copy or query the location catalog.
+changing them. Both endpoints use the generated read-only
+`locations-v2.search.sqlite3` selector index, so interactive requests do not
+load the full catalog. The index is built from the canonical catalog and must
+have the same `catalogVersion` as the packaged manifest. It is not a second
+geography source.
+
+Coverage is an on-demand explanation endpoint for the Web preference editor. It
+uses country-to-global-region relationships generated into the same selector
+index and returns a country-level view with `included`, `partial`, and `excluded`
+states plus narrower city/admin exceptions. It does not add polygon/map boundary
+data or load the full catalog on the interactive path. Web Core proxies these
+endpoints.
+Web Core uses lookup before it saves discovery preferences. Users does not copy
+or query the location catalog.
 
 Search ranking can use population to order otherwise comparable same-name city
 results. Population is presentation metadata only. It must never silently

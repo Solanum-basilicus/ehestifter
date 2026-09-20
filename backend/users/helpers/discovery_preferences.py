@@ -7,8 +7,11 @@ from typing import Any
 
 
 SCHEMA_VERSION = 1
-MAX_TITLE_TERMS = 50
+MAX_TITLE_TERMS = 300
 MAX_TITLE_TERM_LENGTH = 120
+MAX_TITLE_PATTERNS = 50
+MAX_PATTERN_ALTERNATIVES = 10
+PATTERN_GAP_WORDS = 2
 MAX_LOCATION_SELECTORS = 100
 MAX_RANGES = 32
 SUPPORTED_KINDS = {"city", "adminRegion", "country", "globalRegion"}
@@ -25,7 +28,7 @@ GROUP_FIELDS = {
 def default_discovery_preferences() -> dict:
     return {
         "schemaVersion": SCHEMA_VERSION,
-        "title": {"positive": [], "negative": []},
+        "title": {"positive": [], "positivePatterns": [], "negative": []},
         "eligibility": None,
     }
 
@@ -57,6 +60,76 @@ def _normalize_terms(value: Any, path: str) -> list[str]:
             continue
         seen.add(key)
         result.append(term)
+    return result
+
+
+def _normalize_pattern_terms(value: Any, path: str) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"{path} must be an array")
+    if not value or len(value) > MAX_PATTERN_ALTERNATIVES:
+        raise ValueError(
+            f"{path} must contain between 1 and {MAX_PATTERN_ALTERNATIVES} items"
+        )
+    result = []
+    seen = set()
+    for index, raw in enumerate(value):
+        if not isinstance(raw, str):
+            raise ValueError(f"{path}[{index}] must be a string")
+        term = _normalize_text(raw)
+        if not term:
+            raise ValueError(f"{path}[{index}] must not be empty")
+        if len(term) > MAX_TITLE_TERM_LENGTH:
+            raise ValueError(
+                f"{path}[{index}] must contain at most {MAX_TITLE_TERM_LENGTH} characters"
+            )
+        key = term.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(term)
+    return result
+
+
+def _normalize_positive_patterns(value: Any, path: str) -> list[dict]:
+    if not isinstance(value, list):
+        raise ValueError(f"{path} must be an array")
+    if len(value) > MAX_TITLE_PATTERNS:
+        raise ValueError(f"{path} must contain at most {MAX_TITLE_PATTERNS} items")
+    result = []
+    seen = set()
+    for index, raw in enumerate(value):
+        item_path = f"{path}[{index}]"
+        if not isinstance(raw, dict):
+            raise ValueError(f"{item_path} must be an object")
+        unknown = set(raw) - {"type", "left", "right", "maxGapWords"}
+        if unknown:
+            raise ValueError(
+                f"{item_path} contains unsupported field: {sorted(unknown)[0]}"
+            )
+        if raw.get("type") != "orderedGap":
+            raise ValueError(f"{item_path}.type must be orderedGap")
+        if raw.get("maxGapWords") != PATTERN_GAP_WORDS:
+            raise ValueError(
+                f"{item_path}.maxGapWords must be {PATTERN_GAP_WORDS}"
+            )
+        left = _normalize_pattern_terms(raw.get("left"), f"{item_path}.left")
+        right = _normalize_pattern_terms(raw.get("right"), f"{item_path}.right")
+        key = (
+            tuple(value.casefold() for value in left),
+            tuple(value.casefold() for value in right),
+            PATTERN_GAP_WORDS,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(
+            {
+                "type": "orderedGap",
+                "left": left,
+                "right": right,
+                "maxGapWords": PATTERN_GAP_WORDS,
+            }
+        )
     return result
 
 
@@ -144,13 +217,25 @@ def _normalize_group(value: Any, path: str) -> dict:
     if not isinstance(allow_unknown, bool):
         raise ValueError(f"{path}.allowUnknownLocation must be a boolean")
 
+    include_locations = _normalize_selectors(
+        value.get("includeLocations", []), f"{path}.includeLocations"
+    )
+    exclude_locations = _normalize_selectors(
+        value.get("excludeLocations", []), f"{path}.excludeLocations"
+    )
+    include_keys = {(item["kind"], item["locationId"]) for item in include_locations}
+    exclude_keys = {(item["kind"], item["locationId"]) for item in exclude_locations}
+    contradiction = sorted(include_keys & exclude_keys)
+    if contradiction:
+        kind, location_id = contradiction[0]
+        raise ValueError(
+            f"The same location cannot be included and excluded in {path}: "
+            f"{kind}:{location_id}"
+        )
+
     return {
-        "includeLocations": _normalize_selectors(
-            value.get("includeLocations", []), f"{path}.includeLocations"
-        ),
-        "excludeLocations": _normalize_selectors(
-            value.get("excludeLocations", []), f"{path}.excludeLocations"
-        ),
+        "includeLocations": include_locations,
+        "excludeLocations": exclude_locations,
         "utcOffsetRanges": _normalize_ranges(
             value.get("utcOffsetRanges", []), f"{path}.utcOffsetRanges"
         ),
@@ -174,10 +259,13 @@ def normalize_discovery_preferences(value: Any) -> dict:
     raw_title = value.get("title", {})
     if not isinstance(raw_title, dict):
         raise ValueError("title must be an object")
-    unknown_title = set(raw_title) - {"positive", "negative"}
+    unknown_title = set(raw_title) - {"positive", "positivePatterns", "negative"}
     if unknown_title:
         raise ValueError(f"title contains unsupported field: {sorted(unknown_title)[0]}")
     positive = _normalize_terms(raw_title.get("positive", []), "title.positive")
+    positive_patterns = _normalize_positive_patterns(
+        raw_title.get("positivePatterns", []), "title.positivePatterns"
+    )
     negative = _normalize_terms(raw_title.get("negative", []), "title.negative")
 
     positive_keys = {term.casefold() for term in positive}
@@ -209,6 +297,10 @@ def normalize_discovery_preferences(value: Any) -> dict:
 
     return {
         "schemaVersion": SCHEMA_VERSION,
-        "title": {"positive": positive, "negative": negative},
+        "title": {
+            "positive": positive,
+            "positivePatterns": positive_patterns,
+            "negative": negative,
+        },
         "eligibility": eligibility,
     }

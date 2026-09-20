@@ -1,7 +1,8 @@
 import io
+import sqlite3
 import zipfile
 
-from tools.build_locations_v2_catalog import build_catalog
+from tools.build_locations_v2_catalog import _write_search_index, build_catalog
 
 
 M49 = """Global Code;Global Name;Region Code;Region Name;Sub-region Code;Sub-region Name;Intermediate Region Code;Intermediate Region Name;Country or Area;M49 Code;ISO-alpha2 Code;ISO-alpha3 Code;Least Developed Countries (LDC);Land Locked Developing Countries (LLDC);Small Island Developing States (SIDS)\n001;World;150;Europe;155;Western Europe;;;Germany;276;DE;DEU;;;\n001;World;150;Europe;039;Southern Europe;;;Spain;724;ES;ESP;;;\n001;World;019;Americas;021;Northern America;;;United States of America;840;US;USA;;;\n""".encode()
@@ -101,3 +102,33 @@ def test_m49_html_table_is_supported():
 
     countries = {item["countryCode"]: item for item in catalog["countries"]}
     assert countries["DE"]["ancestors"] == ["m49:155", "m49:150", "m49:001"]
+
+
+def test_search_index_contains_country_region_relationships(tmp_path):
+    catalog = build_catalog(
+        _cities_zip(),
+        ADMIN1,
+        TIMEZONES,
+        M49,
+        LEGACY,
+        2026,
+    )
+    catalog["catalogVersion"] = "test-version"
+    path = tmp_path / "locations.sqlite3"
+
+    _write_search_index(path, catalog)
+
+    conn = sqlite3.connect(path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT region_id, is_top
+            FROM country_regions
+            WHERE country_id = 'iso3166:DE'
+            ORDER BY region_id
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert rows == [("m49:001", 0), ("m49:150", 1), ("m49:155", 0)]

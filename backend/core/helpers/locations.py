@@ -21,3 +21,12 @@ def lookup_locations(context: dict, selectors: list[dict]):
         json_body={"locations": selectors},
         timeout=15,
     )
+
+
+def coverage_locations(context: dict, group: dict):
+    return fx_post_json(
+        f"{jobs_base()}/jobs/locations/coverage",
+        headers=jobs_fx_headers(context),
+        json_body=group,
+        timeout=20,
+    )

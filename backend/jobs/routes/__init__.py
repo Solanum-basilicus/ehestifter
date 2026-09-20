@@ -18,6 +18,7 @@ from .job_compatibility_bulk import register as _reg_compatibility_bulk
 from .internal_locations_v2_backfill import register as _reg_locations_v2_backfill
 from .jobs_open_query import register as _reg_jobs_open_query
 from .locations_search import register as _reg_locations_search
+from .locations_coverage import register as _reg_locations_coverage
 
 def register_all(app):
     _reg_create(app)
@@ -39,3 +40,4 @@ def register_all(app):
     _reg_locations_v2_backfill(app)
     _reg_jobs_open_query(app)
     _reg_locations_search(app)
+    _reg_locations_coverage(app)

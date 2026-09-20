@@ -90,50 +90,10 @@ CATALOG = {
 }
 
 
-def test_search_ranks_more_populous_same_name_city_first():
+def test_catalog_resolves_country_short_name_for_presentation():
     catalog = LocationsV2Catalog(CATALOG)
+    country = catalog.get_location("country", "iso3166:GB")
 
-    results = catalog.search_locations("London", limit=8)
+    presentation = catalog.location_presentation(country)
 
-    assert [item["locationId"] for item in results[:2]] == [
-        "geonames:london-gb",
-        "geonames:london-ca",
-    ]
-    assert results[0]["label"] == "London, England, United Kingdom"
-    assert results[1]["label"] == "London, Ontario, Canada"
-
-
-def test_search_uses_hierarchy_text_to_disambiguate_city():
-    catalog = LocationsV2Catalog(CATALOG)
-
-    results = catalog.search_locations("London Ontario", limit=8)
-
-    assert [item["locationId"] for item in results] == ["geonames:london-ca"]
-
-
-def test_search_accepts_exact_country_code_and_uses_short_country_name():
-    catalog = LocationsV2Catalog(CATALOG)
-
-    results = catalog.search_locations("GB", limit=8)
-
-    assert results == [
-        {
-            "kind": "country",
-            "locationId": "iso3166:GB",
-            "displayName": "United Kingdom",
-            "adminRegionName": None,
-            "countryCode": "GB",
-            "countryName": "United Kingdom",
-            "contextLabel": "",
-            "label": "United Kingdom",
-            "catalogVersion": "search-test-v2",
-        }
-    ]
-
-
-def test_search_matches_city_and_non_adjacent_country_context():
-    catalog = LocationsV2Catalog(CATALOG)
-
-    results = catalog.search_locations("London Canada", limit=8)
-
-    assert [item["locationId"] for item in results] == ["geonames:london-ca"]
+    assert presentation["displayName"] == "United Kingdom"

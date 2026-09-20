@@ -37,3 +37,26 @@ def test_locations_lookup_returns_canonical_presentation(base_url, auth_headers)
     by_id = {item["locationId"]: item for item in body["items"]}
     assert by_id["iso3166:GB"]["displayName"] == "United Kingdom"
     assert by_id["geonames:6058560"]["label"] == "London, Ontario, Canada"
+
+
+def test_locations_coverage_explains_region_and_country_exclusion(base_url, auth_headers):
+    response = requests.post(
+        f"{base_url}/api/jobs/locations/coverage",
+        headers=auth_headers,
+        json={
+            "includeLocations": [
+                {"kind": "globalRegion", "locationId": "m49:150"}
+            ],
+            "excludeLocations": [
+                {"kind": "country", "locationId": "iso3166:BG"}
+            ],
+            "allowUnknownLocation": False,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    europe = next(item for item in body["regions"] if item["locationId"] == "m49:150")
+    by_code = {item["countryCode"]: item for item in europe["countries"]}
+    assert by_code["BG"]["state"] == "excluded"
+    assert by_code["DE"]["state"] == "included"

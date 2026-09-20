@@ -20,7 +20,7 @@ def test_put_and_get_neutral_discovery_preferences(
     headers = {"x-user-sub": default_user, **auth_headers}
     neutral = {
         "schemaVersion": 1,
-        "title": {"positive": [], "negative": []},
+        "title": {"positive": [], "positivePatterns": [], "negative": []},
         "eligibility": None,
     }
 
@@ -47,8 +47,41 @@ def test_put_and_get_neutral_discovery_preferences(
         assert get_response.status_code == 200
         body = get_response.json()
         assert body["schemaVersion"] == 1
-        assert body["title"] == {"positive": [], "negative": []}
+        assert body["title"] == {"positive": [], "positivePatterns": [], "negative": []}
         assert body["eligibility"] is None
     finally:
         restore_response = requests.put(url, headers=headers, json=original)
         assert restore_response.status_code == 200
+
+
+def test_put_rejects_same_location_in_include_and_exclude(
+    base_url,
+    auth_headers,
+    default_user,
+):
+    url = f"{base_url}/users/discovery-preferences"
+    headers = {"x-user-sub": default_user, **auth_headers}
+    response = requests.put(
+        url,
+        headers=headers,
+        json={
+            "schemaVersion": 1,
+            "title": {"positive": [], "positivePatterns": [], "negative": []},
+            "eligibility": {
+                "remote": {
+                    "includeLocations": [
+                        {"kind": "globalRegion", "locationId": "m49:150"}
+                    ],
+                    "excludeLocations": [
+                        {"kind": "globalRegion", "locationId": "m49:150"}
+                    ],
+                    "utcOffsetRanges": [],
+                    "excludeWorkTimeRanges": [],
+                    "allowUnknownLocation": False,
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    assert "same location cannot be included and excluded" in response.text

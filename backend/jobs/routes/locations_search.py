@@ -5,7 +5,8 @@ import logging
 
 import azure.functions as func
 
-from helpers.locations_v2 import SUPPORTED_KINDS, load_locations_v2_catalog
+from helpers.locations_search_index import load_locations_search_index
+from helpers.locations_v2 import SUPPORTED_KINDS
 
 
 MAX_QUERY_LENGTH = 120
@@ -44,20 +45,19 @@ def register(app: func.FunctionApp):
                     status_code=400,
                 )
 
-            catalog = load_locations_v2_catalog()
-            items = catalog.search_locations(query, limit=limit)
+            index = load_locations_search_index()
             payload = {
-                "catalogVersion": catalog.catalog_version,
+                "catalogVersion": index.catalog_version,
                 "query": query,
-                "items": items,
+                "items": index.search(query, limit=limit),
             }
             return func.HttpResponse(
                 json.dumps(payload),
                 status_code=200,
                 mimetype="application/json",
             )
-        except FileNotFoundError as exc:
-            logging.exception("Locations v2 catalog is unavailable")
+        except (FileNotFoundError, ValueError) as exc:
+            logging.exception("Locations v2 search index is unavailable")
             return func.HttpResponse(str(exc), status_code=503)
         except Exception as exc:
             logging.exception("GET /jobs/locations/search failed")
@@ -87,37 +87,29 @@ def register(app: func.FunctionApp):
                     status_code=400,
                 )
 
-            catalog = load_locations_v2_catalog()
-            items = []
-            missing = []
-            seen = set()
+            selectors = []
+            malformed = []
             for raw in values:
                 selector = _selector(raw)
                 if selector is None:
-                    missing.append(raw)
-                    continue
-                if selector in seen:
-                    continue
-                seen.add(selector)
-                kind, location_id = selector
-                item = catalog.get_location(kind, location_id)
-                if item is None:
-                    missing.append({"kind": kind, "locationId": location_id})
-                    continue
-                items.append(catalog.location_presentation(item))
+                    malformed.append(raw)
+                else:
+                    selectors.append(selector)
 
+            index = load_locations_search_index()
+            items, missing = index.lookup(selectors)
             payload = {
-                "catalogVersion": catalog.catalog_version,
+                "catalogVersion": index.catalog_version,
                 "items": items,
-                "missing": missing,
+                "missing": [*malformed, *missing],
             }
             return func.HttpResponse(
                 json.dumps(payload),
                 status_code=200,
                 mimetype="application/json",
             )
-        except FileNotFoundError as exc:
-            logging.exception("Locations v2 catalog is unavailable")
+        except (FileNotFoundError, ValueError) as exc:
+            logging.exception("Locations v2 search index is unavailable")
             return func.HttpResponse(str(exc), status_code=503)
         except Exception as exc:
             logging.exception("POST /jobs/locations/lookup failed")

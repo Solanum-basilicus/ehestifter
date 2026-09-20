@@ -103,7 +103,7 @@
       try {
         if (!items) {
           this.controller = new AbortController();
-          this.renderMessage('Searching…');
+          this.renderMessage('Searching… This can take a few seconds.');
           const params = new URLSearchParams({ q: query, limit: '8' });
           const response = await fetch(`/ui/locations/search?${params.toString()}`, {
             credentials: 'same-origin',
@@ -282,6 +282,15 @@
         kind: item.kind,
         locationId: item.locationId,
       }));
+    }
+
+    getItems() {
+      return this.selected.map((item) => ({ ...item }));
+    }
+
+    setItems(items) {
+      this.selected = (Array.isArray(items) ? items : []).map((item) => ({ ...item }));
+      this.renderSelected();
     }
 
     setDisabled(disabled) {

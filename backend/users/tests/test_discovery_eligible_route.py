@@ -155,7 +155,7 @@ class DiscoveryEligibleRouteTests(unittest.TestCase):
                 json.dumps({"title": {"positive": ["Manager"]}}),
                 json.dumps({
                     "schemaVersion": 1,
-                    "title": {"positive": ["Manager"], "negative": []},
+                    "title": {"positive": ["Manager"], "positivePatterns": [], "negative": []},
                     "eligibility": None,
                 }),
                 datetime(2026, 9, 20, 10, 0, 0),

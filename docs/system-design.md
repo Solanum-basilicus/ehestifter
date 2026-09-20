@@ -324,7 +324,7 @@ Owns:
 Current user-related data in scope:
 - basic info: name, email, role,
 - CV in Quill Delta format and plaintext,
-- normalized discovery preferences for title and Locations v2 eligibility,
+- normalized discovery preferences for title phrases, positive bounded-gap title patterns, and Locations v2 eligibility,
 - telegram link code,
 - linked telegram account ID,
 - blob paths and metadata for current CV version.
@@ -881,6 +881,18 @@ with the Jobs-owned Locations v2 catalog, then sends the document to Users.
 Users validates the complete document shape and stores normalized JSON. Users
 does not own or copy the Jobs location catalog.
 
+The title part keeps literal positive and negative phrase lists. It can also
+contain `positivePatterns`. The only supported pattern is `orderedGap`: one of
+its left phrases must occur before one of its right phrases with at most two
+complete title words between them. Flexible patterns are positive-only; negative
+rules remain literal phrases. Web bulk edit is only an editor mode and does not
+change the persisted contract.
+
+The Web editor can temporarily link Remote, Hybrid, and On-site arrangement
+blocks so they use one shared editor. This link is UI state only. The saved
+document remains expanded and stores a complete rule group for every enabled
+work arrangement.
+
 ---
 
 ## 10. Jobs domain details
@@ -894,7 +906,7 @@ Jobs domain owns:
 - job history,
 - location storage and presentation,
 - Locations v2 storage, branch-aware query facts, native API contracts, and migration endpoint,
-- Locations v2 selector search and canonical lookup endpoints,
+- Locations v2 selector search, canonical lookup, and coverage-explanation endpoints,
 - compatibility score storage and exposure,
 - user-specific shaping of job lists and details,
 - emitting safe web-originated Jobs analytics events after successful owner-domain writes.
