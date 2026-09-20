@@ -7,6 +7,15 @@ from helpers.history import insert_history
 from helpers.validation import validate_job_payload
 from typing import List, Dict, Any, Optional
 from helpers.analytics import emit_jobs_event
+from helpers.locations_v2 import load_locations_v2_catalog
+from helpers.locations_v2_store import (
+    canonicalize_locations_v2,
+    fetch_locations_v2,
+    fetch_work_time_constraints_v2,
+    normalize_work_time_constraints_v2,
+    replace_native_locations_v2,
+    replace_work_time_constraints_v2,
+)
 
 
 # mapping: JSON -> DB column
@@ -91,6 +100,12 @@ def register(app: func.FunctionApp):
                 for r in cur.fetchall()
             ]
             before_locs = _canon_locs(before_locs_raw)
+            before_locs_v2 = fetch_locations_v2(cur, job_id) if "locationsV2" in data else []
+            before_work_time_v2 = (
+                fetch_work_time_constraints_v2(cur, job_id)
+                if "workTimeConstraintsV2" in data
+                else []
+            )
 
             # update provided fields
             sets, vals = [], []
@@ -121,9 +136,37 @@ def register(app: func.FunctionApp):
                         (job_id, nl["countryName"], nl["countryCode"], nl["cityName"], nl["region"])
                         for nl in new_locs
                     ])
-                # If only locations changed, still bump UpdatedAt
-                if locs_changed_flag and not sets:
-                    cur.execute("UPDATE dbo.JobOfferings SET UpdatedAt = SYSDATETIME() WHERE Id = ?", job_id)
+
+            locs_v2_changed_flag = False
+            new_locs_v2 = []
+            if "locationsV2" in data:
+                catalog = load_locations_v2_catalog()
+                canonical_v2 = canonicalize_locations_v2(catalog, data["locationsV2"])
+                new_locs_v2 = [
+                    {
+                        "kind": row["kind"],
+                        "locationId": row["locationId"],
+                        "displayName": row["displayName"],
+                        "countryCode": row.get("countryCode"),
+                        "catalogVersion": catalog.catalog_version,
+                    }
+                    for row in canonical_v2
+                ]
+                new_locs_v2.sort(
+                    key=lambda row: (row["kind"], row["displayName"], row["locationId"])
+                )
+                locs_v2_changed_flag = new_locs_v2 != before_locs_v2
+                replace_native_locations_v2(cur, catalog, job_id, data["locationsV2"])
+
+            work_time_v2_changed_flag = False
+            new_work_time_v2 = []
+            if "workTimeConstraintsV2" in data:
+                new_work_time_v2 = normalize_work_time_constraints_v2(data["workTimeConstraintsV2"])
+                work_time_v2_changed_flag = new_work_time_v2 != before_work_time_v2
+                replace_work_time_constraints_v2(cur, job_id, data["workTimeConstraintsV2"])
+
+            if (locs_changed_flag or locs_v2_changed_flag or work_time_v2_changed_flag) and not sets:
+                cur.execute("UPDATE dbo.JobOfferings SET UpdatedAt = SYSDATETIME() WHERE Id = ?", job_id)
 
             # diff for history (omit Description content)
             changed, desc_changed = {}, False
@@ -152,6 +195,32 @@ def register(app: func.FunctionApp):
                         parts.append(f"{left}: {right}" if right else left)
                     return " · ".join(parts)
                 changed["Locations"] = {"from": _fmt_locs(before_locs), "to": _fmt_locs(new_locs)}
+
+            if "locationsV2" in data and locs_v2_changed_flag:
+                def _fmt_locs_v2(rows):
+                    if not rows:
+                        return "(none)"
+                    return " · ".join(
+                        f"{row.get('kind')}: {row.get('displayName') or row.get('locationId')}"
+                        for row in rows
+                    )
+                changed["LocationsV2"] = {
+                    "from": _fmt_locs_v2(before_locs_v2),
+                    "to": _fmt_locs_v2(new_locs_v2),
+                }
+
+            if "workTimeConstraintsV2" in data and work_time_v2_changed_flag:
+                def _fmt_ranges(rows):
+                    if not rows:
+                        return "(none)"
+                    return " · ".join(
+                        f"[{row['offsetRangeStartMinutes']}, {row['offsetRangeEndMinutes']}]"
+                        for row in rows
+                    )
+                changed["WorkTimeConstraintsV2"] = {
+                    "from": _fmt_ranges(before_work_time_v2),
+                    "to": _fmt_ranges(new_work_time_v2),
+                }
 
             if changed or desc_changed:
                 details = {"changed": changed}

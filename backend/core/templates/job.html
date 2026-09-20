@@ -782,9 +782,16 @@
         const url  = this.get(p, ["Url","OriginalUrl"]) || "";
         const applyUrl = this.get(p, ["ApplyUrl","ApplyLink"]) || "";
 
-        // Locations: prefer new shape
+        const activeLocationModel = p.activeLocationModel === 'v2' ? 'v2' : 'v1';
+        const locsV2 = Array.isArray(p.locationsV2) ? p.locationsV2.map(it => ({
+          kind: String(it.kind || ''),
+          locationId: String(it.locationId || ''),
+          displayName: String(it.displayName || ''),
+          countryCode: it.countryCode ? String(it.countryCode).toUpperCase() : null
+        })) : [];
+
         let locs = Array.isArray(p.locations) ? p.locations : [];
-        // Back-compat: derive from Country/Locality if new field absent
+        // Back-compat: derive from Country/Locality if v1 data is absent.
         if (!locs.length) {
           const country = this.get(p, ["Country"]) || "";
           const locality = this.get(p, ["Locality","City"]) || "";
@@ -806,7 +813,7 @@
           remoteType: remote, firstSeenUtc:firstSeen, lastSeenUtc:lastSeen,
           repostCount, url, applyUrl,
           foundOn, externalId: extId, provider, providerTenant: tenant, atsVendor,
-          locations: locs
+          activeLocationModel, locations: locs, locationsV2: locsV2
         };
 
         const rawHtml = this.get(p, ["descriptionHtml","Description","Html"]) || "";
@@ -851,11 +858,21 @@
           : (this.meta.company || "");
       },
 
-      // Group locations by country; render "DE: Berlin · ES: Madrid · GB"
+      // Render the active location representation.
       geoLine(){
-        const locs = this.meta.locations || [];
         const parts = [];
-        if (locs.length) {
+        if (this.meta.activeLocationModel === 'v2') {
+          const locsV2 = this.meta.locationsV2 || [];
+          for (const loc of locsV2) {
+            const name = String(loc.displayName || '').trim();
+            const code = String(loc.countryCode || '').trim();
+            if (!name && !code) continue;
+            if (code && (loc.kind === 'city' || loc.kind === 'adminRegion')) parts.push(`${code}: ${name || code}`);
+            else parts.push(name || code);
+          }
+        } else {
+          const locs = this.meta.locations || [];
+          if (locs.length) {
           const groups = new Map(); // label -> [cities]
           for (const it of locs) {
             const label = (it.countryCode || it.countryName || "").toString().trim();
@@ -863,8 +880,9 @@
             if (!groups.has(label)) groups.set(label, []);
             if (it.cityName) groups.get(label).push(it.cityName);
           }
-          for (const [label, cities] of groups.entries()) {
-            parts.push(cities.length ? `${label}: ${cities.join(', ')}` : label);
+            for (const [label, cities] of groups.entries()) {
+              parts.push(cities.length ? `${label}: ${cities.join(', ')}` : label);
+            }
           }
         }
         const geo = parts.join(' · ');

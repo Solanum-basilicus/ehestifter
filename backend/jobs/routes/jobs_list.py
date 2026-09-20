@@ -8,6 +8,9 @@ from helpers.history import DatetimeEncoder
 from helpers.ids import normalize_guid
 from helpers.domain_constants import FINAL_STATUSES
 from helpers.status_normalize import status_key, status_key_case_sql
+from helpers.location_mode import active_location_model
+from helpers.locations_v2 import load_locations_v2_catalog
+from helpers.locations_v2_store import fetch_locations_v2_map
 
 
 REMOTE_MAP = {
@@ -118,6 +121,7 @@ def register(app: func.FunctionApp):
                 return func.HttpResponse("Invalid 'sort'", status_code=400)
 
             user_id = _require_user_if_needed(req, category, ignore_status, ignore_status_k)
+            location_model = active_location_model()
             if category in {"my", "open"} and not user_id:
                 return func.HttpResponse(
                     "Missing user id (X-User-Id header) for category='my' or 'open'",
@@ -224,15 +228,25 @@ def register(app: func.FunctionApp):
                     params_count += [like]
 
                 elif search_field == "location":
-                    where.append("""
-                        EXISTS (
-                            SELECT 1
-                            FROM dbo.JobOfferingLocations lq
-                            WHERE lq.JobOfferingId = j.Id
-                              AND (lq.CityName LIKE ? OR lq.CountryName LIKE ?)
-                        )
-                    """)
                     like = _likeify(q)
+                    if location_model == "v2":
+                        where.append("""
+                            EXISTS (
+                                SELECT 1
+                                FROM dbo.JobOfferingLocationsV2 lq
+                                WHERE lq.JobOfferingId = j.Id
+                                  AND (lq.DisplayName LIKE ? OR lq.CountryCode LIKE ?)
+                            )
+                        """)
+                    else:
+                        where.append("""
+                            EXISTS (
+                                SELECT 1
+                                FROM dbo.JobOfferingLocations lq
+                                WHERE lq.JobOfferingId = j.Id
+                                  AND (lq.CityName LIKE ? OR lq.CountryName LIKE ?)
+                            )
+                        """)
                     params += [like, like]
                     params_count += [like, like]
 
@@ -250,40 +264,89 @@ def register(app: func.FunctionApp):
                 params += norm_modes
                 params_count += norm_modes
 
-            # Location filters via EXISTS to avoid row explosion
+            # Location filters use the active model. Existing Web query values
+            # stay human-readable until issue #8 replaces that selector UX.
             if cities:
                 placeholders = ",".join(["?"] * len(cities))
-                where.append(f"""
-                    EXISTS (
-                        SELECT 1
-                        FROM dbo.JobOfferingLocations lc
-                        WHERE lc.JobOfferingId = j.Id
-                          AND lc.CityName IN ({placeholders})
-                    )
-                """)
-                params += cities
-                params_count += cities
-
-            if countries:
-                ccodes = [c for c in countries if len(c.strip()) == 2]
-                cnames = [c for c in countries if len(c.strip()) != 2]
-                parts = []
-                if ccodes:
-                    parts.append(f"lc.CountryCode IN ({','.join(['?'] * len(ccodes))})")
-                if cnames:
-                    parts.append(f"lc.CountryName IN ({','.join(['?'] * len(cnames))})")
-
-                if parts:
+                if location_model == "v2":
+                    where.append(f"""
+                        EXISTS (
+                            SELECT 1
+                            FROM dbo.JobOfferingLocationsV2 lc
+                            WHERE lc.JobOfferingId = j.Id
+                              AND lc.LocationKind = 'city'
+                              AND lc.DisplayName IN ({placeholders})
+                        )
+                    """)
+                else:
                     where.append(f"""
                         EXISTS (
                             SELECT 1
                             FROM dbo.JobOfferingLocations lc
                             WHERE lc.JobOfferingId = j.Id
-                              AND ({" OR ".join(parts)})
+                              AND lc.CityName IN ({placeholders})
                         )
                     """)
-                    params += ccodes + cnames
-                    params_count += ccodes + cnames
+                params += cities
+                params_count += cities
+
+            if countries:
+                if location_model == "v2":
+                    catalog = load_locations_v2_catalog()
+                    selectors = []
+                    seen_selectors = set()
+                    for value in countries:
+                        text = value.strip()
+                        country = catalog.resolve_country(
+                            text.upper() if len(text) == 2 else None,
+                            None if len(text) == 2 else text,
+                        )
+                        if country is None:
+                            continue
+                        key = (country["kind"], country["id"])
+                        if key not in seen_selectors:
+                            seen_selectors.add(key)
+                            selectors.append(key)
+
+                    if selectors:
+                        selector_sql = " OR ".join(
+                            ["(lf.LocationKind = ? AND lf.LocationId = ?)"] * len(selectors)
+                        )
+                        where.append(f"""
+                            EXISTS (
+                                SELECT 1
+                                FROM dbo.JobOfferingLocationsV2 ld
+                                INNER JOIN dbo.JobOfferingLocationFactsV2 lf
+                                  ON lf.DirectLocationV2Id = ld.Id
+                                WHERE ld.JobOfferingId = j.Id
+                                  AND ({selector_sql})
+                            )
+                        """)
+                        selector_params = [part for selector in selectors for part in selector]
+                        params += selector_params
+                        params_count += selector_params
+                    else:
+                        where.append("1 = 0")
+                else:
+                    ccodes = [c.upper() for c in countries if len(c.strip()) == 2]
+                    cnames = [c for c in countries if len(c.strip()) != 2]
+                    parts = []
+                    if ccodes:
+                        parts.append(f"lc.CountryCode IN ({','.join(['?'] * len(ccodes))})")
+                    if cnames:
+                        parts.append(f"lc.CountryName IN ({','.join(['?'] * len(cnames))})")
+
+                    if parts:
+                        where.append(f"""
+                            EXISTS (
+                                SELECT 1
+                                FROM dbo.JobOfferingLocations lc
+                                WHERE lc.JobOfferingId = j.Id
+                                  AND ({" OR ".join(parts)})
+                            )
+                        """)
+                        params += ccodes + cnames
+                        params_count += ccodes + cnames
 
             # Reverse status filter - ignore specific statuses for THIS user
             ignore_keys = [k for k in ignore_status_k if k]
@@ -340,14 +403,24 @@ def register(app: func.FunctionApp):
             elif sort == "updated_asc":
                 order_sql = f"ORDER BY {last_update_expr} ASC"
             elif sort == "location_az":
-                order_sql = """
-                    ORDER BY (
-                        SELECT TOP 1 CONCAT(COALESCE(l.CountryName,''),'|',COALESCE(l.CityName,''))
-                        FROM dbo.JobOfferingLocations l
-                        WHERE l.JobOfferingId = j.Id
-                        ORDER BY l.CountryName, l.CityName
-                    ) ASC, j.CreatedAt DESC
-                """
+                if location_model == "v2":
+                    order_sql = """
+                        ORDER BY (
+                            SELECT TOP 1 CONCAT(COALESCE(l.CountryCode,''),'|',COALESCE(l.DisplayName,''))
+                            FROM dbo.JobOfferingLocationsV2 l
+                            WHERE l.JobOfferingId = j.Id
+                            ORDER BY l.CountryCode, l.DisplayName
+                        ) ASC, j.CreatedAt DESC
+                    """
+                else:
+                    order_sql = """
+                        ORDER BY (
+                            SELECT TOP 1 CONCAT(COALESCE(l.CountryName,''),'|',COALESCE(l.CityName,''))
+                            FROM dbo.JobOfferingLocations l
+                            WHERE l.JobOfferingId = j.Id
+                            ORDER BY l.CountryName, l.CityName
+                        ) ASC, j.CreatedAt DESC
+                    """
             elif sort == "status_progression":
                 order_sql = f"""
                     ORDER BY
@@ -412,6 +485,7 @@ def register(app: func.FunctionApp):
                     "offset": offset,
                     "total": total,
                     "sort": sort,
+                    "activeLocationModel": location_model,
                     "items": []
                 }
                 return func.HttpResponse(
@@ -448,8 +522,11 @@ def register(app: func.FunctionApp):
                         "region": region
                     })
 
+            loc_v2_map = fetch_locations_v2_map(cur, norm_ids)
+
             for j in jobs:
                 j["locations"] = loc_map.get(j["Id"], [])
+                j["locationsV2"] = loc_v2_map.get(j["Id"], [])
 
             payload = {
                 "category": category,
@@ -457,6 +534,7 @@ def register(app: func.FunctionApp):
                 "offset": offset,
                 "total": total,
                 "sort": sort,
+                "activeLocationModel": location_model,
                 "items": jobs
             }
             return func.HttpResponse(

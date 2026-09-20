@@ -1,6 +1,6 @@
 # Locations v2
 
-Status: additive foundation from issue #20. Locations v1 is still the active API and UI model.
+Status: issue #21 adds native API and query support. Locations v1 stays the default active model until the operator changes `LOCATIONS_ACTIVE_MODEL`.
 
 ## Purpose
 
@@ -70,7 +70,7 @@ Example:
 
 `Hallbergmoos -> Bavaria -> Germany -> Western Europe -> Europe -> World`
 
-Jobs also stores the upward closure as query facts. This lets SQL use indexed equality checks instead of recursive geographic queries.
+Jobs also stores the upward closure as query facts. Each fact keeps the ID of the direct v2 location that produced it. This branch identity is required when one job has alternative locations. It lets one valid branch pass even when another branch is excluded. SQL can use indexed equality checks instead of recursive geographic queries.
 
 The matching direction is important:
 
@@ -78,7 +78,7 @@ The matching direction is important:
 - a broad job value does not prove a more specific on-site or hybrid location;
 - for remote scope, a broad job scope can contain a more specific user selector.
 
-Issue #21 will implement these query rules.
+Issue #21 implements these query rules.
 
 ## Geographic UTC facts
 
@@ -111,14 +111,16 @@ A future user preference can use negative work-time ranges to reject explicit in
 
 ## SQL storage
 
-Issue #20 adds these tables:
+The model uses these tables:
 
 - `dbo.JobOfferingLocationsV2`: direct normalized location claims;
-- `dbo.JobOfferingLocationFactsV2`: direct claims plus geographic ancestors for indexed matching;
-- `dbo.JobOfferingLocationUtcOffsetsV2`: derived geographic UTC-offset facts;
-- `dbo.JobOfferingWorkTimeConstraintsV2`: explicit work-time ranges.
+- `dbo.JobOfferingLocationFactsV2`: one direct branch plus its geographic ancestors;
+- `dbo.JobOfferingLocationUtcOffsetsV2`: derived UTC offsets for one direct branch;
+- `dbo.JobOfferingWorkTimeConstraintsV2`: explicit job-level work-time ranges.
 
-Locations v1 stays in `dbo.JobOfferingLocations` and remains authoritative until issue #21.
+Migration `28_locations_v2_branch_facts.sql` rebuilds the two derived fact tables with `DirectLocationV2Id`. It does not change direct v2 rows or Locations v1 rows.
+
+Locations v1 stays in `dbo.JobOfferingLocations`. The active read/filter model is selected with `LOCATIONS_ACTIVE_MODEL=v1|v2`. The default is `v1`.
 
 There is no v2 resolution-state table. If no useful v2 geographic row exists, later eligibility evaluation can return `unknown`.
 
@@ -186,3 +188,86 @@ Examples:
 - legacy data is too ambiguous to map safely.
 
 Issue #8 will define user controls for how Open Opportunities handles unknown work arrangement and unknown geographic eligibility.
+
+## Native Jobs API contract
+
+Jobs create and update accept `locationsV2` and `workTimeConstraintsV2`. A location input contains only canonical identity:
+
+```json
+{
+  "locationsV2": [
+    {"kind": "city", "locationId": "geonames:2950159"}
+  ],
+  "workTimeConstraintsV2": [
+    {"offsetRangeStartMinutes": 0, "offsetRangeEndMinutes": 240}
+  ]
+}
+```
+
+Jobs validates the canonical ID against its local catalog. Jobs derives display text, country code, catalog version, ancestor facts, and geographic UTC facts. Callers must not send those derived values as authoritative input.
+
+Locations v1 and Locations v2 writes are independent:
+
+- a v1-only payload writes only v1;
+- a v2-only payload writes only v2;
+- a payload with both writes both from their own values;
+- on update, an omitted location field is unchanged;
+- on update, an explicit empty array clears that representation.
+
+There is no v2-to-v1 shadow write. If an operator returns to v1 after native v2-only jobs exist, those jobs can have no visible location in v1 mode. This is an accepted rollback limitation.
+
+Jobs reads return both representations when they exist. The response also returns `activeLocationModel`. Web uses that value for location presentation.
+
+Issue #21 does not add a manual canonical-location selector or a catalog-search endpoint. Issue #8 owns that UX. Core can already pass canonical `locationsV2` values when a later selector supplies them.
+
+## Open Opportunities eligibility contract
+
+Jobs exposes `POST /jobs/open/query`. Core exposes `POST /ui/jobs/open/query`. Core passes the authenticated user ID in the normal Jobs header. The request body carries normalized eligibility criteria. Jobs does not call Users and does not read Users storage.
+
+Example:
+
+```json
+{
+  "limit": 25,
+  "offset": 0,
+  "eligibility": {
+    "remote": {
+      "includeLocations": [
+        {"kind": "country", "locationId": "iso3166:DE"}
+      ],
+      "excludeLocations": [],
+      "utcOffsetRanges": [
+        {"startMinutes": 60, "endMinutes": 120}
+      ],
+      "excludeWorkTimeRanges": [
+        {"startMinutes": -480, "endMinutes": -420}
+      ],
+      "allowUnknownLocation": false
+    }
+  }
+}
+```
+
+The supported work-arrangement groups are `remote`, `hybrid`, `onSite`, and `unknown`. If an eligibility object is present, an omitted group is not eligible. An empty eligibility object matches no work arrangement. A null or omitted eligibility value adds no location restriction.
+
+For on-site and hybrid jobs, a branch matches a positive selector when the branch or one of its ancestors equals the selector. For remote jobs, positive matching also accepts a broader direct job scope that contains the user selector. Negative location checks use the same direct branch as the positive and UTC checks. A negative specific place does not reject a broader remote scope only because that scope contains the place.
+
+`allowUnknownLocation` applies when geographic criteria exist and the job has no direct v2 geography. Explicit work-time exclusions are job-level checks. No work-time row means that no explicit work-time restriction is known, so there is nothing to reject.
+
+The eligibility SQL uses direct rows, branch-aware facts, UTC facts, and work-time ranges. It does not parse location text, calculate hierarchy, calculate timezone rules, or call an LLM. Jobs expands remote selector ancestry from the local catalog before it builds the SQL predicate.
+
+When `LOCATIONS_ACTIVE_MODEL=v1`, the structured endpoint still works as an Open Opportunities query, but it does not apply v2 eligibility. The response reports `locationEligibilityApplied: false`. This behavior is the rollback switch for the read-time filter.
+
+## Issue #21 cutover
+
+Apply migration 28 before the issue #21 Jobs code. Migration 28 drops and recreates only the two derived fact tables, so these tables are empty after the migration. Run the complete v1-to-v2 backfill before v2 is enabled.
+
+Keep `LOCATIONS_ACTIVE_MODEL=v1` until native producers are ready. Before the production switch:
+
+1. pause or avoid ATS ingestion for the short cutover window;
+2. run the full v1-to-v2 backfill from the start;
+3. verify fallback and unresolved counts;
+4. deploy or enable native v2 producers;
+5. set `LOCATIONS_ACTIVE_MODEL=v2`;
+6. monitor the list, detail, and Open Opportunities paths;
+7. set the value back to `v1` if a blocking problem occurs.

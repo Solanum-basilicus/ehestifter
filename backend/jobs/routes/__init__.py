@@ -16,6 +16,7 @@ from .internal_job_snapshot_get import register as _reg_internal_snapshot
 from .internal_job_compatibility_projections_bulk_upsert import register as _reg_internal_compatibility_bulk_upsert
 from .job_compatibility_bulk import register as _reg_compatibility_bulk
 from .internal_locations_v2_backfill import register as _reg_locations_v2_backfill
+from .jobs_open_query import register as _reg_jobs_open_query
 
 def register_all(app):
     _reg_create(app)
@@ -35,4 +36,5 @@ def register_all(app):
     _reg_internal_compatibility_bulk_upsert(app)
     _reg_compatibility_bulk(app)
     _reg_locations_v2_backfill(app)
+    _reg_jobs_open_query(app)
     

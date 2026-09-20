@@ -28,6 +28,31 @@ def _map_api_job_to_initial(job: dict) -> dict:
                 "region":     _pick(it, "region", "Region"),
             })
 
+
+    locs_v2 = _pick(job, "locationsV2", "LocationsV2") or []
+    norm_locs_v2 = []
+    if isinstance(locs_v2, list):
+        for item in locs_v2:
+            if not isinstance(item, dict):
+                continue
+            norm_locs_v2.append({
+                "kind": _pick(item, "kind", "LocationKind") or "",
+                "locationId": _pick(item, "locationId", "LocationId") or "",
+                "displayName": _pick(item, "displayName", "DisplayName") or "",
+                "countryCode": _pick(item, "countryCode", "CountryCode"),
+            })
+
+    work_time_v2 = _pick(job, "workTimeConstraintsV2", "WorkTimeConstraintsV2") or []
+    norm_work_time_v2 = []
+    if isinstance(work_time_v2, list):
+        for item in work_time_v2:
+            if not isinstance(item, dict):
+                continue
+            norm_work_time_v2.append({
+                "offsetRangeStartMinutes": _pick(item, "offsetRangeStartMinutes", "OffsetRangeStartMinutes"),
+                "offsetRangeEndMinutes": _pick(item, "offsetRangeEndMinutes", "OffsetRangeEndMinutes"),
+            })
+
     return {
         "id": _pick(job, "id", "Id", "ID"),
         "url": _pick(job, "url", "Url", "OriginalUrl") or "",
@@ -43,6 +68,9 @@ def _map_api_job_to_initial(job: dict) -> dict:
         # HTML description (accept different casings)
         "descriptionHtml": _pick(job, "description", "Description") or "",
         "locations": norm_locs,
+        "locationsV2": norm_locs_v2,
+        "workTimeConstraintsV2": norm_work_time_v2,
+        "activeLocationModel": _pick(job, "activeLocationModel", "ActiveLocationModel") or "v1",
     }
 
 def create_blueprint(auth):

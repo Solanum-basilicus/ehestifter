@@ -18,6 +18,7 @@ from .ui_enrichment_latest_get import create_blueprint as bp_enrichment_latest_g
 from .ui_enrichment_history_get import create_blueprint as bp_enrichment_history_get
 from .ui_enrichment_runs_post import create_blueprint as bp_enrichment_runs_post
 from .ui_jobs_compatibility_bulk import create_blueprint as bp_jobs_compatibility_bulk
+from .ui_jobs_open_query import create_blueprint as bp_jobs_open_query
 
 
 def register_all(app, auth):

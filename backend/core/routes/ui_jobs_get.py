@@ -46,6 +46,10 @@ def create_blueprint(auth):
 
             if "locations" not in job or not isinstance(job["locations"], list):
                 job["locations"] = []
+            if "locationsV2" not in job or not isinstance(job["locationsV2"], list):
+                job["locationsV2"] = []
+            if "workTimeConstraintsV2" not in job or not isinstance(job["workTimeConstraintsV2"], list):
+                job["workTimeConstraintsV2"] = []
 
             return job
 

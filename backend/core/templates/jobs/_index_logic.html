@@ -141,6 +141,7 @@
   let currentSort = 'created_desc';
   let searchField = 'title_company';
   let searchText = '';
+  let activeLocationModel = 'v1';
 
   let modes = [];
   let cities = [];
@@ -386,9 +387,24 @@
   }
 
   function summarizeLocations(row) {
-    const locs = Array.isArray(row.locations) ? row.locations : [];
     const remote = row.RemoteType && row.RemoteType !== 'Unknown' ? row.RemoteType : '';
 
+    if (activeLocationModel === 'v2') {
+      const locsV2 = Array.isArray(row.locationsV2) ? row.locationsV2 : [];
+      if (!locsV2.length) return `·&nbsp;&nbsp;${remote}` || '';
+      const parts = locsV2.slice(0, 4).map((loc) => {
+        const name = String(loc.displayName || '').trim();
+        const code = String(loc.countryCode || '').trim().toUpperCase();
+        if (!name) return code;
+        if (code && (loc.kind === 'city' || loc.kind === 'adminRegion')) return `${code}: ${name}`;
+        return name;
+      }).filter(Boolean);
+      if (locsV2.length > 4) parts.push('…');
+      const geo = parts.join('; ');
+      return remote ? `·&nbsp;&nbsp;${geo} · ${remote}` : `·&nbsp;&nbsp;${geo}`;
+    }
+
+    const locs = Array.isArray(row.locations) ? row.locations : [];
     if (!locs.length) return `·&nbsp;&nbsp;${remote}` || '';
 
     const byCountry = new Map();
@@ -611,6 +627,7 @@
       }
 
       const items = Array.isArray(data.items) ? data.items : [];
+      activeLocationModel = data.activeLocationModel === 'v2' ? 'v2' : 'v1';
       total = Number(data.total || 0);
 
       if (dbgJobs) {

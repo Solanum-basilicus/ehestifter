@@ -10,6 +10,11 @@ from helpers.history import insert_history
 from helpers.validation import validate_job_payload
 from helpers.url_helpers import deduce_from_url
 from helpers.analytics import emit_jobs_event, correlation_id_from_request
+from helpers.locations_v2 import load_locations_v2_catalog
+from helpers.locations_v2_store import (
+    replace_native_locations_v2,
+    replace_work_time_constraints_v2,
+)
 
 
 def _analytics_provider_props_from_meta(meta: dict) -> dict:
@@ -261,6 +266,15 @@ def create_job_record(req: func.HttpRequest, cur, data: dict, analytics_meta: di
 
     if locations:
         _insert_locations_idempotently(cur, job_id, locations)
+
+    # Locations v1 and v2 writes are independent. Do not create a rollback
+    # projection when the caller supplies only Locations v2.
+    if "locationsV2" in data:
+        catalog = load_locations_v2_catalog()
+        replace_native_locations_v2(cur, catalog, job_id, data["locationsV2"])
+
+    if "workTimeConstraintsV2" in data:
+        replace_work_time_constraints_v2(cur, job_id, data["workTimeConstraintsV2"])
 
     insert_history(cur, job_id, "job_created", {"jobId": job_id}, actor_type, actor_id)
     return normalize_guid(str(job_id))

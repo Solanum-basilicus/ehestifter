@@ -160,21 +160,34 @@ class LocationsV2Catalog:
             return LegacyProjection(source_id, requested_level, "adminRegion", admin)
         return LegacyProjection(source_id, requested_level, "country", country)
 
+    def get_location(self, kind: str, location_id: str) -> dict | None:
+        item = self.by_id.get(_clean(location_id))
+        if item is None or item.get("kind") != kind:
+            return None
+        return item
+
+    def facts_for_location(self, location: dict) -> list[tuple[str, str]]:
+        facts = {(location["kind"], location["id"])}
+        for ancestor_id in location.get("ancestors", []):
+            ancestor = self.by_id.get(ancestor_id)
+            if ancestor:
+                facts.add((ancestor["kind"], ancestor["id"]))
+        return sorted(facts)
+
     def facts_for(self, direct_locations: Iterable[dict]) -> list[tuple[str, str]]:
         facts: set[tuple[str, str]] = set()
         for location in direct_locations:
-            facts.add((location["kind"], location["id"]))
-            for ancestor_id in location.get("ancestors", []):
-                ancestor = self.by_id.get(ancestor_id)
-                if ancestor:
-                    facts.add((ancestor["kind"], ancestor["id"]))
+            facts.update(self.facts_for_location(location))
         return sorted(facts)
+
+    def utc_offsets_for_location(self, location: dict) -> list[int]:
+        return sorted({int(offset) for offset in location.get("utcOffsets", [])})
 
     def utc_offsets_for(self, direct_locations: Iterable[dict]) -> list[int]:
         offsets = {
-            int(offset)
+            offset
             for location in direct_locations
-            for offset in location.get("utcOffsets", [])
+            for offset in self.utc_offsets_for_location(location)
         }
         return sorted(offsets)
 
@@ -220,25 +233,36 @@ def project_legacy_locations(catalog: LocationsV2Catalog, rows: list[dict]) -> d
         elif source_id is not None and (existing[1] is None or source_id < existing[1]):
             direct_by_key[key] = (direct, source_id)
 
-    direct = [value[0] for value in direct_by_key.values()]
-    direct_rows = [
-        {
+    sorted_direct = sorted(
+        direct_by_key.values(),
+        key=lambda value: (value[0]["kind"], value[0]["id"]),
+    )
+    direct = [value[0] for value in sorted_direct]
+    direct_rows = []
+    branches = []
+    for item, source_id in sorted_direct:
+        direct_row = {
             "kind": item["kind"],
             "locationId": item["id"],
             "displayName": item["name"],
             "countryCode": item.get("countryCode"),
             "sourceLocationV1Id": source_id,
         }
-        for item, source_id in sorted(
-            direct_by_key.values(),
-            key=lambda value: (value[0]["kind"], value[0]["id"]),
-        )
-    ]
+        direct_rows.append(direct_row)
+        branches.append({
+            "direct": direct_row,
+            "facts": catalog.facts_for_location(item),
+            "utcOffsets": catalog.utc_offsets_for_location(item),
+        })
 
     return {
         "direct": direct_rows,
+        "branches": branches,
+        # Keep aggregate values for diagnostics and compatibility with issue #20 tests.
         "facts": catalog.facts_for(direct),
         "utcOffsets": catalog.utc_offsets_for(direct),
+        "branchFactCount": sum(len(branch["facts"]) for branch in branches),
+        "branchUtcOffsetCount": sum(len(branch["utcOffsets"]) for branch in branches),
         "sourceCount": len(rows),
         "unresolvedCount": sum(1 for item in projections if item.direct_location is None),
         "fallbackCount": sum(1 for item in projections if item.is_fallback),

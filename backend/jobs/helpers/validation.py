@@ -62,4 +62,40 @@ def validate_job_payload(data: dict, for_update=False) -> (bool, str):
             if "cityName" in loc and loc["cityName"] is not None and not isinstance(loc["cityName"], str):
                 return False, f"locations[{i}].cityName must be a string"
 
+    # Locations v2 validation. Canonical ID existence is checked against the
+    # local catalog in the persistence layer.
+    locs_v2 = data.get("locationsV2")
+    if locs_v2 is not None:
+        if not isinstance(locs_v2, list):
+            return False, "locationsV2 must be an array"
+        for i, loc in enumerate(locs_v2):
+            if not isinstance(loc, dict):
+                return False, f"locationsV2[{i}] must be an object"
+            kind = loc.get("kind")
+            if kind not in {"city", "adminRegion", "country", "globalRegion"}:
+                return False, f"locationsV2[{i}].kind is invalid"
+            location_id = loc.get("locationId")
+            if not isinstance(location_id, str) or not location_id.strip():
+                return False, f"locationsV2[{i}].locationId is required"
+            if len(location_id) > 64:
+                return False, f"locationsV2[{i}].locationId exceeds max length (64)"
+
+    work_time = data.get("workTimeConstraintsV2")
+    if work_time is not None:
+        if not isinstance(work_time, list):
+            return False, "workTimeConstraintsV2 must be an array"
+        for i, item in enumerate(work_time):
+            if not isinstance(item, dict):
+                return False, f"workTimeConstraintsV2[{i}] must be an object"
+            start = item.get("offsetRangeStartMinutes")
+            end = item.get("offsetRangeEndMinutes")
+            if isinstance(start, bool) or not isinstance(start, int):
+                return False, f"workTimeConstraintsV2[{i}].offsetRangeStartMinutes must be an integer"
+            if isinstance(end, bool) or not isinstance(end, int):
+                return False, f"workTimeConstraintsV2[{i}].offsetRangeEndMinutes must be an integer"
+            if start < -840 or start > 840 or end < -840 or end > 840:
+                return False, f"workTimeConstraintsV2[{i}] offsets must be between -840 and 840 minutes"
+            if start > end:
+                return False, f"workTimeConstraintsV2[{i}] start must not be greater than end"
+
     return True, ""

@@ -4,7 +4,7 @@
 _ALLOWED = {
     "url", "title", "hiringCompanyName", "postingCompanyName",
     "foundOn", "provider", "providerTenant", "atsVendor", "externalId",
-    "remoteType", "description", "locations"
+    "remoteType", "description", "locations", "locationsV2", "workTimeConstraintsV2"
 }
 
 # Fields that must be treated read-only in EDIT mode (client also disables them)
@@ -32,7 +32,7 @@ def clean_job_payload(body: dict, *, for_update: bool = False) -> dict:
             continue
 
         if k == "locations":
-            # accept list of dicts with keys: countryName, countryCode, cityName, region
+            # Keep an explicit empty list on update so the caller can clear v1.
             if isinstance(v, list):
                 locs = []
                 for item in v:
@@ -44,8 +44,33 @@ def clean_job_payload(body: dict, *, for_update: bool = False) -> dict:
                         "cityName": (item.get("cityName") or None),
                         "region": (item.get("region") or None),
                     })
-                if locs:
-                    out[k] = locs
+                out[k] = locs
+            continue
+
+        if k == "locationsV2":
+            # The UI does not resolve canonical IDs in issue #21. Pass through
+            # canonical selections supplied by a later selector implementation.
+            if isinstance(v, list):
+                out[k] = [
+                    {
+                        "kind": (item.get("kind") or "").strip(),
+                        "locationId": (item.get("locationId") or "").strip(),
+                    }
+                    for item in v
+                    if isinstance(item, dict)
+                ]
+            continue
+
+        if k == "workTimeConstraintsV2":
+            if isinstance(v, list):
+                out[k] = [
+                    {
+                        "offsetRangeStartMinutes": item.get("offsetRangeStartMinutes"),
+                        "offsetRangeEndMinutes": item.get("offsetRangeEndMinutes"),
+                    }
+                    for item in v
+                    if isinstance(item, dict)
+                ]
             continue
 
         out[k] = v.strip() if isinstance(v, str) else v

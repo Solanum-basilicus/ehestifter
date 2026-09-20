@@ -6,6 +6,7 @@ import azure.functions as func
 from helpers.db import get_connection
 from helpers.ids import is_guid, normalize_guid
 from helpers.locations_v2 import load_locations_v2_catalog, project_legacy_locations
+from helpers.locations_v2_store import replace_legacy_projection_v2
 
 
 DEFAULT_LIMIT = 100
@@ -33,81 +34,6 @@ def _parse_limit(value) -> int:
         raise ValueError(f"limit must be between 1 and {MAX_LIMIT}")
     return value
 
-
-def _replace_job_projection(cur, catalog, job_id: str, projection: dict) -> None:
-    # A row without SourceLocationV1Id is reserved for native Locations v2 data.
-    # The transitional v1 backfill must not overwrite a native v2 projection.
-    cur.execute(
-        """
-        SELECT COUNT(*)
-        FROM dbo.JobOfferingLocationsV2
-        WHERE JobOfferingId = ?
-          AND SourceLocationV1Id IS NULL
-        """,
-        (job_id,),
-    )
-    if int(cur.fetchone()[0] or 0) > 0:
-        raise RuntimeError("native_v2_projection_exists")
-
-    cur.execute("DELETE FROM dbo.JobOfferingLocationUtcOffsetsV2 WHERE JobOfferingId = ?", (job_id,))
-    cur.execute("DELETE FROM dbo.JobOfferingLocationFactsV2 WHERE JobOfferingId = ?", (job_id,))
-    cur.execute("DELETE FROM dbo.JobOfferingLocationsV2 WHERE JobOfferingId = ?", (job_id,))
-
-    if projection["direct"]:
-        cur.fast_executemany = True
-        cur.executemany(
-            """
-            INSERT INTO dbo.JobOfferingLocationsV2 (
-                JobOfferingId,
-                LocationKind,
-                LocationId,
-                DisplayName,
-                CountryCode,
-                SourceLocationV1Id,
-                CatalogVersion
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                (
-                    job_id,
-                    row["kind"],
-                    row["locationId"],
-                    row["displayName"],
-                    row["countryCode"],
-                    row["sourceLocationV1Id"],
-                    catalog.catalog_version,
-                )
-                for row in projection["direct"]
-            ],
-        )
-
-    if projection["facts"]:
-        cur.fast_executemany = True
-        cur.executemany(
-            """
-            INSERT INTO dbo.JobOfferingLocationFactsV2 (
-                JobOfferingId,
-                LocationKind,
-                LocationId
-            )
-            VALUES (?, ?, ?)
-            """,
-            [(job_id, kind, location_id) for kind, location_id in projection["facts"]],
-        )
-
-    if projection["utcOffsets"]:
-        cur.fast_executemany = True
-        cur.executemany(
-            """
-            INSERT INTO dbo.JobOfferingLocationUtcOffsetsV2 (
-                JobOfferingId,
-                UtcOffsetMinutes
-            )
-            VALUES (?, ?)
-            """,
-            [(job_id, offset) for offset in projection["utcOffsets"]],
-        )
 
 
 def register(app: func.FunctionApp):
@@ -215,13 +141,13 @@ def register(app: func.FunctionApp):
                     continue
 
                 if not dry_run:
-                    _replace_job_projection(cur, catalog, job_id, projection)
+                    replace_legacy_projection_v2(cur, catalog, job_id, projection)
 
                 stats["processedJobs"] += 1
                 stats["sourceLocations"] += projection["sourceCount"]
                 stats["directLocations"] += len(projection["direct"])
-                stats["facts"] += len(projection["facts"])
-                stats["utcOffsets"] += len(projection["utcOffsets"])
+                stats["facts"] += projection["branchFactCount"]
+                stats["utcOffsets"] += projection["branchUtcOffsetCount"]
                 stats["fallbackSourceLocations"] += projection["fallbackCount"]
                 stats["unresolvedSourceLocations"] += projection["unresolvedCount"]
 

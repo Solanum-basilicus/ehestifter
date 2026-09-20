@@ -598,20 +598,19 @@ Reason:
 Presentation behavior:
 - domain concatenates/combines these before returning user-facing DTOs.
 
-#### Locations v2 additive foundation
+#### Locations v2
 
-Issue #20 adds a parallel Locations v2 model without changing current reads or writes.
-The detailed contract is in `docs/locations-v2.md`.
+Issues #20 and #21 add the canonical Locations v2 model and native Jobs support. The detailed contract is in `docs/locations-v2.md`.
 
-Additive tables:
+Tables:
 - `dbo.JobOfferingLocationsV2` stores direct canonical geographic claims;
-- `dbo.JobOfferingLocationFactsV2` stores upward geographic facts for indexed matching;
-- `dbo.JobOfferingLocationUtcOffsetsV2` stores derived geographic UTC offsets;
-- `dbo.JobOfferingWorkTimeConstraintsV2` stores only explicit work-time offset ranges.
+- `dbo.JobOfferingLocationFactsV2` stores upward geographic facts for each direct location branch;
+- `dbo.JobOfferingLocationUtcOffsetsV2` stores derived geographic UTC offsets for each direct branch;
+- `dbo.JobOfferingWorkTimeConstraintsV2` stores only explicit job-level work-time offset ranges.
 
 Canonical IDs use GeoNames for cities and first-level administrative regions, ISO 3166 alpha-2 for countries, and UN M49 for geographic regions. The generated catalog is local reference data; runtime services do not call public geography services.
 
-Locations v1 remains authoritative until the controlled switch in issue #21. Missing or unresolved v2 geography is valid and must not be guessed into a location.
+Jobs accepts v1-only, v2-only, and mixed payloads. It does not shadow-write one representation from the other. The `LOCATIONS_ACTIVE_MODEL` app setting selects `v1` or `v2` for location-dependent reads and filters. The safe default is `v1`. Missing v2 geography is valid and must not be guessed into a location.
 
 #### `dbo.CompatibilityScores`
 
@@ -880,7 +879,7 @@ Jobs domain owns:
 - status progression per user,
 - job history,
 - location storage and presentation,
-- the additive Locations v2 canonical projection and migration endpoint,
+- Locations v2 storage, branch-aware query facts, native API contracts, and migration endpoint,
 - compatibility score storage and exposure,
 - user-specific shaping of job lists and details,
 - emitting safe web-originated Jobs analytics events after successful owner-domain writes.
@@ -1007,6 +1006,7 @@ A user may have:
 | `POST /jobs` | create job |
 | `GET/HEAD /jobs/exists` | duplicate warning on create |
 | `GET /jobs` | list jobs with category/filter/search/pagination |
+| `POST /jobs/open/query` | Open Opportunities query with request-supplied canonical v2 eligibility |
 | `PUT /jobs/{id}` | update editable job fields |
 | `DELETE /jobs/{id}` | logical delete |
 | `GET /jobs/{id:guid}` | detailed job view |
