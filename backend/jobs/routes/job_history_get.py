@@ -1,9 +1,26 @@
 import json
 import logging
 import azure.functions as func
+from helpers.auth import UnauthorizedError, get_current_user_id
 from helpers.db import get_connection
 from helpers.ids import normalize_guid, is_guid
 from helpers.history import make_history_cursor, parse_history_cursor
+
+
+_HISTORY_VISIBILITY_SQL = """
+                      AND (
+                            Action IN ('job_created', 'job_updated', 'job_deleted')
+                            OR (ActorType = 'user' AND ActorId = ?)
+                            OR (
+                                ActorType = 'system'
+                                AND JSON_VALUE(
+                                    CASE WHEN ISJSON(Details) = 1 THEN Details ELSE NULL END,
+                                    '$.data.userId'
+                                ) = ?
+                            )
+                      )
+"""
+
 
 def register(app: func.FunctionApp):
 
@@ -15,10 +32,14 @@ def register(app: func.FunctionApp):
         job_id = normalize_guid(job_id_raw)
 
         try:
+            user_id = get_current_user_id(req)
+        except UnauthorizedError as exc:
+            return func.HttpResponse(str(exc), status_code=401)
+
+        try:
             limit = int(req.params.get("limit", 50))
         except ValueError:
             return func.HttpResponse("Invalid 'limit'", status_code=400)
-            # clamp
         limit = max(1, min(limit, 200))
 
         cur_token = req.params.get("cursor")
@@ -38,22 +59,24 @@ def register(app: func.FunctionApp):
                 return func.HttpResponse("Job not found", status_code=404)
 
             if after_ts is None:
-                cur.execute("""
+                cur.execute(f"""
                     SELECT Id, JobOfferingId, Timestamp, ActorType, ActorId, Action, Details
                     FROM dbo.JobOfferingHistory
                     WHERE JobOfferingId = ?
+                    {_HISTORY_VISIBILITY_SQL}
                     ORDER BY Timestamp DESC, Id DESC
                     OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY
-                """, (job_id, limit))
+                """, (job_id, user_id, user_id, limit))
             else:
-                cur.execute("""
+                cur.execute(f"""
                     SELECT Id, JobOfferingId, Timestamp, ActorType, ActorId, Action, Details
                     FROM dbo.JobOfferingHistory
                     WHERE JobOfferingId = ?
+                    {_HISTORY_VISIBILITY_SQL}
                       AND (Timestamp < ? OR (Timestamp = ? AND Id < ?))
                     ORDER BY Timestamp DESC, Id DESC
                     OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY
-                """, (job_id, after_ts, after_ts, after_id, limit))
+                """, (job_id, user_id, user_id, after_ts, after_ts, after_id, limit))
 
             rows = cur.fetchall()
             items = []
@@ -67,10 +90,10 @@ def register(app: func.FunctionApp):
                 except Exception:
                     d = None
                 items.append({
-                    "id": normalize_guid(rid), 
+                    "id": normalize_guid(rid),
                     "jobId": normalize_guid(rjob),
                     "timestamp": rts.isoformat(),
-                    "actorType": at, 
+                    "actorType": at,
                     "actorId": normalize_guid(aid) if aid else None,
                     "kind": act,
                     "data": d.get("data") if isinstance(d, dict) and "data" in d else None,

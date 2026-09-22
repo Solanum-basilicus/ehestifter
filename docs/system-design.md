@@ -573,8 +573,12 @@ Current behavior:
 - entry added on status update,
 - enrichment runs are not currently journaled here.
 
-Note:
-- history visibility is filtered so one user does not see irrelevant status entries for another user.
+History visibility:
+- `job_created`, `job_updated`, and `job_deleted` are shared lifecycle events,
+- a user event is visible only when `ActorId` is the current user,
+- a system event is visible only when `Details.data.userId` is the current user,
+- other system events without an identifiable user are hidden,
+- filtering happens before history pagination.
 
 #### `dbo.UserJobStatus`
 
