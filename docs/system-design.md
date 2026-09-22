@@ -227,7 +227,7 @@ These are not current goals and agents should not optimize for them unless expli
 
 Browser users authenticate through Azure AD B2C / Entra ID.
 
-The authenticated session is stored in Flask session cookie state in `backend/core`. There is no persistent session storage for this. On app restart, the session must be re-established.
+`backend/core` uses Flask-Session with a server-side filesystem session store. The browser cookie contains the session identifier, not the full authentication state. In Azure App Service, Core stores session files under `/home/data/ehestifter-core-sessions`, so valid sessions can survive app restarts and free-tier spin-down/start cycles. Outside App Service, the existing local `flask_session` directory remains the default. `SESSION_FILE_DIR` can override the directory for another host or test setup.
 
 ### 4.2 Internal service authentication
 
