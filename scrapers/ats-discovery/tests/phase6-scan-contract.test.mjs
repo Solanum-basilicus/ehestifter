@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { parseDiscoveryPolicy } from '../src/policy/discovery-policy.mjs';
-import { runTrackedScan } from '../src/scan/tracked-source.mjs';
+import { admitCandidatesFairly, runTrackedScan } from '../src/scan/tracked-source.mjs';
 
 function policy() {
   return parseDiscoveryPolicy({
@@ -118,7 +118,7 @@ test('candidate matcher errors reject one candidate without aborting the provide
   assert.equal(result.rejected[0].reason, 'user_match_error');
 });
 
-test('scope-only multi-user mode bypasses legacy portal preference filters but preserves scope and age safety', async () => {
+test('multi-user mode bypasses all legacy portal preference filters but preserves age safety', async () => {
   const target = makeTarget([
     {
       ...job(1),
@@ -164,8 +164,7 @@ test('scope-only multi-user mode bypasses legacy portal preference filters but p
     }),
   });
 
-  assert.equal(result.candidates.length, 1);
-  assert.equal(result.candidates[0].url.endsWith('/1'), true);
+  assert.equal(result.candidates.length, 2);
   assert.equal(
     result.rejected.some((item) => item.reason === 'title_filter'),
     false,
@@ -183,8 +182,8 @@ test('scope-only multi-user mode bypasses legacy portal preference filters but p
     false,
   );
   assert.equal(
-    result.rejected.filter((item) => item.reason === 'location_scope_filter').length,
-    1,
+    result.rejected.some((item) => item.reason === 'location_scope_filter'),
+    false,
   );
 });
 
@@ -203,4 +202,62 @@ test('portal candidate filter switch is strictly boolean', async () => {
     }),
     /applyPortalCandidateFilters must be a boolean/,
   );
+});
+
+
+test('fair admission prevents one broad user from consuming all candidate slots', () => {
+  const A = '11111111-1111-4111-8111-111111111111';
+  const B = '22222222-2222-4222-8222-222222222222';
+  const C = '33333333-3333-4333-8333-333333333333';
+  const candidates = [
+    ...Array.from({ length: 10 }, (_, index) => ({ url: `a${index}`, sourceMode: 'catalog', matchedUserIds: [A] })),
+    { url: 'b', sourceMode: 'catalog', matchedUserIds: [B] },
+    { url: 'c', sourceMode: 'catalog', matchedUserIds: [C] },
+  ];
+  const result = admitCandidatesFairly(candidates, 3, { fairnessSeed: 'run' });
+  const served = new Set(result.retained.flatMap((item) => item.matchedUserIds));
+  assert.deepEqual(served, new Set([A, B, C]));
+  assert.equal(result.stats.usersStarvedByCandidateCap, 0);
+});
+
+test('fair admission prefers priority candidates inside each user queue', () => {
+  const A = '11111111-1111-4111-8111-111111111111';
+  const B = '22222222-2222-4222-8222-222222222222';
+  const candidates = [
+    { url: 'a-catalog', sourceMode: 'catalog', matchedUserIds: [A] },
+    { url: 'a-priority', sourceMode: 'priority', matchedUserIds: [A] },
+    { url: 'b', sourceMode: 'catalog', matchedUserIds: [B] },
+  ];
+  const result = admitCandidatesFairly(candidates, 2, { fairnessSeed: 'run' });
+  assert.equal(result.retained.some((item) => item.url === 'a-priority'), true);
+  assert.equal(result.retained.some((item) => item.url === 'b'), true);
+});
+
+test('fair admission order is kept for downstream create limits', () => {
+  const A = '11111111-1111-4111-8111-111111111111';
+  const B = '22222222-2222-4222-8222-222222222222';
+  const C = '33333333-3333-4333-8333-333333333333';
+  const candidates = [
+    ...Array.from({ length: 5 }, (_, index) => ({ url: `a${index}`, sourceMode: 'catalog', matchedUserIds: [A] })),
+    { url: 'b', sourceMode: 'catalog', matchedUserIds: [B] },
+    { url: 'c', sourceMode: 'catalog', matchedUserIds: [C] },
+  ];
+  const result = admitCandidatesFairly(candidates, 3, { fairnessSeed: 'run' });
+  assert.deepEqual(
+    new Set(result.retained.slice(0, 3).flatMap((item) => item.matchedUserIds)),
+    new Set([A, B, C]),
+  );
+});
+
+test('shared candidate serves all matched users in the same fairness round', () => {
+  const A = '11111111-1111-4111-8111-111111111111';
+  const B = '22222222-2222-4222-8222-222222222222';
+  const candidates = [
+    { url: 'shared', sourceMode: 'priority', matchedUserIds: [A, B] },
+    { url: 'a-only', sourceMode: 'catalog', matchedUserIds: [A] },
+    { url: 'b-only', sourceMode: 'catalog', matchedUserIds: [B] },
+  ];
+  const result = admitCandidatesFairly(candidates, 2, { fairnessSeed: 'run' });
+  assert.equal(result.retained[0].url, 'shared');
+  assert.equal(result.retained.length, 2);
 });

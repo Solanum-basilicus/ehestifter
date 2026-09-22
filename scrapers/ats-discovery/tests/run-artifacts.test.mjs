@@ -322,8 +322,8 @@ test('Phase 6 artifacts and summary expose bounded user matching and compatibili
     },
     evaluated: [],
     discoveryUsers: [
-      { hasSavedFilters: false, profiles: [] },
-      { hasSavedFilters: true, profiles: [] },
+      { userId: 'u1', discoveryStatus: 'enabled' },
+      { userId: 'u2', discoveryStatus: 'disabled_no_positive_title' },
     ],
     userMatchResults: { matches: [{}] },
     compatibilityResults: {
@@ -387,7 +387,7 @@ test('Phase 6 summary reports Users API failure without pretending multi-user is
   assert.equal(summary.multiUserEnabled, true);
   assert.equal(summary.discoveryUsersLoadStatus, 'error');
   assert.equal(summary.discoveryUsersEligible, 0);
-  assert.equal(summary.discoveryUsersWithSavedFilters, 0);
+  assert.equal(summary.discoveryUsersWithSavedFilters, null);
   assert.equal(summary.targetsSkippedNoEligibleUsers, 12);
 });
 

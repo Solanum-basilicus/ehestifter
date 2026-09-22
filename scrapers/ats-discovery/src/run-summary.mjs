@@ -426,17 +426,20 @@ export function buildRunSummary({
     discoveryUsersEligible: multiUserEnabled
       ? discoveryUsers?.length ?? 0
       : null,
-    discoveryUsersWithSavedFilters: multiUserEnabled
-      ? count(discoveryUsers ?? [], (user) => user.hasSavedFilters)
+    discoveryUsersEnabled: multiUserEnabled
+      ? count(discoveryUsers ?? [], (user) => user.discoveryStatus === 'enabled')
       : null,
-    discoveryUsersWithValidProfiles: multiUserEnabled
-      ? count(discoveryUsers ?? [], (user) => user.profiles.length > 0)
+    discoveryUsersDisabledNoPositiveTitle: multiUserEnabled
+      ? count(discoveryUsers ?? [], (user) => user.discoveryStatus === 'disabled_no_positive_title')
       : null,
+    discoveryUsersDisabledInvalidPreferences: multiUserEnabled
+      ? count(discoveryUsers ?? [], (user) => user.discoveryStatus === 'disabled_invalid_preferences')
+      : null,
+    // Kept for one transition release so existing run-summary readers do not fail.
+    discoveryUsersWithSavedFilters: null,
+    discoveryUsersWithValidProfiles: null,
     discoveryUsersFailingClosed: multiUserEnabled
-      ? count(
-        discoveryUsers ?? [],
-        (user) => user.hasSavedFilters && user.profiles.length === 0,
-      )
+      ? count(discoveryUsers ?? [], (user) => user.discoveryStatus !== 'enabled')
       : null,
     candidatesRejectedNoUserMatch: count(
       scanResult.rejected,
@@ -447,6 +450,28 @@ export function buildRunSummary({
       0,
     ),
     userMatchArtifactCandidates: userMatchResults?.matches.length ?? 0,
+    titleMatchedCandidatesBeforeCap: scanResult.candidateAdmission?.titleMatchedCandidatesBeforeCap ?? null,
+    userCandidateMatchesBeforeCap: scanResult.candidateAdmission?.userCandidateMatchesBeforeCap ?? null,
+    candidatesDroppedByCap: scanResult.candidateAdmission?.candidatesDroppedByCap ?? null,
+    usersAffectedByCandidateCap: scanResult.candidateAdmission?.usersAffectedByCandidateCap ?? null,
+    usersStarvedByCandidateCap: scanResult.candidateAdmission?.usersStarvedByCandidateCap ?? null,
+    candidateCapReached: scanResult.candidateAdmission?.candidateCapReached ?? null,
+    discoveryEligibilityWarnings: scanResult.discoveryEligibility?.warnings?.length ?? 0,
+    discoveryUserStats: multiUserEnabled
+      ? (discoveryUsers ?? []).map((user) => {
+        const admission = scanResult.candidateAdmission?.users?.find((item) => item.userId === user.userId);
+        return {
+          userId: user.userId,
+          status: user.discoveryStatus ?? 'unknown',
+          titleCandidatesMatched: admission?.titleCandidatesMatched ?? 0,
+          priorityTitleCandidatesMatched: admission?.priorityTitleCandidatesMatched ?? 0,
+          catalogTitleCandidatesMatched: admission?.catalogTitleCandidatesMatched ?? 0,
+          candidatesRetainedByCap: admission?.candidatesRetainedByCap ?? 0,
+          candidatesDroppedByCap: admission?.candidatesDroppedByCap ?? 0,
+          candidatesAfterGeography: scanResult.discoveryEligibility?.userCounts?.[user.userId] ?? 0,
+        };
+      })
+      : null,
 
     candidates: scanResult.candidates.length,
     priorityCandidates: count(

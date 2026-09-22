@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "scan": "node src/cli.mjs scan",
-    "test": "node --test"
+    "test": "node --test",
+    "locations-v2:refresh": "node scripts/refresh-locations-v2-snapshot.mjs",
+    "locations-v2:check": "node scripts/refresh-locations-v2-snapshot.mjs --check"
   },
   "dependencies": {
     "js-yaml": "^4.1.0"
@@ -14,4 +16,3 @@
     "node": ">=22"
   }
 }
-

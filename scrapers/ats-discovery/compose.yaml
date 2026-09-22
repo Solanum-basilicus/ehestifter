@@ -1,5 +1,6 @@
 services:
   ats-discovery:
+    cpus: 4
     build:
       context: .
     image: ehestifter/ats-discovery:local

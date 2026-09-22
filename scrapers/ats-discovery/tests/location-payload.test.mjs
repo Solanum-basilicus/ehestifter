@@ -62,3 +62,41 @@ test('payload rejects unresolved cities instead of guessing', () => {
     region: null,
   }]), { dictionary }), /Unknown city/u);
 });
+
+
+test('payload dual-writes legacy and native v2 location contracts', () => {
+  const input = candidate([{
+    countryName: 'Germany', countryCode: 'DE', cityName: 'Berlin', region: null,
+  }]);
+  input.locationsV2 = [{ kind: 'country', locationId: 'iso3166:DE' }];
+  input.workTimeConstraintsV2 = [{
+    offsetRangeStartMinutes: -300,
+    offsetRangeEndMinutes: -240,
+  }];
+  const v2Catalog = {
+    get(kind, locationId) {
+      return kind === 'country' && locationId === 'iso3166:DE'
+        ? { kind, id: locationId }
+        : null;
+    },
+  };
+  const payload = buildCreatePayload(input, { dictionary, v2Catalog });
+  assert.equal(payload.locations.length, 1);
+  assert.deepEqual(payload.locationsV2, [{ kind: 'country', locationId: 'iso3166:DE' }]);
+  assert.deepEqual(payload.workTimeConstraintsV2, [{
+    offsetRangeStartMinutes: -300,
+    offsetRangeEndMinutes: -240,
+  }]);
+});
+
+test('payload rejects invalid canonical v2 selectors', () => {
+  const input = candidate([]);
+  input.locationsV2 = [{ kind: 'country', locationId: 'iso3166:ZZ' }];
+  assert.throws(
+    () => buildCreatePayload(input, {
+      dictionary,
+      v2Catalog: { get() { return null; } },
+    }),
+    /Invalid Locations v2 selector/u,
+  );
+});

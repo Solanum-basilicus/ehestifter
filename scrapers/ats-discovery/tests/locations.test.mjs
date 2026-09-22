@@ -658,7 +658,12 @@ test('customer country text does not refine a provider city', () => {
     }),
   ], { locationScopeFilter });
 
-  assert.deepEqual(result.locations, []);
+  assert.deepEqual(result.locations, [{
+    countryName: 'United States',
+    countryCode: 'US',
+    cityName: 'Dallas',
+    region: null,
+  }]);
 });
 
 test('partner country text does not refine a provider city', () => {
@@ -670,7 +675,12 @@ test('partner country text does not refine a provider city', () => {
     }),
   ], { locationScopeFilter });
 
-  assert.deepEqual(result.locations, []);
+  assert.deepEqual(result.locations, [{
+    countryName: 'United States',
+    countryCode: 'US',
+    cityName: 'Dallas',
+    region: null,
+  }]);
 });
 
 test('customer office text does not refine a provider city', () => {
@@ -682,7 +692,12 @@ test('customer office text does not refine a provider city', () => {
     }),
   ], { locationScopeFilter });
 
-  assert.deepEqual(result.locations, []);
+  assert.deepEqual(result.locations, [{
+    countryName: 'United States',
+    countryCode: 'US',
+    cityName: 'Dallas',
+    region: null,
+  }]);
 });
 
 test('unrelated country text does not refine a candidate residence statement', () => {
@@ -694,7 +709,12 @@ test('unrelated country text does not refine a candidate residence statement', (
     }),
   ], { locationScopeFilter });
 
-  assert.deepEqual(result.locations, []);
+  assert.deepEqual(result.locations, [{
+    countryName: 'United States',
+    countryCode: 'US',
+    cityName: 'Dallas',
+    region: null,
+  }]);
 });
 
 test('excluded residence country does not refine a provider city', () => {
@@ -706,7 +726,12 @@ test('excluded residence country does not refine a provider city', () => {
     }),
   ], { locationScopeFilter });
 
-  assert.deepEqual(result.locations, []);
+  assert.deepEqual(result.locations, [{
+    countryName: 'United States',
+    countryCode: 'US',
+    cityName: 'Dallas',
+    region: null,
+  }]);
 });
 
 test('country scope with a local exception can refine a provider city', () => {
@@ -806,14 +831,10 @@ test('required Pacific Time work hours are retained as future filter evidence', 
   assert.equal(result.workTimeConstraints.observations[0].strength, 'required');
 });
 
-test('German district qualifiers resolve into scanner-owned regions', () => {
+test('non-canonical German district qualifiers stay unresolved', () => {
   const result = normalizeRawLocation('Landkreis München');
-  assert.deepEqual(result.locations, [{
-    countryName: 'Germany',
-    countryCode: 'DE',
-    cityName: null,
-    region: 'Landkreis München',
-  }]);
+  assert.deepEqual(result.locations, []);
+  assert.equal(result.status, 'unparsed_single_value');
 });
 
 test('bare PT is recorded only when a work-hours context is present', () => {

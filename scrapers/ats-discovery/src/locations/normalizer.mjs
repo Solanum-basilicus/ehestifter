@@ -4,6 +4,7 @@ import {
   resolveAdministrativeRegion,
 } from './administrative-regions.mjs';
 import { extractWorkTimeConstraints } from './work-time-constraints.mjs';
+import { getDefaultLocationsV2Catalog } from './locations-v2-catalog.mjs';
 
 const NON_CITY_VALUES = new Set([
   'remote', 'fully remote', 'remote first', 'distributed', 'hybrid',
@@ -255,6 +256,20 @@ function parseSegment(segment, dictionary, source) {
   const locations = [];
   const unresolved = [];
 
+  const localToMatch = raw.match(/\b(?:if\s+)?local\s+to\s+([^,;|/]{2,80})$/iu);
+  if (localToMatch) {
+    const region = resolveAdministrativeRegion(localToMatch[1], { allowAmbiguous: true });
+    if (region) {
+      const location = locationFromRegion(region, dictionary);
+      if (location) {
+        return {
+          observations: [{ source, raw, kind: 'region_country', status: 'resolved', location }],
+          locations: [location], unresolved, arrangement,
+        };
+      }
+    }
+  }
+
   if (cleaned === '' && arrangement) {
     return {
       observations: [{
@@ -306,6 +321,26 @@ function parseSegment(segment, dictionary, source) {
   }
 
   const commaParts = cleaned.split(/\s*,\s*/u).map(cleanText).filter(Boolean);
+  if (commaParts.length === 2) {
+    const [locality, qualifier] = commaParts;
+    const countryCandidate = dictionary.resolveCountry(qualifier);
+    const countryCity = countryCandidate
+      ? dictionary.resolveCity(locality, countryCandidate.countryCode)
+      : null;
+    const regionCandidate = /^[A-Z]{2}$/u.test(qualifier) && !countryCity
+      ? resolveAdministrativeRegion(qualifier, { countryCode: 'US' })
+      : resolveAdministrativeRegion(qualifier, { allowAmbiguous: true });
+    const regionCity = regionCandidate
+      ? dictionary.resolveCity(locality, regionCandidate.countryCode)
+      : null;
+    if (regionCity && !countryCity) {
+      const location = locationFromRegion(regionCandidate, dictionary, regionCity.cityName);
+      return {
+        observations: [{ source, raw, kind: 'city_region_country', status: 'resolved', location }],
+        locations: [location], unresolved: [], arrangement,
+      };
+    }
+  }
   const countries = commaParts
     .map((part, index) => ({ index, country: dictionary.resolveCountry(part) }))
     .filter((item) => item.country);
@@ -1118,10 +1153,29 @@ function assessEligibility(candidate, locations, consistency, evidence, scopeFil
   };
 }
 
+
+function v2ClaimsForCandidate(candidate, locations, catalog) {
+  const claims = [];
+  for (const location of locations) {
+    const item = catalog.canonicalFromLegacy(location);
+    if (item) claims.push(item);
+  }
+  claims.push(...catalog.broadScopeClaims(candidate.rawLocation));
+  claims.push(...catalog.broadScopeClaims(candidate.detailRawLocation));
+  for (const window of descriptionWindows(candidate.description)) {
+    if (!/\b(?:remote|work\s+from|hiring|eligible|candidates?|applicants?|location)\b/iu.test(window)) continue;
+    if (/\b(?:customer|client|partner|supplier|office\s+locations?)\b/iu.test(window)) continue;
+    claims.push(...catalog.broadScopeClaims(window));
+  }
+  const unique = new Map(claims.map((item) => [`${item.kind}\u0000${item.id}`, item]));
+  return [...unique.values()].map((item) => ({ kind: item.kind, locationId: item.id }));
+}
+
 export function normalizeCandidateLocations(
   candidates,
   {
     dictionary = getDefaultGeoDictionary(),
+    v2Catalog = getDefaultLocationsV2Catalog(),
     locationScopeFilter = null,
   } = {},
 ) {
@@ -1254,20 +1308,40 @@ export function normalizeCandidateLocations(
         status: 'resolved',
         arrangement: titleArrangement,
       }] : [];
+    let finalLocations = reconciled.locations;
+    if (finalLocations.length === 0 && remoteType === 'Remote') {
+      const rawLocality = stripLocalityQualifier(candidate.rawLocation);
+      if (rawLocality && !/[,;|/]/u.test(rawLocality)) {
+        const city = v2Catalog.resolveCityGlobal(rawLocality);
+        const legacyCountry = city ? dictionary.countryByCode(city.countryCode) : null;
+        if (city && legacyCountry) {
+          finalLocations = [{
+            countryName: legacyCountry.countryName,
+            countryCode: legacyCountry.countryCode,
+            cityName: city.name,
+            region: null,
+          }];
+        }
+      }
+    }
     const eligibility = assessEligibility(
       { ...candidate, remoteType },
-      reconciled.locations,
+      finalLocations,
       reconciled.consistency,
       eligibilityEvidence,
       activeScopeFilter,
       dictionary,
     );
     const workTimeConstraints = extractWorkTimeConstraints(candidate.description);
+    const locationsV2 = v2ClaimsForCandidate(candidate, finalLocations, v2Catalog);
+    const workTimeConstraintsV2 = workTimeConstraints.rangesV2 ?? [];
 
     return {
       ...candidate,
       remoteType,
-      locations: reconciled.locations,
+      locations: finalLocations,
+      locationsV2,
+      workTimeConstraintsV2,
       locationNormalization: {
         schemaVersion: 2,
         status: primary.status,

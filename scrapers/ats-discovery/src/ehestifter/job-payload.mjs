@@ -1,4 +1,5 @@
 import { getDefaultGeoDictionary } from '../locations/geo-dictionary.mjs';
+import { getDefaultLocationsV2Catalog } from '../locations/locations-v2-catalog.mjs';
 import { plainTextToSafeHtml } from '../text/html.mjs';
 
 function requiredString(value, name) {
@@ -85,11 +86,56 @@ function normalizeLocations(locations, dictionary = getDefaultGeoDictionary()) {
   return output;
 }
 
+
+function normalizeLocationsV2(locations, catalog = getDefaultLocationsV2Catalog()) {
+  if (!Array.isArray(locations)) return [];
+  const output = [];
+  const seen = new Set();
+  for (const location of locations) {
+    if (!location || typeof location !== 'object' || Array.isArray(location)) {
+      throw new Error('Each locationsV2 item must be an object');
+    }
+    const kind = location.kind;
+    const locationId = optionalString(location.locationId);
+    if (!locationId || !catalog.get(kind, locationId)) {
+      throw new Error(`Invalid Locations v2 selector: ${kind ?? 'unknown'}:${locationId ?? ''}`);
+    }
+    const key = `${kind}\u0000${locationId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push({ kind, locationId });
+  }
+  return output;
+}
+
+function normalizeWorkTimeConstraintsV2(value) {
+  if (!Array.isArray(value)) return [];
+  const output = [];
+  const seen = new Set();
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error('Each workTimeConstraintsV2 item must be an object');
+    }
+    const start = item.offsetRangeStartMinutes;
+    const end = item.offsetRangeEndMinutes;
+    if (!Number.isInteger(start) || !Number.isInteger(end)
+      || start < -840 || start > 840 || end < -840 || end > 840 || start > end) {
+      throw new Error('Invalid workTimeConstraintsV2 offset range');
+    }
+    const key = `${start}:${end}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push({ offsetRangeStartMinutes: start, offsetRangeEndMinutes: end });
+  }
+  return output;
+}
+
 export function buildCreatePayload(
   candidate,
   {
     requireDescription = true,
     dictionary = getDefaultGeoDictionary(),
+    v2Catalog = getDefaultLocationsV2Catalog(),
   } = {},
 ) {
   const identity = candidate.canonicalIdentity;
@@ -148,5 +194,7 @@ export function buildCreatePayload(
     description,
 
     locations: normalizeLocations(candidate.locations, dictionary),
+    locationsV2: normalizeLocationsV2(candidate.locationsV2, v2Catalog),
+    workTimeConstraintsV2: normalizeWorkTimeConstraintsV2(candidate.workTimeConstraintsV2),
   };
 }

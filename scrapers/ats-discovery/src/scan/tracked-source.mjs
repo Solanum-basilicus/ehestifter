@@ -162,6 +162,99 @@ function targetSinceMs(target, portalConfig, nowMs) {
     : undefined;
 }
 
+
+function stableHash(value) {
+  let hash = 2166136261;
+  for (const char of String(value)) {
+    hash ^= char.codePointAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+export function admitCandidatesFairly(candidates, maxCandidates, {
+  enabled = true,
+  fairnessSeed = '',
+} = {}) {
+  if (!enabled || candidates.length <= maxCandidates) {
+    return {
+      retained: candidates.slice(0, maxCandidates),
+      dropped: candidates.slice(maxCandidates),
+      stats: buildAdmissionStats(candidates, candidates.slice(0, maxCandidates)),
+    };
+  }
+
+  const users = [...new Set(candidates.flatMap((candidate) => candidate.matchedUserIds ?? []))]
+    .sort((left, right) => (
+      stableHash(`${fairnessSeed}\u0000${left}`) - stableHash(`${fairnessSeed}\u0000${right}`)
+      || left.localeCompare(right)
+    ));
+  const candidateOrder = new Map(candidates.map((candidate, index) => [candidate, index]));
+  const queues = new Map(users.map((userId) => [
+    userId,
+    candidates
+      .filter((candidate) => (candidate.matchedUserIds ?? []).includes(userId))
+      .sort((left, right) => (
+        (left.sourceMode === 'priority' ? 0 : 1) - (right.sourceMode === 'priority' ? 0 : 1)
+        || candidateOrder.get(left) - candidateOrder.get(right)
+      )),
+  ]));
+
+  const selected = new Set();
+  const retained = [];
+  while (selected.size < maxCandidates) {
+    const servedThisRound = new Set();
+    let progressed = false;
+    for (const userId of users) {
+      if (selected.size >= maxCandidates) break;
+      if (servedThisRound.has(userId)) continue;
+      const queue = queues.get(userId) ?? [];
+      const candidate = queue.find((item) => !selected.has(item));
+      if (!candidate) continue;
+      selected.add(candidate);
+      retained.push(candidate);
+      progressed = true;
+      for (const matchedUserId of candidate.matchedUserIds ?? []) {
+        servedThisRound.add(matchedUserId);
+      }
+    }
+    if (!progressed) break;
+  }
+
+  // Keep the fair admission order for preflight and import so later global
+  // create limits cannot undo the per-user distribution.
+  const retainedSet = new Set(retained);
+  const dropped = candidates.filter((candidate) => !retainedSet.has(candidate));
+  return { retained, dropped, stats: buildAdmissionStats(candidates, retained) };
+}
+
+function buildAdmissionStats(candidates, retained) {
+  const retainedSet = new Set(retained);
+  const userIds = [...new Set(candidates.flatMap((candidate) => candidate.matchedUserIds ?? []))].sort();
+  const users = userIds.map((userId) => {
+    const matches = candidates.filter((candidate) => (candidate.matchedUserIds ?? []).includes(userId));
+    const kept = matches.filter((candidate) => retainedSet.has(candidate));
+    return {
+      userId,
+      titleCandidatesMatched: matches.length,
+      priorityTitleCandidatesMatched: matches.filter((candidate) => candidate.sourceMode === 'priority').length,
+      catalogTitleCandidatesMatched: matches.filter((candidate) => candidate.sourceMode === 'catalog').length,
+      candidatesRetainedByCap: kept.length,
+      candidatesDroppedByCap: matches.length - kept.length,
+    };
+  });
+  return {
+    titleMatchedCandidatesBeforeCap: candidates.length,
+    userCandidateMatchesBeforeCap: users.reduce((sum, item) => sum + item.titleCandidatesMatched, 0),
+    candidatesRetained: retained.length,
+    candidatesDroppedByCap: candidates.length - retained.length,
+    usersAffectedByCandidateCap: users.filter((item) => item.candidatesDroppedByCap > 0).length,
+    usersStarvedByCandidateCap: users.filter((item) => item.titleCandidatesMatched > 0 && item.candidatesRetainedByCap === 0).length,
+    candidateCapReached: candidates.length > retained.length,
+    users,
+  };
+}
+
 export async function runTrackedScan({
   portalConfig,
   targets,
@@ -177,6 +270,7 @@ export async function runTrackedScan({
   onProgress = null,
   candidateMatcher = null,
   applyPortalCandidateFilters = true,
+  fairnessSeed = '',
 }) {
   if (!portalConfig || typeof portalConfig !== 'object' || Array.isArray(portalConfig)) {
     throw new Error('portalConfig must be an object');
@@ -330,15 +424,17 @@ export async function runTrackedScan({
           continue;
         }
       }
-      const locationScope = locationScopeFilter(candidate.rawLocation);
-      if (!locationScope.allowed) {
-        rejected.push(reject('location_scope_filter', candidate, {
-          reason: locationScope.reason,
-          allowedMatches: locationScope.allowedMatches,
-          blockedMatches: locationScope.blockedMatches,
-          markerMatches: locationScope.markerMatches ?? [],
-        }));
-        continue;
+      if (applyPortalCandidateFilters) {
+        const locationScope = locationScopeFilter(candidate.rawLocation);
+        if (!locationScope.allowed) {
+          rejected.push(reject('location_scope_filter', candidate, {
+            reason: locationScope.reason,
+            allowedMatches: locationScope.allowedMatches,
+            blockedMatches: locationScope.blockedMatches,
+            markerMatches: locationScope.markerMatches ?? [],
+          }));
+          continue;
+        }
       }
       if (applyPortalCandidateFilters && !locationFilter(candidate.rawLocation)) {
         rejected.push(reject('location_filter', candidate));
@@ -384,27 +480,40 @@ export async function runTrackedScan({
           matchedProfiles: Array.isArray(userMatch.matchedProfiles)
             ? userMatch.matchedProfiles
             : [],
+          matchedTitles: Array.isArray(userMatch.matchedTitles)
+            ? userMatch.matchedTitles
+            : [],
         };
       }
 
       const providerResult = resultBySequence.get(batch.target.sequence);
       providerResult.candidatesMatched += 1;
-      if (candidates.length < maxCandidates) {
-        candidates.push(candidate);
-        providerResult.candidatesRetained += 1;
-      } else {
-        providerResult.candidatesDroppedByCap += 1;
-        rejected.push(reject('candidate_cap', null, {
-          provider: batch.target.provider,
-          tenant: batch.target.tenant,
-          url: candidate.url,
-        }));
-      }
+      candidates.push(candidate);
     }
   }
 
+  const admission = admitCandidatesFairly(candidates, maxCandidates, {
+    enabled: candidateMatcher != null,
+    fairnessSeed,
+  });
+  for (const candidate of admission.retained) {
+    const result = resultBySequence.get(candidate.provenance?.targetSequence);
+    if (result) result.candidatesRetained += 1;
+  }
+  for (const candidate of admission.dropped) {
+    const result = resultBySequence.get(candidate.provenance?.targetSequence);
+    if (result) result.candidatesDroppedByCap += 1;
+    rejected.push(reject('candidate_cap', null, {
+      provider: candidate.sourceProvider,
+      tenant: candidate.sourceTenant,
+      url: candidate.url,
+      matchedUserIds: candidate.matchedUserIds ?? [],
+    }));
+  }
+
   return {
-    candidates,
+    candidates: admission.retained,
+    candidateAdmission: admission.stats,
     canaryCandidates,
     rejected,
     targetCount: targets.length,

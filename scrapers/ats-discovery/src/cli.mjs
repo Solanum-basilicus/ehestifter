@@ -25,6 +25,7 @@ import { repairLeverDescription } from './maintenance/repair-lever-description.m
 import { requestCompatibilityForMatches } from './ehestifter/request-compatibility.mjs';
 import { createUsersClient } from './ehestifter/users-client.mjs';
 import { normalizeCandidateLocations } from './locations/normalizer.mjs';
+import { applyDiscoveryEligibility } from './locations/discovery-eligibility.mjs';
 import { loadProviders } from './providers/_registry.mjs';
 import { makeHttpCtx } from './providers/_http.mjs';
 import { publishPrerequisiteFailureRun } from './prerequisite-failure-run.mjs';
@@ -248,7 +249,7 @@ async function runScan(args) {
     const discoveryExecution = selectDiscoveryExecutionTargets({
       runtimeTargets: planning.runtimeTargets,
       multiUserEnabled: config.multiUser.enabled,
-      discoveryUsers: discoveryMatcher?.users ?? [],
+      discoveryUsers: discoveryMatcher?.enabledUsers ?? [],
     });
     const { executionTargets, targetsSkippedNoEligibleUsers } = discoveryExecution;
 
@@ -267,22 +268,13 @@ async function runScan(args) {
       maxCandidates: config.scan.maxCandidatesPerRun,
       upstreamRef: config.careerOps.upstreamRef,
       candidateMatcher: discoveryMatcher?.matchCandidate ?? null,
-      applyPortalCandidateFilters: !config.multiUser.enabled
-        || config.multiUser.portalFiltersMode === 'global_gate',
+      applyPortalCandidateFilters: !config.multiUser.enabled,
+      fairnessSeed: runId,
       onProgress: (event) => progress.update({
         ...event,
         detail: progressDetail(event),
       }),
     });
-
-    failureStage = 'user_match_artifact';
-    userMatchResults = discoveryMatcher
-      ? buildUserMatchArtifact({
-        discoveryMatcher,
-        candidates: scanResult.candidates,
-        rejected: scanResult.rejected,
-      })
-      : null;
 
     let canaryDetailResults = null;
     if (scanResult.canaryCandidates.length > 0) {
@@ -373,10 +365,45 @@ async function runScan(args) {
       locationResults = normalizeCandidateLocations(
         detailResults ?? preflightResults,
         {
-          locationScopeFilter: planning.portalConfig.location_scope_filter,
+          locationScopeFilter: config.multiUser.enabled
+            ? null
+            : planning.portalConfig.location_scope_filter,
         },
       );
+      if (config.multiUser.enabled && discoveryMatcher) {
+        failureStage = 'discovery_location_filter';
+        const eligibilityResult = applyDiscoveryEligibility(
+          locationResults,
+          discoveryMatcher.users,
+        );
+        locationResults = eligibilityResult.candidates;
+        scanResult.rejected.push(...eligibilityResult.rejected.map((candidate) => ({
+          reason: 'no_user_location_match',
+          candidate,
+          details: { matchedUserIdsBeforeLocation: candidate.userMatch?.geography?.map((item) => item.userId) ?? [] },
+        })));
+        for (const warning of eligibilityResult.warnings) {
+          console.warn(
+            `[ats-discovery] ignored invalid discovery location selector `
+            + `userId=${warning.userId} field=${warning.field} `
+            + `kind=${warning.kind ?? 'unknown'} locationId=${warning.locationId ?? 'unknown'}`,
+          );
+        }
+        scanResult.discoveryEligibility = {
+          warnings: eligibilityResult.warnings,
+          userCounts: eligibilityResult.userCounts,
+        };
+      }
     }
+
+    failureStage = 'user_match_artifact';
+    userMatchResults = discoveryMatcher
+      ? buildUserMatchArtifact({
+        discoveryMatcher,
+        candidates: locationResults ?? scanResult.candidates,
+        rejected: scanResult.rejected,
+      })
+      : null;
 
     if (args.mode === 'import') {
       failureStage = 'import';
@@ -509,7 +536,7 @@ async function runScan(args) {
         discoveryUsersStatus: !config.multiUser.enabled
           ? 'disabled'
           : discoveryUsersError == null ? 'ok' : 'error',
-        eligibleDiscoveryUsers: discoveryMatcher?.users.length ?? null,
+        eligibleDiscoveryUsers: discoveryMatcher?.enabledUsers.length ?? null,
         portalFiltersMode: config.multiUser.enabled
           ? config.multiUser.portalFiltersMode
           : null,

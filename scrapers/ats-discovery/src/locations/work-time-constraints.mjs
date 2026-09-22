@@ -74,7 +74,8 @@ function windows(description) {
 
 function scheduleContext(text) {
   return /\b(?:work|working|business|office|team|core)\s+hours?\b/iu.test(text)
-    || /\b(?:available|availability|active|online|overlap|schedule|timezone|time\s+zone)\b/iu.test(text);
+    || /\b(?:available|availability|active|online|overlap|schedule|timezone|time\s+zone)\b/iu.test(text)
+    || /\b(?:time|timezone)\s+hours?\b/iu.test(text);
 }
 
 function strength(text) {
@@ -83,6 +84,39 @@ function strength(text) {
   }
   if (/\b(?:preferred|ideally|nice\s+to\s+have)\b/iu.test(text)) return 'preferred';
   return 'stated';
+}
+
+
+const V2_TERM_RANGES = Object.freeze([
+  ['Pacific Time', -480, -420], ['Pacific timezone', -480, -420], ['PST', -480, -480], ['PDT', -420, -420], ['PT', -480, -420],
+  ['Mountain Time', -420, -360], ['Mountain timezone', -420, -360], ['MST', -420, -420], ['MDT', -360, -360], ['MT', -420, -360],
+  ['Eastern Time', -300, -240], ['Eastern timezone', -300, -240], ['EST', -300, -300], ['EDT', -240, -240], ['ET', -300, -240],
+  ['Central Time', -360, -300], ['Central timezone', -360, -300], ['CDT', -300, -300],
+  ['Central European Time', 60, 120], ['CET', 60, 120], ['CEST', 120, 120],
+  ['Western European Time', 0, 60], ['Greenwich Mean Time', 0, 0], ['GMT', 0, 0], ['British Summer Time', 60, 60],
+  ['Gulf Standard Time', 240, 240], ['Arabia Standard Time', 180, 180], ['India Standard Time', 330, 330],
+  ['China Standard Time', 480, 480], ['Singapore Time', 480, 480], ['Hong Kong Time', 480, 480], ['Korea Standard Time', 540, 540],
+  ['Japan Standard Time', 540, 540], ['JST', 540, 540], ['Australian Eastern Time', 600, 660], ['AEST', 600, 600], ['AEDT', 660, 660],
+]);
+
+function v2Ranges(observations) {
+  const ranges = new Map();
+  for (const observation of observations) {
+    if (observation.strength === 'preferred') continue;
+    for (const term of observation.matchedTerms) {
+      const entry = V2_TERM_RANGES.find(([name]) => name === term);
+      if (!entry) continue;
+      const [, start, end] = entry;
+      ranges.set(`${start}:${end}`, {
+        offsetRangeStartMinutes: start,
+        offsetRangeEndMinutes: end,
+      });
+    }
+  }
+  return [...ranges.values()].sort((left, right) => (
+    left.offsetRangeStartMinutes - right.offsetRangeStartMinutes
+    || left.offsetRangeEndMinutes - right.offsetRangeEndMinutes
+  ));
 }
 
 export function extractWorkTimeConstraints(description) {
@@ -115,5 +149,6 @@ export function extractWorkTimeConstraints(description) {
         : 'multiple',
     regions,
     observations,
+    rangesV2: v2Ranges(observations),
   };
 }

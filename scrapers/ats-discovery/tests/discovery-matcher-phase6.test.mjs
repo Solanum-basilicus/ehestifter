@@ -9,156 +9,103 @@ import {
 
 const USER_A = '11111111-1111-4111-8111-111111111111';
 const USER_B = '22222222-2222-4222-8222-222222222222';
-const CV_A = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-const CV_B = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
-function candidate(overrides = {}) {
+function user(userId, title, eligibility = null) {
   return {
-    title: 'Senior Product Manager',
-    hiringCompanyName: 'Celonis',
-    rawLocation: 'Munich, Germany (Hybrid)',
-    locations: [],
-    remoteType: 'Hybrid',
-    url: 'https://example.test/job/1',
-    sourceProvider: 'greenhouse',
-    sourceTenant: 'celonis',
-    ...overrides,
+    userId,
+    cvVersionId: `${userId.slice(0, 8)}-cv`,
+    discoveryPreferencesInvalid: false,
+    discoveryPreferences: {
+      schemaVersion: 1,
+      title: { positive: [], positivePatterns: [], negative: [], ...title },
+      eligibility,
+    },
   };
 }
 
-test('saved profiles use OR semantics per user and users use union semantics', () => {
-  const matcher = buildDiscoveryMatcher({
-    users: [
-      {
-        userId: USER_A,
-        cvVersionId: CV_A,
-        hasSavedFilters: true,
-        invalidProfileCount: 0,
-        profiles: [
-          {
-            profileId: 'a1',
-            title: { positive: ['Engineering Manager'], negative: [] },
-            location: { alwaysAllow: [], allow: [], block: [] },
-            company: { allow: [], block: [] },
-            remoteTypes: [],
-          },
-          {
-            profileId: 'a2',
-            title: { positive: ['Product Manager'], negative: ['Intern'] },
-            location: { alwaysAllow: ['Germany'], allow: [], block: [] },
-            company: { allow: ['Celonis'], block: [] },
-            remoteTypes: ['Hybrid'],
-          },
-        ],
-      },
-      {
-        userId: USER_B,
-        cvVersionId: CV_B,
-        hasSavedFilters: false,
-        invalidProfileCount: 0,
-        profiles: [],
-      },
-    ],
-  });
+function candidate(title = 'Senior Product Manager') {
+  return {
+    title,
+    url: 'https://example.test/job/1',
+    sourceProvider: 'greenhouse',
+    sourceTenant: 'example',
+  };
+}
 
+test('missing preferences and negative-only titles do not enable discovery', () => {
+  const matcher = buildDiscoveryMatcher({ users: [
+    { userId: USER_A, cvVersionId: 'a', discoveryPreferences: null, discoveryPreferencesInvalid: false },
+    user(USER_B, { negative: ['Intern'] }),
+  ] });
+  assert.equal(matcher.enabledUsers.length, 0);
+  assert.equal(matcher.compoundedProfile.usersDisabledNoPositiveTitle, 2);
+  assert.equal(matcher.matchCandidate(candidate()).allowed, false);
+});
+
+test('positive phrases and orderedGap patterns use OR semantics with negative veto', () => {
+  const matcher = buildDiscoveryMatcher({ users: [user(USER_A, {
+    positive: ['Product Owner'],
+    positivePatterns: [{
+      type: 'orderedGap', left: ['Engineering'], right: ['Manager', 'Lead'], maxGapWords: 2,
+    }],
+    negative: ['Intern'],
+  })] });
+  assert.equal(matcher.matchCandidate(candidate('Product Owner')).allowed, true);
+  assert.equal(matcher.matchCandidate(candidate('Senior Engineering Platform Manager')).allowed, true);
+  assert.equal(matcher.matchCandidate(candidate('Engineering Global Platform Operations Manager')).allowed, false);
+  assert.equal(matcher.matchCandidate(candidate('Engineering Team Lead Intern')).allowed, false);
+});
+
+test('title token matching tolerates punctuation, case, and Unicode words', () => {
+  const matcher = buildDiscoveryMatcher({ users: [user(USER_A, {
+    positive: ['Produkt Manager'],
+    positivePatterns: [{
+      type: 'orderedGap', left: ['Technische'], right: ['Leitung'], maxGapWords: 2,
+    }],
+  })] });
+  assert.equal(matcher.matchCandidate(candidate('PRODUKT-MANAGER')).allowed, true);
+  assert.equal(matcher.matchCandidate(candidate('Technische Plattform Leitung')).allowed, true);
+});
+
+test('users use union semantics and retain structured title evidence', () => {
+  const matcher = buildDiscoveryMatcher({ users: [
+    user(USER_A, { positive: ['Product Manager'] }),
+    user(USER_B, { positivePatterns: [{
+      type: 'orderedGap', left: ['Product'], right: ['Manager'], maxGapWords: 2,
+    }] }),
+  ] });
   const result = matcher.matchCandidate(candidate());
-  assert.equal(result.allowed, true);
   assert.deepEqual(result.matchedUserIds, [USER_A, USER_B]);
-  assert.deepEqual(result.matchedProfiles, [
-    { userId: USER_A, profileId: 'a2' },
-    { userId: USER_B, profileId: null },
-  ]);
+  assert.equal(result.matchedTitles[1].patternMatches[0].pattern.type, 'orderedGap');
 });
 
-test('a user with malformed saved filters fails closed instead of matching all', () => {
-  const matcher = buildDiscoveryMatcher({
-    users: [{
-      userId: USER_A,
-      cvVersionId: CV_A,
-      hasSavedFilters: true,
-      invalidProfileCount: 1,
-      profiles: [],
-    }],
-  });
-  assert.deepEqual(matcher.matchCandidate(candidate()), {
-    allowed: false,
-    matchedUserIds: [],
-    matchedProfiles: [],
-  });
-  assert.equal(matcher.compoundedProfile.usersFailingClosed, 1);
+test('invalid stored preferences disable one user', () => {
+  const matcher = buildDiscoveryMatcher({ users: [{
+    userId: USER_A,
+    cvVersionId: 'a',
+    discoveryPreferences: null,
+    discoveryPreferencesInvalid: true,
+    discoveryPreferencesError: 'bad row',
+  }] });
+  assert.equal(matcher.enabledUsers.length, 0);
+  assert.equal(matcher.userArtifact[0].discoveryStatus, 'disabled_invalid_preferences');
 });
 
-test('title, company, location, and remote constraints are all cheap gates', () => {
-  const profile = {
-    profileId: 'p',
-    title: { positive: ['Product Manager'], negative: ['Junior'] },
-    location: { alwaysAllow: [], allow: ['Germany'], block: ['US only'] },
-    company: { allow: ['Celonis'], block: ['Agency'] },
-    remoteTypes: ['Hybrid'],
-  };
-  const matcher = buildDiscoveryMatcher({
-    users: [{
-      userId: USER_A,
-      cvVersionId: CV_A,
-      hasSavedFilters: true,
-      invalidProfileCount: 0,
-      profiles: [profile],
-    }],
-  });
-  assert.equal(matcher.matchCandidate(candidate()).allowed, true);
-  assert.equal(matcher.matchCandidate(candidate({ title: 'Junior Product Manager' })).allowed, false);
-  assert.equal(matcher.matchCandidate(candidate({ hiringCompanyName: 'Example Agency' })).allowed, false);
-  assert.equal(matcher.matchCandidate(candidate({ rawLocation: 'US only' })).allowed, false);
-  assert.equal(matcher.matchCandidate(candidate({ remoteType: 'Remote' })).allowed, false);
+test('user-match artifact preserves structured explainability', () => {
+  const matcher = buildDiscoveryMatcher({ users: [user(USER_A, { positive: ['Product Manager'] })] });
+  const match = matcher.matchCandidate(candidate());
+  const job = { ...candidate(), matchedUserIds: match.matchedUserIds, userMatch: { matchedTitles: match.matchedTitles } };
+  const artifact = buildUserMatchArtifact({ discoveryMatcher: matcher, candidates: [job], rejected: [] });
+  assert.equal(artifact.users[0].matchingEnabled, true);
+  assert.deepEqual(artifact.matches[0].matchedTitles[0].positiveMatches, ['Product Manager']);
 });
 
-test('user-match artifact contains identifiers and counts but no filter terms', () => {
-  const matcher = buildDiscoveryMatcher({
-    users: [{
-      userId: USER_A,
-      cvVersionId: CV_A,
-      cvLastUpdatedUtc: '2026-07-24T00:00:00Z',
-      hasSavedFilters: false,
-      invalidProfileCount: 0,
-      profiles: [],
-    }],
-  });
-  const job = {
-    ...candidate(),
-    matchedUserIds: [USER_A],
-    userMatch: { matchedProfiles: [{ userId: USER_A, profileId: null }] },
-  };
-  const artifact = buildUserMatchArtifact({
-    discoveryMatcher: matcher,
-    candidates: [job],
-    rejected: [{ reason: 'no_user_match', candidate: candidate({ url: 'https://example.test/job/2' }) }],
-  });
-  assert.equal(artifact.users[0].validProfileCount, 0);
-  assert.deepEqual(artifact.matches[0].matchedUserIds, [USER_A]);
-  assert.equal(JSON.stringify(artifact).includes('Product Manager'), false);
-  assert.equal(artifact.rejectedNoUserMatch.length, 1);
-});
-
-
-test('no eligible users suppress candidate targets but preserve provider canaries', () => {
+test('no discovery-enabled users suppress candidate targets but preserve provider canaries', () => {
   const canary = { sequence: 0, healthOnly: true };
   const priority = { sequence: 1, healthOnly: false };
-  const normal = { sequence: 2 };
   const selected = selectDiscoveryExecutionTargets({
-    runtimeTargets: [canary, priority, normal],
-    multiUserEnabled: true,
-    discoveryUsers: [],
+    runtimeTargets: [canary, priority], multiUserEnabled: true, discoveryUsers: [],
   });
   assert.deepEqual(selected.executionTargets, [canary]);
-  assert.equal(selected.targetsSkippedNoEligibleUsers, 2);
-  assert.equal(selected.hasEligibleUsers, false);
-
-  const disabled = selectDiscoveryExecutionTargets({
-    runtimeTargets: [canary, priority, normal],
-    multiUserEnabled: false,
-    discoveryUsers: [],
-  });
-  assert.equal(disabled.executionTargets.length, 3);
-  assert.equal(disabled.targetsSkippedNoEligibleUsers, 0);
-  assert.equal(disabled.hasEligibleUsers, null);
+  assert.equal(selected.targetsSkippedNoEligibleUsers, 1);
 });
