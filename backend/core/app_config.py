@@ -1,8 +1,8 @@
 import os
 
 
-_LOCAL_SESSION_FILE_DIR = "flask_session"
-_AZURE_SESSION_FILE_DIR = "/home/data/ehestifter-core-sessions"
+_LOCAL_SESSION_FILE_DIR = "flask_session_v2"
+_AZURE_SESSION_FILE_DIR = "/home/data/ehestifter-core-sessions-v2"
 
 
 def _get_session_file_dir():
@@ -16,8 +16,7 @@ def _get_session_file_dir():
     return _LOCAL_SESSION_FILE_DIR
 
 
-# Store server-side Flask sessions in files.
-SESSION_TYPE = "filesystem"
-# Azure App Service persists files under /home. Keep the current local default
-# outside App Service, and allow an explicit path override on any host.
+# Flask-Session uses the CacheLib session interface. app.py supplies the
+# encrypted filesystem cache before Microsoft identity initializes sessions.
+SESSION_TYPE = "cachelib"
 SESSION_FILE_DIR = _get_session_file_dir()

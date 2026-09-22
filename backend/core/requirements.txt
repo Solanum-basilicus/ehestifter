@@ -6,3 +6,8 @@ ms_identity_python[flask] @ https://github.com/azure-samples/ms-identity-python/
 python-dotenv<0.22
 bleach==6.1.0
 beautifulsoup4==4.12.3
+# Core session storage depends on the CacheLib API used by Flask-Session 0.8.
+Flask-Session==0.8.0
+cachelib==0.17.0
+# AES-GCM for authenticated encryption of persisted server-side sessions.
+cryptography>=46,<51

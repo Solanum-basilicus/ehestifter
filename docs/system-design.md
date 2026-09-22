@@ -227,7 +227,9 @@ These are not current goals and agents should not optimize for them unless expli
 
 Browser users authenticate through Azure AD B2C / Entra ID.
 
-`backend/core` uses Flask-Session with a server-side filesystem session store. The browser cookie contains the session identifier, not the full authentication state. In Azure App Service, Core stores session files under `/home/data/ehestifter-core-sessions`, so valid sessions can survive app restarts and free-tier spin-down/start cycles. Outside App Service, the existing local `flask_session` directory remains the default. `SESSION_FILE_DIR` can override the directory for another host or test setup.
+`backend/core` uses Flask-Session with a server-side CacheLib session store. The browser cookie contains the session identifier, not the full authentication state. In Azure App Service, Core stores session records under `/home/data/ehestifter-core-sessions-v2`, so valid sessions can survive app restarts and free-tier spin-down/start cycles. The records use AES-256-GCM authenticated encryption. `SESSION_ENCRYPTION_KEY` supplies the encryption key from App Service configuration. Core fails at startup in Azure when this key is missing or invalid. The authenticated record is bound to its session storage key and contains its own authenticated expiry time.
+
+Local development uses `flask_session_v2` by default. When `SESSION_ENCRYPTION_KEY` is not set locally, Core creates an ephemeral key and local sessions do not survive an application restart. `SESSION_FILE_DIR` can override the storage directory for another host or test setup.
 
 ### 4.2 Internal service authentication
 
@@ -2403,7 +2405,15 @@ Do not replace it with a heavier auth system unless explicitly requested.
 
 ### 24.3 Session persistence in core
 
-Browser auth session state in Flask is not backed by persistent shared session infrastructure. This is a known limitation, not an invitation to redesign auth without request.
+Browser auth session state is a Core presentation/auth concern, not domain state. Core persists encrypted server-side session records under App Service `/home` so that a normal app stop/start does not require a new Entra ID login.
+
+Security and operational rules:
+- session records must use authenticated encryption before they reach persistent storage,
+- production startup must fail when `SESSION_ENCRYPTION_KEY` is missing or invalid,
+- the filesystem cache must not deserialize unauthenticated pickle data,
+- changing `SESSION_ENCRYPTION_KEY` invalidates all stored sessions and requires users to sign in again,
+- filesystem write access can still delete or roll back stored ciphertext and cause logout or stale-session behavior; preventing storage rollback requires a different trusted state store,
+- reassess the filesystem backend if Core scales to multiple busy instances or materially higher session volume.
 
 ### 24.4 Lightweight frontend architecture
 
