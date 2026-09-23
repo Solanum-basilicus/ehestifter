@@ -55,6 +55,81 @@ test('dominant city resolution makes Remote Dallas a canonical v2 city', () => {
   assert.deepEqual(result.locationsV2, [{ kind: 'city', locationId: 'geonames:4684888' }]);
 });
 
+
+
+test('comma-separated ATS locations keep an unambiguous city outside the listed country', () => {
+  const [result] = normalizeCandidateLocations([
+    candidate({ rawLocation: 'Tallinn, Spain (Remote)' }),
+  ]);
+  assert.deepEqual(new Set(result.locationsV2.map((item) => item.locationId)), new Set([
+    'geonames:588409',
+    'iso3166:ES',
+  ]));
+  assert.equal(result.locationNormalization.unresolved.some(
+    (item) => item.raw === 'Tallinn',
+  ), false);
+});
+
+test('provider pseudo-city country scopes remain canonical v2 countries', () => {
+  const [canada, germanyAndUk] = normalizeCandidateLocations([
+    candidate({
+      rawLocation: 'Canada Remote',
+      locations: [{
+        countryName: 'Canada', countryCode: 'CA', cityName: 'Canada Remote - Consultant use only', region: null,
+      }],
+    }),
+    candidate({
+      rawLocation: '2 Locations',
+      detailRawLocation: 'Germany Remote; United Kingdom Remote',
+      locations: [{
+        countryName: 'Germany', countryCode: 'DE', cityName: 'Germany Remote', region: null,
+      }],
+    }),
+  ]);
+  assert.deepEqual(canada.locationsV2, [{ kind: 'country', locationId: 'iso3166:CA' }]);
+  assert.deepEqual(new Set(germanyAndUk.locationsV2.map((item) => item.locationId)), new Set([
+    'iso3166:DE',
+    'iso3166:GB',
+  ]));
+});
+
+test('description marketing language does not create a World geography claim', () => {
+  const [travelPolicy, globalCulture, genericAnywhere] = normalizeCandidateLocations([
+    candidate({
+      rawLocation: 'Remote',
+      description: 'Working while traveling to other countries requires approval under our Global Remote Travel Policy.',
+    }),
+    candidate({
+      rawLocation: 'United Kingdom (Remote)',
+      description: 'Why you will thrive: 100% Remote, Global Culture. We work with customers around the world.',
+    }),
+    candidate({
+      rawLocation: 'Europe',
+      description: 'Work From Anywhere: Fully remote. Choose the environment where you do your best work.',
+    }),
+  ]);
+  assert.equal(travelPolicy.locationsV2.some((item) => item.locationId === 'm49:001'), false);
+  assert.equal(globalCulture.locationsV2.some((item) => item.locationId === 'm49:001'), false);
+  assert.equal(genericAnywhere.locationsV2.some((item) => item.locationId === 'm49:001'), false);
+  assert.equal(genericAnywhere.locationsV2.some((item) => item.locationId === 'm49:150'), true);
+});
+
+test('explicit description worldwide scope still creates a World geography claim', () => {
+  const [result] = normalizeCandidateLocations([candidate({
+    rawLocation: 'Remote',
+    description: 'Remote worldwide, with substantial Europe time-zone overlap.',
+  })]);
+  assert.equal(result.locationsV2.some((item) => item.locationId === 'm49:001'), true);
+});
+
+test('explicit Hybrid suffix can resolve a dominant standalone city', () => {
+  const [result] = normalizeCandidateLocations([candidate({
+    rawLocation: 'Mexico City - Hybrid',
+    remoteType: 'Hybrid',
+  })]);
+  assert.deepEqual(result.locationsV2, [{ kind: 'city', locationId: 'geonames:3530597' }]);
+});
+
 test('broad named scopes use Locations v2 identities', () => {
   const [dach, emea, worldwide] = normalizeCandidateLocations([
     candidate({ rawLocation: 'DACH Remote' }),

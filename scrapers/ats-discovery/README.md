@@ -133,12 +133,21 @@ The Users response supplies saved discovery filters and profile metadata, not CV
 For a retained candidate:
 
 1. scan the ATS target once;
-2. match all eligible user profiles;
-3. ask Jobs for canonical identity once;
-4. fetch detail once when required and the job is missing;
-5. create the shared job once through Jobs;
-6. request compatibility for each matched user when needed;
-7. never create or change application status.
+2. match all eligible user profiles by title;
+3. retain title matches up to `scan.maxTitleCandidatesBeforeGeography`;
+4. ask Jobs for canonical identity and fetch bounded detail when needed;
+5. normalize Locations v2 and apply each user's geography rules;
+6. apply the final fair `scan.maxCandidatesPerRun` cap after geography;
+7. create the shared job once through Jobs;
+8. request compatibility for each matched user when needed;
+9. never create or change application status.
+
+`scan.maxCandidatesPerRun` is therefore the normal downstream candidate cap in
+multi-user preflight/import runs. `scan.maxTitleCandidatesBeforeGeography` is a
+separate safety ceiling for the broader title-matched set that must reach
+location normalization. It defaults to five times `maxCandidatesPerRun` and
+must not be smaller than the final cap. This avoids letting title-only volume
+consume the final cap before geography while still bounding Jobs preflight work.
 
 ## Product identity and attribution
 

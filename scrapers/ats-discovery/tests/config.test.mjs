@@ -108,6 +108,8 @@ test('loadRuntimeConfig returns Phase 3 paths and derived state path', async () 
     assert.equal(config.paths.state, path.join(directory, 'state'));
     assert.equal(config.state.tenantStatePath, path.join(directory, 'state', 'tenant-state.json'));
     assert.equal(config.scan.providerConcurrency, 3);
+    assert.equal(config.scan.maxCandidatesPerRun, 100);
+    assert.equal(config.scan.maxTitleCandidatesBeforeGeography, 500);
     assert.equal(config.jobsApi.baseUrl, 'https://jobs.example/api');
     assert.equal(config.jobsApi.retryCount, 0);
     assert.deepEqual(config.liveCatalog, {
@@ -334,5 +336,22 @@ test('maintenance loads Jobs credentials without requiring scan policy files', a
     });
     assert.equal(config.jobsApi.baseUrl, 'https://jobs.example/api');
     assert.equal(config.jobsApi.functionKey, 'maintenance-key');
+  });
+});
+
+
+test('pre-geography title guard cannot be smaller than final candidate cap', async () => {
+  await withTempDir(async (directory) => {
+    await writeScanFiles(directory);
+    const configPath = path.join(directory, 'scanner.json');
+    const raw = configFor(directory);
+    raw.scan.maxCandidatesPerRun = 100;
+    raw.scan.maxTitleCandidatesBeforeGeography = 99;
+    await writeFile(configPath, JSON.stringify(raw));
+
+    await assert.rejects(
+      loadRuntimeConfig({ configPath, operation: 'scan' }),
+      /maxTitleCandidatesBeforeGeography must be greater than or equal to/,
+    );
   });
 });

@@ -36,7 +36,7 @@ import {
 import { buildRunSummary } from './run-summary.mjs';
 import { buildProviderCanaryResults } from './scan/provider-canaries.mjs';
 import { buildRateObservations } from './scan/rate-observations.mjs';
-import { runTrackedScan } from './scan/tracked-source.mjs';
+import { admitCandidatesFairly, runTrackedScan } from './scan/tracked-source.mjs';
 import {
   buildNextTenantState,
   saveTenantState,
@@ -265,7 +265,11 @@ async function runScan(args) {
       providers,
       policy: planning.policy,
       concurrency: config.scan.providerConcurrency,
-      maxCandidates: config.scan.maxCandidatesPerRun,
+      maxCandidates: (
+        config.multiUser.enabled && (args.mode === 'preflight' || args.mode === 'import')
+      )
+        ? config.scan.maxTitleCandidatesBeforeGeography
+        : config.scan.maxCandidatesPerRun,
       upstreamRef: config.careerOps.upstreamRef,
       candidateMatcher: discoveryMatcher?.matchCandidate ?? null,
       applyPortalCandidateFilters: !config.multiUser.enabled,
@@ -389,9 +393,34 @@ async function runScan(args) {
             + `kind=${warning.kind ?? 'unknown'} locationId=${warning.locationId ?? 'unknown'}`,
           );
         }
+        const postGeographyAdmission = admitCandidatesFairly(
+          locationResults,
+          config.scan.maxCandidatesPerRun,
+          {
+            enabled: true,
+            fairnessSeed: runId,
+          },
+        );
+        for (const candidate of postGeographyAdmission.dropped) {
+          scanResult.rejected.push({
+            reason: 'candidate_cap_after_geography',
+            candidate: null,
+            details: {
+              provider: candidate.sourceProvider,
+              tenant: candidate.sourceTenant,
+              url: candidate.url,
+              matchedUserIds: candidate.matchedUserIds ?? [],
+            },
+          });
+        }
+        scanResult.titleCandidateAdmission = scanResult.candidateAdmission;
+        scanResult.candidateAdmission = postGeographyAdmission.stats;
+        scanResult.candidates = postGeographyAdmission.retained;
+        locationResults = postGeographyAdmission.retained;
         scanResult.discoveryEligibility = {
           warnings: eligibilityResult.warnings,
           userCounts: eligibilityResult.userCounts,
+          candidatesBeforeFinalCap: eligibilityResult.candidates.length,
         };
       }
     }
@@ -493,6 +522,7 @@ async function runScan(args) {
       targetPlan: planning.plan,
       scanResult,
       evaluated,
+      preflightResults,
       tenantStateChanges,
       rateObservations,
       requestedMaxCreates: args.maxCreate,

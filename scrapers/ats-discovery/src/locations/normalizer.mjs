@@ -346,16 +346,57 @@ function parseSegment(segment, dictionary, source) {
     .filter((item) => item.country);
   if (countries.length === 1) {
     const { index, country } = countries[0];
-    return {
-      ...parseLocalities(
-        commaParts.filter((_part, partIndex) => partIndex !== index),
-        country,
-        dictionary,
-        source,
-        raw,
-      ),
-      arrangement,
-    };
+    const localityParts = commaParts.filter((_part, partIndex) => partIndex !== index);
+    const parsedCountry = parseLocalities(
+      localityParts,
+      country,
+      dictionary,
+      source,
+      raw,
+    );
+
+    // Some ATS fields use commas as location-list separators, not as
+    // "city, country" syntax. If a locality cannot exist in the listed
+    // country but is globally unambiguous, retain it as an independent
+    // location instead of discarding it. This turns "Tallinn, Spain" into
+    // Tallinn (Estonia) + Spain, while "London, Canada" still resolves via
+    // the normal country-qualified path.
+    const independentLocations = [];
+    const recovered = new Set();
+    for (const localityPart of localityParts) {
+      const locality = stripLocalityQualifier(localityPart);
+      if (!locality || dictionary.resolveCity(locality, country.countryCode)) continue;
+      const city = dictionary.resolveCity(locality);
+      if (!city || city.countryCode === country.countryCode) continue;
+      const cityCountry = dictionary.countryByCode(city.countryCode);
+      if (!cityCountry) continue;
+      independentLocations.push(locationFromCountry(cityCountry, city.cityName, null));
+      recovered.add(locality);
+    }
+    if (independentLocations.length > 0) {
+      return {
+        observations: [
+          ...parsedCountry.observations.filter((item) => !(
+            item.status === 'unresolved' && recovered.has(item.raw)
+          )),
+          ...independentLocations.map((location) => ({
+            source,
+            raw: location.cityName,
+            kind: 'city_independent_list_item',
+            status: 'resolved',
+            location,
+          })),
+        ],
+        locations: dedupeLocations([
+          ...parsedCountry.locations,
+          ...independentLocations,
+        ]),
+        unresolved: parsedCountry.unresolved.filter((item) => !recovered.has(item.raw)),
+        arrangement,
+      };
+    }
+
+    return { ...parsedCountry, arrangement };
   }
 
   const cityRegion = parseCityRegionPair(commaParts, dictionary, source, raw);
@@ -460,22 +501,38 @@ function normalizeStructuredLocations(candidate, dictionary) {
   for (const item of candidate.locations ?? []) {
     const result = dictionary.canonicalizeLocation(item);
     const providerCity = cleanText(item?.cityName);
+    const providerCityLooksLikeCountryScope = Boolean(
+      result.location
+      && !result.location.cityName
+      && providerCity
+      && result.unresolved.includes('city_unresolved_for_country')
+      && workArrangementFromText(providerCity)
+      && dictionary.findCountryMentions(providerCity).some((country) => (
+        country.countryCode === result.location.countryCode
+      )),
+    );
     const location = result.location
       && !result.location.cityName
       && providerCity
       && result.unresolved.includes('city_unresolved_for_country')
+      && !providerCityLooksLikeCountryScope
       ? { ...result.location, cityName: providerCity }
       : result.location;
+    const issues = providerCityLooksLikeCountryScope
+      ? result.unresolved.filter((reason) => reason !== 'city_unresolved_for_country')
+      : result.unresolved;
     if (location) locations.push(location);
     observations.push({
       source: 'provider_structured',
       raw: item,
-      kind: 'structured_location',
+      kind: providerCityLooksLikeCountryScope
+        ? 'structured_country_scope'
+        : 'structured_location',
       status: location ? 'resolved' : 'unresolved',
       location,
-      issues: result.unresolved,
+      issues,
     });
-    for (const reason of result.unresolved) {
+    for (const reason of issues) {
       unresolved.push({ source: 'provider_structured', raw: item, reason });
     }
   }
@@ -1154,17 +1211,65 @@ function assessEligibility(candidate, locations, consistency, evidence, scopeFil
 }
 
 
-function v2ClaimsForCandidate(candidate, locations, catalog) {
+function claimCountryCode(catalog, item) {
+  if (!item) return null;
+  const country = catalog.facts(item).find((fact) => fact.kind === 'country');
+  return country?.countryCode ?? null;
+}
+
+function descriptionCarriesBroadLocationScope(window) {
+  const text = lookupKey(window);
+  if (!text) return false;
+  if (/\banywhere\s+(?:in|within)\b/u.test(text)) return false;
+  if (/\b(?:global|worldwide|world)\s+(?:remote\s+)?(?:culture|team|workforce|company|organisation|organization|customers?|network|business|impact|travel\s+policy)\b/u.test(text)) {
+    return false;
+  }
+  if (/\bglobally\s+(?:distributed|dispersed|located|operating)\b/u.test(text)) return false;
+
+  const scope = '(?:worldwide|global|europe|emea|dach|north\\s+america)';
+  return new RegExp(`\\bremote\\b[\\s,:;()\\/-]{0,8}\\b${scope}\\b`, 'u').test(text)
+    || new RegExp(`\\b${scope}\\b[\\s,:;()\\/-]{0,8}\\bremote\\b`, 'u').test(text)
+    || /\b(?:work|working)\s+(?:remotely\s+)?(?:from\s+)?(?:worldwide|globally)\b/u.test(text)
+    || /\b(?:hiring|eligible|open\s+to)\s+(?:(?:candidates?|applicants?)\s+)?(?:in|from|across\s+)?(?:worldwide|globally|global|europe|emea|dach|north\s+america)\b/u.test(text)
+    || /\b(?:candidates?|applicants?)\s+(?:are\s+|must\s+be\s+|can\s+be\s+)?(?:located|based|residing)?\s*(?:in|from|across)?\s*(?:worldwide|globally|global|europe|emea|dach|north\s+america)\b/u.test(text)
+    || /^(?:location|work\s+location)\s*[:\-–—]/u.test(text);
+}
+
+function v2ClaimsForCandidate(candidate, locations, catalog, primaryObservations = []) {
   const claims = [];
+  const finalClaims = [];
   for (const location of locations) {
     const item = catalog.canonicalFromLegacy(location);
-    if (item) claims.push(item);
+    if (item) {
+      claims.push(item);
+      finalClaims.push(item);
+    }
   }
+
+  // Legacy provider locations can preserve an unknown provider city such as
+  // "Germany Remote" for display. That pseudo-city is intentionally not a
+  // canonical v2 city. Retain an independently resolved raw/detail country
+  // scope when no more precise canonical final claim already covers that
+  // country.
+  for (const observation of primaryObservations) {
+    if (!['raw_location', 'provider_detail_location'].includes(observation.source)) continue;
+    if (observation.status !== 'resolved' || !observation.location) continue;
+    const item = catalog.canonicalFromLegacy(observation.location);
+    if (!item) continue;
+    if (item.kind === 'country') {
+      const countryCode = claimCountryCode(catalog, item);
+      const hasMorePreciseFinalClaim = finalClaims.some((claim) => (
+        claim.kind !== 'country' && claimCountryCode(catalog, claim) === countryCode
+      ));
+      if (hasMorePreciseFinalClaim) continue;
+    }
+    claims.push(item);
+  }
+
   claims.push(...catalog.broadScopeClaims(candidate.rawLocation));
   claims.push(...catalog.broadScopeClaims(candidate.detailRawLocation));
   for (const window of descriptionWindows(candidate.description)) {
-    if (!/\b(?:remote|work\s+from|hiring|eligible|candidates?|applicants?|location)\b/iu.test(window)) continue;
-    if (/\b(?:customer|client|partner|supplier|office\s+locations?)\b/iu.test(window)) continue;
+    if (!descriptionCarriesBroadLocationScope(window)) continue;
     claims.push(...catalog.broadScopeClaims(window));
   }
   const unique = new Map(claims.map((item) => [`${item.kind}\u0000${item.id}`, item]));
@@ -1309,7 +1414,8 @@ export function normalizeCandidateLocations(
         arrangement: titleArrangement,
       }] : [];
     let finalLocations = reconciled.locations;
-    if (finalLocations.length === 0 && remoteType === 'Remote') {
+    const rawArrangement = workArrangementFromText(candidate.rawLocation);
+    if (finalLocations.length === 0 && rawArrangement) {
       const rawLocality = stripLocalityQualifier(candidate.rawLocation);
       if (rawLocality && !/[,;|/]/u.test(rawLocality)) {
         const city = v2Catalog.resolveCityGlobal(rawLocality);
@@ -1333,7 +1439,12 @@ export function normalizeCandidateLocations(
       dictionary,
     );
     const workTimeConstraints = extractWorkTimeConstraints(candidate.description);
-    const locationsV2 = v2ClaimsForCandidate(candidate, finalLocations, v2Catalog);
+    const locationsV2 = v2ClaimsForCandidate(
+      candidate,
+      finalLocations,
+      v2Catalog,
+      primary.observations,
+    );
     const workTimeConstraintsV2 = workTimeConstraints.rangesV2 ?? [];
 
     return {

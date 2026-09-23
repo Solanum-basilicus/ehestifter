@@ -151,6 +151,58 @@ test('Phase 4 summary quantifies catalog preflight ratio and scope rejections', 
   assert.equal(summary.catalogCandidates, 2);
 });
 
+test('preflight summary uses the actual pre-geography preflight population', () => {
+  const preflightResults = [
+    { sourceMode: 'catalog', sourceProvider: 'ashby', preflight: { status: 'ok', exists: true } },
+    { sourceMode: 'catalog', sourceProvider: 'ashby', preflight: { status: 'ok', exists: false } },
+    { sourceMode: 'catalog', sourceProvider: 'ashby', preflight: { status: 'error' } },
+  ];
+  const evaluated = [preflightResults[1]];
+  const summary = buildRunSummary({
+    runId: 'preflight-before-geography',
+    mode: 'preflight',
+    startedAt: new Date('2026-09-23T00:00:00Z'),
+    finishedAt: new Date('2026-09-23T00:00:01Z'),
+    targetPlan: {
+      targets: [],
+      limits: { liveCatalogRequested: true, catalogTargetsRequested: 1 },
+      counts: {
+        priority: 0, normal: 0, disabled: 0, disabledRemoved: 0,
+        planningRejected: 0, catalogEligible: 1, skippedNotDue: 0,
+        skippedProviderCooldown: 0, skippedNormalBudget: 0, skippedTotal: 0,
+      },
+      catalogs: { ashby: { acceptedItemCount: 1, rawSha256: 'a'.repeat(64) } },
+      catalogSweeps: {},
+      healthPartitions: {},
+      sweep: {
+        targetFullSweepDays: 3,
+        estimatedHealthySweepDays: 1,
+        recommendedHealthyTargetsPerRun: 1,
+        recommendedNormalTargetsPerRun: 1,
+        feasibleAtConfiguredBudget: true,
+      },
+    },
+    scanResult: {
+      candidates: evaluated,
+      rejected: [],
+      providerIds: ['ashby'],
+      breakerEvents: [],
+      providerResults: [],
+    },
+    evaluated,
+    preflightResults,
+  });
+
+  assert.equal(summary.preflightChecked, 2);
+  assert.equal(summary.preflightExisting, 1);
+  assert.equal(summary.preflightMissing, 1);
+  assert.equal(summary.preflightErrors, 1);
+  assert.equal(summary.catalogPreflightChecked, 2);
+  assert.equal(summary.catalogPreflightErrors, 1);
+  assert.equal(summary.catalogs.ashby.preflightChecked, 2);
+  assert.equal(summary.catalogs.ashby.preflightErrors, 1);
+});
+
 test('run writer emits provider canary artifact only when canaries were evaluated', async () => {
   await withTempDir(async (directory) => {
     const canaryResults = {
@@ -319,6 +371,43 @@ test('Phase 6 artifacts and summary expose bounded user matching and compatibili
       providerIds: [],
       breakerEvents: [],
       providerResults: [],
+      titleCandidateAdmission: {
+        titleMatchedCandidatesBeforeCap: 5,
+        userCandidateMatchesBeforeCap: 5,
+        candidatesRetained: 5,
+        candidatesDroppedByCap: 0,
+        candidateCapReached: false,
+        users: [{
+          userId: 'u1',
+          titleCandidatesMatched: 5,
+          priorityTitleCandidatesMatched: 1,
+          catalogTitleCandidatesMatched: 4,
+          candidatesRetainedByCap: 5,
+          candidatesDroppedByCap: 0,
+        }],
+      },
+      candidateAdmission: {
+        titleMatchedCandidatesBeforeCap: 3,
+        userCandidateMatchesBeforeCap: 3,
+        candidatesRetained: 2,
+        candidatesDroppedByCap: 1,
+        usersAffectedByCandidateCap: 1,
+        usersStarvedByCandidateCap: 0,
+        candidateCapReached: true,
+        users: [{
+          userId: 'u1',
+          titleCandidatesMatched: 3,
+          priorityTitleCandidatesMatched: 1,
+          catalogTitleCandidatesMatched: 2,
+          candidatesRetainedByCap: 2,
+          candidatesDroppedByCap: 1,
+        }],
+      },
+      discoveryEligibility: {
+        warnings: [],
+        userCounts: { u1: 3 },
+        candidatesBeforeFinalCap: 3,
+      },
     },
     evaluated: [],
     discoveryUsers: [
@@ -347,6 +436,15 @@ test('Phase 6 artifacts and summary expose bounded user matching and compatibili
   assert.equal(summary.compatibilityRequested, 1);
   assert.equal(summary.compatibilityErrors, 1);
   assert.equal(summary.discoveryUsersLoadStatus, 'ok');
+  assert.equal(summary.titleMatchedCandidatesBeforeCap, 5);
+  assert.equal(summary.titleCandidatesRetainedBeforeGeography, 5);
+  assert.equal(summary.titleCandidatesDroppedByPreGeographyGuard, 0);
+  assert.equal(summary.candidatesBeforeFinalCap, 3);
+  assert.equal(summary.candidatesDroppedByCap, 1);
+  assert.equal(summary.candidateCapReached, true);
+  assert.equal(summary.discoveryUserStats[0].titleCandidatesMatched, 5);
+  assert.equal(summary.discoveryUserStats[0].candidatesAfterGeography, 3);
+  assert.equal(summary.discoveryUserStats[0].candidatesRetainedByCap, 2);
 });
 
 test('Phase 6 summary reports Users API failure without pretending multi-user is disabled', () => {

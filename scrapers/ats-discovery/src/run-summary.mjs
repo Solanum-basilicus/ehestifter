@@ -201,6 +201,7 @@ export function buildRunSummary({
   targetPlan,
   scanResult,
   evaluated,
+  preflightResults = null,
   tenantStateChanges = null,
   rateObservations = null,
   requestedMaxCreates = null,
@@ -219,29 +220,32 @@ export function buildRunSummary({
     .map((target) => target.lookbackStartUtc)
     .filter(Boolean)
     .sort();
+  const preflightEvaluated = preflightResults ?? evaluated;
   const preflightOk = count(
-    evaluated,
+    preflightEvaluated,
     (job) => job.preflight?.status === 'ok',
   );
   const preflightExisting = count(
-    evaluated,
+    preflightEvaluated,
     (job) => job.preflight?.status === 'ok' && job.preflight.exists,
   );
   const preflightMissing = count(
-    evaluated,
+    preflightEvaluated,
     (job) => job.preflight?.status === 'ok' && !job.preflight.exists,
   );
-  const catalogEvaluated = evaluated.filter((job) => job.sourceMode === 'catalog');
+  const catalogPreflightEvaluated = preflightEvaluated.filter(
+    (job) => job.sourceMode === 'catalog',
+  );
   const catalogPreflightOk = count(
-    catalogEvaluated,
+    catalogPreflightEvaluated,
     (job) => job.preflight?.status === 'ok',
   );
   const catalogPreflightExisting = count(
-    catalogEvaluated,
+    catalogPreflightEvaluated,
     (job) => job.preflight?.status === 'ok' && job.preflight.exists,
   );
   const catalogPreflightMissing = count(
-    catalogEvaluated,
+    catalogPreflightEvaluated,
     (job) => job.preflight?.status === 'ok' && !job.preflight.exists,
   );
   const providerHealth = providerVariantHealth({
@@ -254,7 +258,7 @@ export function buildRunSummary({
   });
   const catalogMetrics = Object.fromEntries(CATALOG_PROVIDER_IDS.map((provider) => {
     const metadata = targetPlan.catalogs?.[provider] ?? null;
-    const providerEvaluated = catalogEvaluated.filter(
+    const providerEvaluated = catalogPreflightEvaluated.filter(
       (job) => job.sourceProvider === provider,
     );
     const providerPreflightOk = count(
@@ -450,8 +454,26 @@ export function buildRunSummary({
       0,
     ),
     userMatchArtifactCandidates: userMatchResults?.matches.length ?? 0,
-    titleMatchedCandidatesBeforeCap: scanResult.candidateAdmission?.titleMatchedCandidatesBeforeCap ?? null,
-    userCandidateMatchesBeforeCap: scanResult.candidateAdmission?.userCandidateMatchesBeforeCap ?? null,
+    titleMatchedCandidatesBeforeCap: (
+      scanResult.titleCandidateAdmission?.titleMatchedCandidatesBeforeCap
+      ?? scanResult.candidateAdmission?.titleMatchedCandidatesBeforeCap
+      ?? null
+    ),
+    userCandidateMatchesBeforeCap: (
+      scanResult.titleCandidateAdmission?.userCandidateMatchesBeforeCap
+      ?? scanResult.candidateAdmission?.userCandidateMatchesBeforeCap
+      ?? null
+    ),
+    titleCandidatesRetainedBeforeGeography: (
+      scanResult.titleCandidateAdmission?.candidatesRetained ?? null
+    ),
+    titleCandidatesDroppedByPreGeographyGuard: (
+      scanResult.titleCandidateAdmission?.candidatesDroppedByCap ?? 0
+    ),
+    preGeographyGuardReached: (
+      scanResult.titleCandidateAdmission?.candidateCapReached ?? false
+    ),
+    candidatesBeforeFinalCap: scanResult.discoveryEligibility?.candidatesBeforeFinalCap ?? null,
     candidatesDroppedByCap: scanResult.candidateAdmission?.candidatesDroppedByCap ?? null,
     usersAffectedByCandidateCap: scanResult.candidateAdmission?.usersAffectedByCandidateCap ?? null,
     usersStarvedByCandidateCap: scanResult.candidateAdmission?.usersStarvedByCandidateCap ?? null,
@@ -459,16 +481,23 @@ export function buildRunSummary({
     discoveryEligibilityWarnings: scanResult.discoveryEligibility?.warnings?.length ?? 0,
     discoveryUserStats: multiUserEnabled
       ? (discoveryUsers ?? []).map((user) => {
-        const admission = scanResult.candidateAdmission?.users?.find((item) => item.userId === user.userId);
+        const titleAdmission = (
+          scanResult.titleCandidateAdmission ?? scanResult.candidateAdmission
+        )?.users?.find((item) => item.userId === user.userId);
+        const finalAdmission = scanResult.candidateAdmission?.users?.find(
+          (item) => item.userId === user.userId,
+        );
         return {
           userId: user.userId,
           status: user.discoveryStatus ?? 'unknown',
-          titleCandidatesMatched: admission?.titleCandidatesMatched ?? 0,
-          priorityTitleCandidatesMatched: admission?.priorityTitleCandidatesMatched ?? 0,
-          catalogTitleCandidatesMatched: admission?.catalogTitleCandidatesMatched ?? 0,
-          candidatesRetainedByCap: admission?.candidatesRetainedByCap ?? 0,
-          candidatesDroppedByCap: admission?.candidatesDroppedByCap ?? 0,
+          titleCandidatesMatched: titleAdmission?.titleCandidatesMatched ?? 0,
+          priorityTitleCandidatesMatched: titleAdmission?.priorityTitleCandidatesMatched ?? 0,
+          catalogTitleCandidatesMatched: titleAdmission?.catalogTitleCandidatesMatched ?? 0,
+          titleCandidatesRetainedBeforeGeography: titleAdmission?.candidatesRetainedByCap ?? 0,
+          titleCandidatesDroppedByPreGeographyGuard: titleAdmission?.candidatesDroppedByCap ?? 0,
           candidatesAfterGeography: scanResult.discoveryEligibility?.userCounts?.[user.userId] ?? 0,
+          candidatesRetainedByCap: finalAdmission?.candidatesRetainedByCap ?? 0,
+          candidatesDroppedByCap: finalAdmission?.candidatesDroppedByCap ?? 0,
         };
       })
       : null,
@@ -492,7 +521,7 @@ export function buildRunSummary({
     preflightExisting,
     preflightMissing,
     preflightErrors: count(
-      evaluated,
+      preflightEvaluated,
       (job) => job.preflight?.status === 'error',
     ),
     preflightExistingRatio: ratio(preflightExisting, preflightOk),
@@ -500,7 +529,7 @@ export function buildRunSummary({
     catalogPreflightExisting,
     catalogPreflightMissing,
     catalogPreflightErrors: count(
-      catalogEvaluated,
+      catalogPreflightEvaluated,
       (job) => job.preflight?.status === 'error',
     ),
     catalogPreflightExistingRatio: ratio(

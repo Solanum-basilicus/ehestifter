@@ -155,6 +155,22 @@ export async function loadRuntimeConfig({
   const statePath = typeof paths.state === 'string' && paths.state.trim()
     ? paths.state.trim()
     : path.join(dataPath, 'state');
+  const maxCandidatesPerRun = positiveInteger(
+    scan.maxCandidatesPerRun,
+    100,
+    'scan.maxCandidatesPerRun',
+  );
+  const maxTitleCandidatesBeforeGeography = positiveInteger(
+    scan.maxTitleCandidatesBeforeGeography,
+    maxCandidatesPerRun * 5,
+    'scan.maxTitleCandidatesBeforeGeography',
+  );
+  if (maxTitleCandidatesBeforeGeography < maxCandidatesPerRun) {
+    throw new Error(
+      'scan.maxTitleCandidatesBeforeGeography must be greater than or equal to '
+      + 'scan.maxCandidatesPerRun',
+    );
+  }
 
   const config = {
     configPath: resolvedConfigPath,
@@ -195,11 +211,8 @@ export async function loadRuntimeConfig({
         3,
         'scan.jobsApiConcurrency',
       ),
-      maxCandidatesPerRun: positiveInteger(
-        scan.maxCandidatesPerRun,
-        100,
-        'scan.maxCandidatesPerRun',
-      ),
+      maxCandidatesPerRun,
+      maxTitleCandidatesBeforeGeography,
       requireDescriptionForCreate: booleanValue(
         scan.requireDescriptionForCreate,
         true,

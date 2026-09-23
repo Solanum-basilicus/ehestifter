@@ -20,6 +20,7 @@
     "providerConcurrency": 3,
     "jobsApiConcurrency": 3,
     "maxCandidatesPerRun": 100,
+    "maxTitleCandidatesBeforeGeography": 500,
     "requireDescriptionForCreate": true,
     "description": {
       "fetchMissing": true,
