@@ -264,3 +264,66 @@ test('geography filtering removes only users that do not match', () => {
   const result = applyDiscoveryEligibility([job], [userA, userB], { catalog });
   assert.deepEqual(result.candidates[0].matchedUserIds, [userA.userId]);
 });
+
+test('country-qualified Anywhere stays within that country', () => {
+  const [inUs, commaUs, bareAnywhere] = normalizeCandidateLocations([
+    candidate({ rawLocation: 'Anywhere in the United States' }),
+    candidate({ rawLocation: 'Anywhere, USA' }),
+    candidate({ rawLocation: 'Anywhere' }),
+  ]);
+  assert.deepEqual(inUs.locationsV2, [{ kind: 'country', locationId: 'iso3166:US' }]);
+  assert.deepEqual(commaUs.locationsV2, [{ kind: 'country', locationId: 'iso3166:US' }]);
+  assert.deepEqual(bareAnywhere.locationsV2, []);
+  assert.equal(inUs.locationsV2.some((item) => item.locationId === 'm49:001'), false);
+  assert.equal(commaUs.locationsV2.some((item) => item.locationId === 'm49:001'), false);
+});
+
+test('fully qualified city admin country forms emit canonical cities', () => {
+  const [sanFrancisco, sunnyvale, munich, singapore] = normalizeCandidateLocations([
+    candidate({ rawLocation: 'San Francisco, CA, United States', remoteType: 'On-Site' }),
+    candidate({ rawLocation: 'Sunnyvale, CA, United States', remoteType: 'On-Site' }),
+    candidate({ rawLocation: 'Munich, BY, Germany', remoteType: 'On-Site' }),
+    candidate({ rawLocation: 'Singapore, Singapore', remoteType: 'On-Site' }),
+  ]);
+  assert.deepEqual(sanFrancisco.locationsV2, [{ kind: 'city', locationId: 'geonames:5391959' }]);
+  assert.deepEqual(sunnyvale.locationsV2, [{ kind: 'city', locationId: 'geonames:5400075' }]);
+  assert.deepEqual(munich.locationsV2, [{ kind: 'city', locationId: 'geonames:2867714' }]);
+  assert.deepEqual(singapore.locationsV2, [{ kind: 'city', locationId: 'geonames:1880252' }]);
+});
+
+test('opaque provider city falls back to canonical structured geography', () => {
+  const [result] = normalizeCandidateLocations([candidate({
+    rawLocation: 'Oregon - Newberg Campus',
+    remoteType: 'Hybrid',
+    locations: [{
+      countryName: 'United States of America',
+      countryCode: 'US',
+      cityName: 'Oregon - Newberg Campus',
+      region: null,
+    }],
+  })]);
+  assert.deepEqual(result.locationsV2, [{ kind: 'adminRegion', locationId: 'geonames:5744337' }]);
+  assert.equal(result.locations[0].cityName, 'Oregon - Newberg Campus');
+});
+
+test('structured country fallback does not broaden a refined city claim', () => {
+  const [result] = normalizeCandidateLocations([candidate({
+    rawLocation: 'Palo Alto, CA',
+    remoteType: 'On-Site',
+    locations: [{
+      countryName: 'United States',
+      countryCode: 'US',
+      cityName: 'Palo Alto Campus 42',
+      region: null,
+    }],
+  })]);
+  assert.deepEqual(result.locationsV2, [{ kind: 'city', locationId: 'geonames:5380748' }]);
+});
+
+test('boundary country parser does not collapse two explicit countries into one', () => {
+  const [result] = normalizeCandidateLocations([candidate({
+    rawLocation: 'Germany, Berlin, France',
+    remoteType: 'On-Site',
+  })]);
+  assert.deepEqual(result.locationsV2, []);
+});

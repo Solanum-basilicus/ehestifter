@@ -11,6 +11,18 @@ function ratio(numerator, denominator) {
   return Math.round((numerator / denominator) * 10_000) / 10_000;
 }
 
+function countBy(items, keyFor) {
+  const counts = {};
+  for (const item of items) {
+    const key = keyFor(item);
+    if (key == null || key === '') continue;
+    counts[String(key)] = (counts[String(key)] ?? 0) + 1;
+  }
+  return Object.fromEntries(
+    Object.entries(counts).sort(([left], [right]) => left.localeCompare(right)),
+  );
+}
+
 function providerVariantHealth({
   providerResults,
   breakerEvents,
@@ -69,7 +81,17 @@ function providerVariantHealth({
       ?? planStats?.providerVariant
       ?? null;
     const attempted = results.filter((item) => item.status !== 'skipped');
-    const errors = attempted.filter((item) => item.status === 'error').length;
+    const errorResults = attempted.filter((item) => item.status === 'error');
+    const errors = errorResults.length;
+    const errorClasses = countBy(errorResults, (item) => item.errorClass ?? 'unknown');
+    const httpStatuses = countBy(
+      errorResults,
+      (item) => Number.isInteger(item.httpStatus) ? item.httpStatus : null,
+    );
+    const networkCodes = countBy(
+      errorResults,
+      (item) => item.networkDiagnostic?.code ?? null,
+    );
     const healthErrors = attempted.filter(isTransientProviderResult).length;
     const durableTenantFailures = attempted.filter(isDurableProviderResult).length;
     const monitoring = policy
@@ -158,6 +180,9 @@ function providerVariantHealth({
       skippedNormalBudget,
       successes: attempted.filter((item) => item.status === 'ok').length,
       errors,
+      errorClasses,
+      httpStatuses,
+      networkCodes,
       healthErrors,
       durableTenantFailures,
       healthErrorRatio: Math.round(healthErrorRatio * 10_000) / 10_000,

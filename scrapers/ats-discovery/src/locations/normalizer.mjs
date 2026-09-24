@@ -248,6 +248,108 @@ function parseLocalities(values, country, dictionary, source, raw) {
   return { observations, locations, unresolved };
 }
 
+function parseBoundaryCountryLocation(parts, dictionary, source, raw) {
+  if (parts.length < 2) return null;
+
+  let candidates = [];
+  const lastIndex = parts.length - 1;
+  const lastCountry = dictionary.resolveCountry(parts[lastIndex]);
+  const firstCountry = dictionary.resolveCountry(parts[0]);
+  if (firstCountry && lastCountry && firstCountry.countryCode !== lastCountry.countryCode) {
+    const lastIsFirstCountryRegion = Boolean(resolveAdministrativeRegion(
+      parts[lastIndex],
+      { countryCode: firstCountry.countryCode, allowAmbiguous: true },
+    ));
+    const firstIsLastCountryRegion = Boolean(resolveAdministrativeRegion(
+      parts[0],
+      { countryCode: lastCountry.countryCode, allowAmbiguous: true },
+    ));
+    if (lastIsFirstCountryRegion && !firstIsLastCountryRegion) {
+      candidates = [{ index: 0, country: firstCountry }];
+    } else if (firstIsLastCountryRegion && !lastIsFirstCountryRegion) {
+      candidates = [{ index: lastIndex, country: lastCountry }];
+    } else {
+      return null;
+    }
+  } else {
+    if (lastCountry) candidates.push({ index: lastIndex, country: lastCountry });
+    if (firstCountry && (!lastCountry || lastIndex === 1)) {
+      candidates.push({ index: 0, country: firstCountry });
+    }
+  }
+
+  for (const { index, country } of candidates) {
+    const otherParts = parts.filter((_part, partIndex) => partIndex !== index);
+    const resolvedCities = otherParts
+      .map((value, partIndex) => ({
+        value,
+        partIndex,
+        city: dictionary.resolveCity(value, country.countryCode),
+      }))
+      .filter((item) => item.city);
+    const uniqueCities = new Map(
+      resolvedCities.map((item) => [lookupKey(item.city.cityName), item]),
+    );
+    if (uniqueCities.size === 1) {
+      const [cityItem] = uniqueCities.values();
+      const qualifierParts = otherParts.filter(
+        (_value, partIndex) => partIndex !== cityItem.partIndex,
+      );
+      const regions = qualifierParts
+        .map((value) => resolveAdministrativeRegion(value, {
+          countryCode: country.countryCode,
+          allowAmbiguous: true,
+        }))
+        .filter(Boolean);
+      const uniqueRegions = new Map(
+        regions.map((item) => [`${item.countryCode}\u0000${item.regionName}`, item]),
+      );
+      const region = uniqueRegions.size === 1 ? [...uniqueRegions.values()][0] : null;
+      const location = region
+        ? locationFromRegion(region, dictionary, cityItem.city.cityName)
+        : locationFromCountry(country, cityItem.city.cityName, null);
+      if (!location) continue;
+      const unresolved = qualifierParts
+        .filter((value) => {
+          if (dictionary.resolveCountry(value)?.countryCode === country.countryCode) return false;
+          return !resolveAdministrativeRegion(value, {
+            countryCode: country.countryCode,
+            allowAmbiguous: true,
+          });
+        })
+        .map((value) => ({
+          source,
+          raw: value,
+          reason: 'qualifier_unresolved_for_country',
+        }));
+      return {
+        observations: [{
+          source,
+          raw,
+          kind: region ? 'city_region_country' : 'city_country',
+          status: 'resolved',
+          location,
+        }],
+        locations: [location],
+        unresolved,
+      };
+    }
+
+    if (otherParts.every((value) => (
+      isNonCity(value)
+      || dictionary.resolveCountry(value)?.countryCode === country.countryCode
+    ))) {
+      const location = locationFromCountry(country);
+      return {
+        observations: [{ source, raw, kind: 'country_scope', status: 'resolved', location }],
+        locations: [location],
+        unresolved: [],
+      };
+    }
+  }
+  return null;
+}
+
 function parseSegment(segment, dictionary, source) {
   const raw = cleanText(segment);
   const arrangement = workArrangementFromText(raw);
@@ -279,6 +381,20 @@ function parseSegment(segment, dictionary, source) {
       unresolved,
       arrangement,
     };
+  }
+
+  const anywhereCountryMatch = cleaned.match(
+    /^anywhere(?:\s+(?:in|within)|\s*,)\s+(?:the\s+)?(.+)$/iu,
+  );
+  if (anywhereCountryMatch) {
+    const country = dictionary.resolveCountry(anywhereCountryMatch[1]);
+    if (country) {
+      const location = locationFromCountry(country);
+      return {
+        observations: [{ source, raw, kind: 'country_scope', status: 'resolved', location }],
+        locations: [location], unresolved, arrangement,
+      };
+    }
   }
 
   const exactCountry = dictionary.resolveCountry(cleaned);
@@ -341,6 +457,11 @@ function parseSegment(segment, dictionary, source) {
       };
     }
   }
+  const boundaryCountry = parseBoundaryCountryLocation(
+    commaParts, dictionary, source, raw,
+  );
+  if (boundaryCountry) return { ...boundaryCountry, arrangement };
+
   const countries = commaParts
     .map((part, index) => ({ index, country: dictionary.resolveCountry(part) }))
     .filter((item) => item.country);
@@ -1217,6 +1338,10 @@ function claimCountryCode(catalog, item) {
   return country?.countryCode ?? null;
 }
 
+function claimPrecision(item) {
+  return { globalRegion: 0, country: 1, adminRegion: 2, city: 3 }[item?.kind] ?? -1;
+}
+
 function descriptionCarriesBroadLocationScope(window) {
   const text = lookupKey(window);
   if (!text) return false;
@@ -1264,6 +1389,42 @@ function v2ClaimsForCandidate(candidate, locations, catalog, primaryObservations
       if (hasMorePreciseFinalClaim) continue;
     }
     claims.push(item);
+  }
+
+  // Provider structured fields often put a campus/site label into cityName.
+  // Keep that text in legacy locations for diagnostics/display, but if the
+  // provider supplied a reliable country and the city is not canonical, emit
+  // the narrowest canonical country/region fallback rather than no v2 claim.
+  for (const observation of primaryObservations) {
+    if (observation.source !== 'provider_structured') continue;
+    if (observation.status !== 'resolved' || !observation.location) continue;
+    if (!observation.issues?.includes('city_unresolved_for_country')) continue;
+    const countryCode = observation.location.countryCode;
+    const regionMentions = countryCode
+      ? catalog.findAdminRegionMentions(observation.location.cityName, { countryCode })
+      : [];
+    let item = regionMentions.length === 1 ? regionMentions[0] : null;
+    if (!item) {
+      item = catalog.canonicalFromLegacy({
+        ...observation.location,
+        cityName: null,
+      });
+    }
+    if (!item && countryCode) {
+      item = catalog.canonicalFromLegacy({
+        countryCode,
+        countryName: observation.location.countryName,
+        cityName: null,
+        region: null,
+      });
+    }
+    if (!item) continue;
+    const fallbackCountryCode = claimCountryCode(catalog, item);
+    const hasMorePreciseFinalClaim = finalClaims.some((claim) => (
+      claimCountryCode(catalog, claim) === fallbackCountryCode
+      && claimPrecision(claim) > claimPrecision(item)
+    ));
+    if (!hasMorePreciseFinalClaim) claims.push(item);
   }
 
   claims.push(...catalog.broadScopeClaims(candidate.rawLocation));

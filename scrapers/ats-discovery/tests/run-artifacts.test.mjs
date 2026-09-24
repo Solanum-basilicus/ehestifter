@@ -540,3 +540,50 @@ test('run summary separates unavailable details and their safe import skips', ()
   assert.equal(summary.importDetailUnavailableSkipped, 1);
   assert.equal(summary.importSkipped, 1);
 });
+
+test('provider health summary exposes error class and HTTP status breakdowns', () => {
+  const summary = buildRunSummary({
+    runId: 'provider-errors', mode: 'offline',
+    startedAt: new Date('2026-09-24T00:00:00Z'),
+    finishedAt: new Date('2026-09-24T00:00:01Z'),
+    targetPlan: {
+      targets: [],
+      limits: { liveCatalogRequested: false, catalogTargetsRequested: 0 },
+      counts: {
+        priority: 0, canary: 0, normal: 3, disabled: 0, disabledRemoved: 0,
+        planningRejected: 0, canaryPlanningRejected: 0, catalogEligible: 3,
+        skippedNotDue: 0, skippedProviderCooldown: 0, skippedNormalBudget: 0,
+        skippedTotal: 0,
+      },
+      catalogs: {}, catalogSweeps: {},
+      healthPartitions: {
+        bamboohr: {
+          provider: 'bamboohr', providerVariant: null,
+          selectedTargets: 3, skippedNotDue: 0, skippedProviderCooldown: 0,
+          skippedNormalBudget: 0,
+        },
+      },
+      sweep: {
+        targetFullSweepDays: 2, estimatedHealthySweepDays: 1,
+        recommendedHealthyTargetsPerRun: 1, recommendedNormalTargetsPerRun: 1,
+        feasibleAtConfiguredBudget: true,
+      },
+    },
+    scanResult: {
+      candidates: [], rejected: [], providerIds: ['bamboohr'], breakerEvents: [],
+      providerResults: [
+        { provider: 'bamboohr', healthPartition: 'bamboohr', status: 'error', errorClass: 'http_5xx', httpStatus: 503, networkDiagnostic: null, jobsReturned: 0, listingOutcome: 'listing_error' },
+        { provider: 'bamboohr', healthPartition: 'bamboohr', status: 'error', errorClass: 'timeout', httpStatus: null, networkDiagnostic: null, jobsReturned: 0, listingOutcome: 'listing_error' },
+        { provider: 'bamboohr', healthPartition: 'bamboohr', status: 'error', errorClass: 'network', httpStatus: null, networkDiagnostic: { code: 'ECONNRESET' }, jobsReturned: 0, listingOutcome: 'listing_error' },
+      ],
+    },
+    evaluated: [],
+  });
+  assert.deepEqual(summary.providerVariants.bamboohr.errorClasses, {
+    http_5xx: 1,
+    network: 1,
+    timeout: 1,
+  });
+  assert.deepEqual(summary.providerVariants.bamboohr.httpStatuses, { 503: 1 });
+  assert.deepEqual(summary.providerVariants.bamboohr.networkCodes, { ECONNRESET: 1 });
+});

@@ -16,7 +16,6 @@ const BROAD_SCOPE_ALIASES = new Map([
   ['worldwide', [['globalRegion', 'm49:001']]],
   ['global', [['globalRegion', 'm49:001']]],
   ['globally', [['globalRegion', 'm49:001']]],
-  ['anywhere', [['globalRegion', 'm49:001']]],
   ['europe', [['globalRegion', 'm49:150']]],
   ['eu', [['globalRegion', 'm49:150']]],
   ['european union', [['globalRegion', 'm49:150']]],

@@ -438,6 +438,12 @@ errno, syscall, and hostname so operators can distinguish tenant-local DNS or
 connectivity failures from shared provider health without persisting arbitrary
 exception text or URLs.
 
+Each `summary.json` provider-variant entry also aggregates failed requests into
+`errorClasses`, `httpStatuses`, and `networkCodes`. These bounded counters make
+a breaker such as `transient_error_ratio` diagnosable without scanning every
+provider-result row: operators can distinguish 5xx responses, timeouts, network
+resets, 429 responses, and durable tenant-local failures.
+
 Secrets are mounted/read by the existing scanner configuration path. Do not
 print function keys, tokens, cookies, CSRF values, CV data, or full user
 profiles into run artifacts.
@@ -503,6 +509,21 @@ a provider/description conflict. It never silently erases the provider
 observation. Only decisive incompatible evidence blocks import; unresolved,
 unsupported, and inconclusive conflicts are retained in artifacts and propagate
 to Jobs.
+
+Location parsing treats `Anywhere` as unknown geography unless the source also
+contains an explicit geographic scope. For example, `Anywhere in the United
+States` and `Anywhere, USA` normalize to the United States, while bare
+`Anywhere` does not mean Worldwide. Explicit `Worldwide`, `Global Remote`, and
+equivalent scope evidence can still produce the World Locations v2 region.
+
+Common fully-qualified provider forms such as `San Francisco, CA, United
+States` and city-state forms such as `Singapore, Singapore` are parsed before
+ambiguous comma-list heuristics. If provider-structured data supplies a reliable
+country but puts a non-canonical campus/site label in the city field, the
+scanner keeps the original legacy text for diagnostics and can emit that
+canonical country as the v2 fallback. Unqualified bare cities remain unresolved
+unless an existing narrow rule can disambiguate them; the scanner does not
+generally guess a country from a city name.
 
 The scanner also owns a small administrative-region dictionary separate from
 Web Core geography. It currently covers US states/DC and aliases, German
