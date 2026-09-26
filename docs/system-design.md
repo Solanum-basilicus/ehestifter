@@ -619,6 +619,17 @@ Canonical IDs use GeoNames for cities and first-level administrative regions, IS
 
 Jobs accepts v1-only, v2-only, and mixed payloads. It does not shadow-write one representation from the other. The `LOCATIONS_ACTIVE_MODEL` app setting selects `v1` or `v2` for location-dependent reads and filters. The safe default is `v1`. Missing v2 geography is valid and must not be guessed into a location.
 
+ATS Discovery is a native Locations v2 producer for new shared jobs. Its Jobs
+create payload sends `locationsV2` and `workTimeConstraintsV2`. It does not send
+legacy `locations`. Provider location observations can still use an internal
+field named `locations`. These observations remain normalization and diagnostic
+input. They are not a Jobs v1 write contract.
+
+After this producer cutover, changing Jobs to `LOCATIONS_ACTIVE_MODEL=v1` does
+not restore complete geography for new ATS jobs. A full v1 ATS rollback also
+requires a revert of the ATS v2-only create-payload change. This cutover does not
+delete historical v1 rows.
+
 #### `dbo.CompatibilityScores`
 
 Purpose:
@@ -1962,6 +1973,8 @@ Users discovery input:
 Jobs identity and persistence:
 - `GET /jobs/exists?url=<origin-url>` is authoritative for canonical identity preflight;
 - `POST /jobs` creates/reconciles the shared job;
+- ATS imports send native `locationsV2` geography and independent `workTimeConstraintsV2` constraints, and do not send legacy `locations`;
+- provider/raw location observations stay in ATS normalization and run artifacts even when their internal field is named `locations`;
 - imports carry system-actor context, `foundOn = "ats-discovery"`, and the source ATS vendor when known;
 - no status endpoint is called by discovery.
 

@@ -85,14 +85,57 @@ test('buildCreatePayload uses scanner provenance and Jobs identity', () => {
     'Example GmbH',
   );
 
-  assert.deepEqual(payload.locations, [
-    {
-      countryName: 'Germany',
-      countryCode: 'DE',
-      cityName: 'Berlin',
-      region: 'Berlin',
+  assert.equal(Object.hasOwn(payload, 'locations'), false);
+  assert.deepEqual(payload.locationsV2, []);
+});
+
+test('import creates a valid v2 job even when legacy location evidence is invalid', async () => {
+  let postedPayload = null;
+  const client = {
+    async createJob(payload) {
+      postedPayload = payload;
+      return {
+        id: '00000000-0000-0000-0000-000000000025',
+        disposition: 'submitted',
+        reconciled: false,
+        responseStatus: 201,
+      };
     },
+  };
+
+  const [result] = await importCandidates(
+    [candidate({
+      rawLocation: 'DEU AAG Münster - AAS',
+      detailRawLocation: 'Münster, Germany',
+      locations: [{
+        countryName: 'Germany',
+        countryCode: 'DE',
+        cityName: 'DEU AAG Münster - AAS',
+        region: null,
+      }],
+      locationsV2: [{ kind: 'country', locationId: 'iso3166:DE' }],
+      locationNormalization: {
+        status: 'normalized_country',
+        unresolved: [{ source: 'provider', raw: 'DEU AAG Münster - AAS' }],
+      },
+    })],
+    client,
+    {
+      maxCreates: 1,
+      requireDescription: true,
+    },
+  );
+
+  assert.equal(result.import.status, 'submitted');
+  assert.equal(Object.hasOwn(postedPayload, 'locations'), false);
+  assert.equal(Object.hasOwn(result.import.payload, 'locations'), false);
+  assert.deepEqual(postedPayload.locationsV2, [
+    { kind: 'country', locationId: 'iso3166:DE' },
   ]);
+  assert.equal(result.rawLocation, 'DEU AAG Münster - AAS');
+  assert.equal(result.detailRawLocation, 'Münster, Germany');
+  assert.equal(result.locations[0].cityName, 'DEU AAG Münster - AAS');
+  assert.equal(result.locationNormalization.unresolved.length, 1);
 });
 
 test('buildCreatePayload keeps ATS vendor separate from Jobs provider', () => {

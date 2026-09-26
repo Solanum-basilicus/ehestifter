@@ -138,9 +138,14 @@ For a retained candidate:
 4. ask Jobs for canonical identity and fetch bounded detail when needed;
 5. normalize Locations v2 and apply each user's geography rules;
 6. apply the final fair `scan.maxCandidatesPerRun` cap after geography;
-7. create the shared job once through Jobs;
+7. create the shared job once through Jobs with native `locationsV2` geography and no legacy `locations`;
 8. request compatibility for each matched user when needed;
 9. never create or change application status.
+
+The v2-only create contract applies only to the Jobs write payload. Provider
+and detail observations can still use the internal `locations` field. ATS keeps
+these observations, raw text, and normalization diagnostics in run artifacts.
+`workTimeConstraintsV2` remains independent from geography.
 
 `scan.maxCandidatesPerRun` is therefore the normal downstream candidate cap in
 multi-user preflight/import runs. `scan.maxTitleCandidatesBeforeGeography` is a
@@ -528,9 +533,10 @@ generally guess a country from a city name.
 The scanner also owns a small administrative-region dictionary separate from
 Web Core geography. It currently covers US states/DC and aliases, German
 federal states, and explicit German district forms such as `Landkreis ...` or
-`Kreis ...`. This lets deterministic parsing retain values such as
-`Austin, TX`, `local to Maryland`, and German district names in the Jobs
-`region` field without changing the Web UI geography source.
+`Kreis ...`. This lets deterministic parsing retain region evidence such as
+`Austin, TX`, `local to Maryland`, and German district names during normalization
+and diagnostics without changing the Web UI geography source. Canonical v2
+output uses the resolved city or administrative-region identity when available.
 
 High-signal description declarations can refine provider metadata without
 replacing it. Examples include `Location: Austin, TX`, explicit candidate
@@ -541,10 +547,9 @@ provider localities (for example a city or the US state/country name
 `Georgia`); they do not create a location by themselves.
 
 Explicit work-hours/timezone requirements are recorded in each normalized
-candidate as `workTimeConstraints`. The current import and discovery-profile
-filters do not act on this evidence yet. It is retained for a later compatibility
-filter that can compare required work-time regions with a user's feasible
-remote-work region.
+candidate as `workTimeConstraintsV2`. Discovery geography filters do not act on
+this evidence. Import sends it to Jobs as an independent contract so a geographic
+location never implies an employer work-time requirement.
 
 The scanner packages a generated copy of Web Core's geography data. Runtime
 containers do not mount or read the Web Core directory. Refresh the committed
@@ -587,6 +592,13 @@ new target or major filter change.
 ./ops/scheduler/ats-ops scanner -- \
   scan tracked --import --max-create 1 --catalog-targets 23
 ```
+
+New ATS imports are v2-only for geography. They send `locationsV2` even when
+it is empty. They omit legacy Jobs `locations`. Thus,
+`LOCATIONS_ACTIVE_MODEL=v1` is not a complete rollback for ATS jobs created
+after this cutover. For full v1 ATS behavior, revert the ATS v2-only payload
+change and change the Jobs active model. Do not rewrite or delete historical v1
+rows for this rollback.
 
 Import mode performs the preflight/detail/location stages and then:
 

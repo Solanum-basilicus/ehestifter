@@ -1,19 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createGeoDictionary } from '../src/locations/geo-dictionary.mjs';
 import { buildCreatePayload } from '../src/ehestifter/job-payload.mjs';
 
-const dictionary = createGeoDictionary({
-  schemaVersion: 1,
-  countries: [
-    { name: 'Germany', code: 'DE', priority: true },
-    { name: 'United States', code: 'US', priority: true },
-  ],
-  cities: { DE: ['Berlin'], US: ['Washington'] },
-});
+const validSelectors = new Set([
+  'country\u0000iso3166:DE',
+  'country\u0000iso3166:GB',
+]);
 
-function candidate(locations) {
+const v2Catalog = {
+  get(kind, locationId) {
+    return validSelectors.has(`${kind}\u0000${locationId}`)
+      ? { kind, id: locationId }
+      : null;
+  },
+};
+
+function candidate(overrides = {}) {
   return {
     url: 'https://example.test/job/1',
     applyUrl: 'https://example.test/job/1',
@@ -23,80 +26,91 @@ function candidate(locations) {
     hiringCompanyName: 'Example',
     remoteType: 'Remote',
     description: 'Description',
-    locations,
+    locations: [],
+    locationsV2: [],
+    workTimeConstraintsV2: [],
     canonicalIdentity: {
       provider: 'greenhouse', providerTenant: 'example', externalId: '1',
     },
+    ...overrides,
   };
 }
 
-test('payload emits canonical name, code, and city', () => {
-  const payload = buildCreatePayload(candidate([{
-    countryName: 'Deutschland',
-    countryCode: 'DE',
-    cityName: 'berlin',
-    region: null,
-  }]), { dictionary });
-  assert.deepEqual(payload.locations, [{
-    countryName: 'Germany',
-    countryCode: 'DE',
-    cityName: 'Berlin',
-    region: null,
-  }]);
-});
+test('payload sends native v2 geography without legacy locations', () => {
+  const payload = buildCreatePayload(candidate({
+    locations: [{
+      countryName: 'Germany', countryCode: 'DE', cityName: 'Berlin', region: null,
+    }],
+    locationsV2: [{ kind: 'country', locationId: 'iso3166:DE' }],
+    workTimeConstraintsV2: [{
+      offsetRangeStartMinutes: -300,
+      offsetRangeEndMinutes: -240,
+    }],
+  }), { v2Catalog });
 
-test('payload rejects inconsistent canonical pairs', () => {
-  assert.throws(() => buildCreatePayload(candidate([{
-    countryName: 'United States',
-    countryCode: 'DE',
-    cityName: null,
-    region: null,
-  }]), { dictionary }), /mismatch/u);
-});
-
-test('payload rejects unresolved cities instead of guessing', () => {
-  assert.throws(() => buildCreatePayload(candidate([{
-    countryName: 'Germany',
-    countryCode: 'DE',
-    cityName: 'Washington',
-    region: null,
-  }]), { dictionary }), /Unknown city/u);
-});
-
-
-test('payload dual-writes legacy and native v2 location contracts', () => {
-  const input = candidate([{
-    countryName: 'Germany', countryCode: 'DE', cityName: 'Berlin', region: null,
-  }]);
-  input.locationsV2 = [{ kind: 'country', locationId: 'iso3166:DE' }];
-  input.workTimeConstraintsV2 = [{
-    offsetRangeStartMinutes: -300,
-    offsetRangeEndMinutes: -240,
-  }];
-  const v2Catalog = {
-    get(kind, locationId) {
-      return kind === 'country' && locationId === 'iso3166:DE'
-        ? { kind, id: locationId }
-        : null;
-    },
-  };
-  const payload = buildCreatePayload(input, { dictionary, v2Catalog });
-  assert.equal(payload.locations.length, 1);
-  assert.deepEqual(payload.locationsV2, [{ kind: 'country', locationId: 'iso3166:DE' }]);
+  assert.equal(Object.hasOwn(payload, 'locations'), false);
+  assert.deepEqual(payload.locationsV2, [
+    { kind: 'country', locationId: 'iso3166:DE' },
+  ]);
   assert.deepEqual(payload.workTimeConstraintsV2, [{
     offsetRangeStartMinutes: -300,
     offsetRangeEndMinutes: -240,
   }]);
 });
 
+test('legacy provider location evidence cannot reject a valid v2 payload', () => {
+  const payload = buildCreatePayload(candidate({
+    locations: [{
+      countryName: 'Germany',
+      countryCode: 'DE',
+      cityName: 'DEU AAG Münster - AAS',
+      region: null,
+    }],
+    locationsV2: [{ kind: 'country', locationId: 'iso3166:DE' }],
+  }), { v2Catalog });
+
+  assert.equal(Object.hasOwn(payload, 'locations'), false);
+  assert.deepEqual(payload.locationsV2, [
+    { kind: 'country', locationId: 'iso3166:DE' },
+  ]);
+});
+
+test('remote job with unknown geography remains representable', () => {
+  const payload = buildCreatePayload(candidate({
+    locations: [{
+      countryName: 'Unknown provider value',
+      countryCode: null,
+      cityName: 'Home Working, GB',
+      region: null,
+    }],
+    locationsV2: [],
+  }), { v2Catalog });
+
+  assert.equal(payload.remoteType, 'Remote');
+  assert.equal(Object.hasOwn(payload, 'locations'), false);
+  assert.deepEqual(payload.locationsV2, []);
+});
+
+test('payload keeps independent v2 location alternatives', () => {
+  const payload = buildCreatePayload(candidate({
+    locationsV2: [
+      { kind: 'country', locationId: 'iso3166:DE' },
+      { kind: 'country', locationId: 'iso3166:GB' },
+      { kind: 'country', locationId: 'iso3166:DE' },
+    ],
+  }), { v2Catalog });
+
+  assert.deepEqual(payload.locationsV2, [
+    { kind: 'country', locationId: 'iso3166:DE' },
+    { kind: 'country', locationId: 'iso3166:GB' },
+  ]);
+});
+
 test('payload rejects invalid canonical v2 selectors', () => {
-  const input = candidate([]);
-  input.locationsV2 = [{ kind: 'country', locationId: 'iso3166:ZZ' }];
   assert.throws(
-    () => buildCreatePayload(input, {
-      dictionary,
-      v2Catalog: { get() { return null; } },
-    }),
+    () => buildCreatePayload(candidate({
+      locationsV2: [{ kind: 'country', locationId: 'iso3166:ZZ' }],
+    }), { v2Catalog }),
     /Invalid Locations v2 selector/u,
   );
 });
