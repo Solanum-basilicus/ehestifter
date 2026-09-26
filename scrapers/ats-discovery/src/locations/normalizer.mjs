@@ -217,6 +217,137 @@ function parseRegionEvidence(value, dictionary, source, raw) {
   };
 }
 
+function parseProviderCountryToken(value, dictionary) {
+  const raw = cleanText(value);
+  const wfhMatch = raw.match(/^[A-Z]{2,3}[_\s-]+(.+?)[_\s-]+WFH$/u);
+  if (!wfhMatch) return null;
+  return dictionary.resolveCountry(wfhMatch[1]);
+}
+
+function stripTrailingRestrictionWords(value) {
+  return cleanText(value)
+    .replace(/\b(?:only|only\s+location)\b\s*$/iu, '')
+    .trim();
+}
+
+function parseCountryQualifiedDashLocation(value, dictionary, source, raw) {
+  const parts = cleanText(value)
+    .split(/\s*[-–—]\s*/u)
+    .map(cleanText)
+    .filter(Boolean);
+  if (parts.length < 2) return null;
+
+  const countryAtStart = dictionary.resolveCountry(parts[0]);
+  const countryAtEnd = dictionary.resolveCountry(parts.at(-1));
+  if (!countryAtStart && !countryAtEnd) return null;
+  if (countryAtStart && countryAtEnd
+    && countryAtStart.countryCode !== countryAtEnd.countryCode) return null;
+
+  const country = countryAtStart ?? countryAtEnd;
+  const countryIndex = countryAtStart ? 0 : parts.length - 1;
+  const qualifiers = parts
+    .filter((_part, index) => index !== countryIndex)
+    .map(stripTrailingRestrictionWords)
+    .filter(Boolean);
+  if (qualifiers.length === 0) return null;
+
+  // Do not broaden an explicitly restricted sub-country scope such as
+  // "United States - Select States" to the whole country. Description
+  // evidence can provide the actual state list later.
+  if (qualifiers.some((part) => /^(?:select|selected|specific)\s+(?:states?|regions?|locations?)$/iu.test(part))) {
+    return null;
+  }
+
+  const regions = qualifiers
+    .map((part) => resolveAdministrativeRegion(part, {
+      countryCode: country.countryCode,
+      allowAmbiguous: true,
+    }))
+    .filter(Boolean);
+  const uniqueRegions = new Map(
+    regions.map((item) => [`${item.countryCode}\u0000${item.regionName}`, item]),
+  );
+  const region = uniqueRegions.size === 1 ? [...uniqueRegions.values()][0] : null;
+
+  const cities = qualifiers
+    .map((part) => dictionary.resolveCity(part, country.countryCode))
+    .filter(Boolean);
+  const uniqueCities = new Map(
+    cities.map((item) => [`${item.countryCode}\u0000${lookupKey(item.cityName)}`, item]),
+  );
+  const city = uniqueCities.size === 1 ? [...uniqueCities.values()][0] : null;
+  if (!city && !region) return null;
+
+  const location = city
+    ? (region
+      ? locationFromRegion(region, dictionary, city.cityName)
+      : locationFromCountry(country, city.cityName, null))
+    : locationFromRegion(region, dictionary);
+  if (!location) return null;
+
+  const unresolved = qualifiers
+    .filter((part) => {
+      if (city && lookupKey(part) === lookupKey(city.cityName)) return false;
+      if (region && resolveAdministrativeRegion(part, {
+        countryCode: country.countryCode,
+        allowAmbiguous: true,
+      })) return false;
+      return !dictionary.resolveCity(part, country.countryCode);
+    })
+    .map((part) => ({ source, raw: part, reason: 'qualifier_unresolved_for_country' }));
+
+  return {
+    observations: [{
+      source,
+      raw,
+      kind: city ? (region ? 'city_region_country' : 'city_country') : 'region_country',
+      status: 'resolved',
+      location,
+    }],
+    locations: [location],
+    unresolved,
+  };
+}
+
+function parseUsCityStatePairs(parts, dictionary, source, raw) {
+  if (parts.length < 4 || parts.length % 2 !== 0) return null;
+  const pairs = [];
+  for (let index = 0; index < parts.length; index += 2) {
+    const locality = stripLocalityQualifier(parts[index]);
+    const region = resolveAdministrativeRegion(parts[index + 1], {
+      countryCode: 'US',
+      allowAmbiguous: true,
+    });
+    if (!locality || !region) return null;
+    pairs.push({ locality, region });
+  }
+
+  const locations = [];
+  const observations = [];
+  const unresolved = [];
+  for (const pair of pairs) {
+    const city = dictionary.resolveCity(pair.locality, 'US');
+    const location = locationFromRegion(pair.region, dictionary, city?.cityName ?? null);
+    if (!location) return null;
+    locations.push(location);
+    observations.push({
+      source,
+      raw: `${pair.locality}, ${pair.region.aliases?.find((alias) => /^[A-Z]{2}$/u.test(alias)) ?? pair.region.regionName}`,
+      kind: city ? 'city_region_country' : 'region_country',
+      status: 'resolved',
+      location,
+    });
+    if (!city) {
+      unresolved.push({
+        source,
+        raw: pair.locality,
+        reason: 'city_unresolved_for_region_country',
+      });
+    }
+  }
+  return { observations, locations, unresolved };
+}
+
 function parseLocalities(values, country, dictionary, source, raw) {
   const observations = [];
   const locations = [];
@@ -397,6 +528,17 @@ function parseSegment(segment, dictionary, source) {
     }
   }
 
+  const providerCountry = parseProviderCountryToken(cleaned, dictionary);
+  if (providerCountry) {
+    const location = locationFromCountry(providerCountry);
+    return {
+      observations: [{
+        source, raw, kind: 'country_scope_alternative', status: 'resolved', location,
+      }],
+      locations: [location], unresolved, arrangement: arrangement ?? 'Remote',
+    };
+  }
+
   const exactCountry = dictionary.resolveCountry(cleaned);
   if (exactCountry) {
     const location = locationFromCountry(exactCountry);
@@ -405,6 +547,11 @@ function parseSegment(segment, dictionary, source) {
       locations: [location], unresolved, arrangement,
     };
   }
+
+  const dashQualified = parseCountryQualifiedDashLocation(
+    cleaned, dictionary, source, raw,
+  );
+  if (dashQualified) return { ...dashQualified, arrangement };
 
   const colonParts = cleaned.split(/\s*:\s*/u).map(cleanText).filter(Boolean);
   if (colonParts.length === 2) {
@@ -437,23 +584,54 @@ function parseSegment(segment, dictionary, source) {
   }
 
   const commaParts = cleaned.split(/\s*,\s*/u).map(cleanText).filter(Boolean);
+  const listedCountries = commaParts.map((part) => dictionary.resolveCountry(part));
+  const uniqueListedCountries = new Map(
+    listedCountries.filter(Boolean).map((country) => [country.countryCode, country]),
+  );
+  if (commaParts.length > 1
+    && listedCountries.every(Boolean)
+    && uniqueListedCountries.size > 1) {
+    const listedLocations = [...uniqueListedCountries.values()]
+      .map((country) => locationFromCountry(country));
+    return {
+      observations: listedLocations.map((location) => ({
+        source, raw, kind: 'country_scope_alternative', status: 'resolved', location,
+      })),
+      locations: listedLocations, unresolved: [], arrangement,
+    };
+  }
+
+  const usPairs = parseUsCityStatePairs(commaParts, dictionary, source, raw);
+  if (usPairs) return { ...usPairs, arrangement };
+
   if (commaParts.length === 2) {
     const [locality, qualifier] = commaParts;
     const countryCandidate = dictionary.resolveCountry(qualifier);
     const countryCity = countryCandidate
       ? dictionary.resolveCity(locality, countryCandidate.countryCode)
       : null;
-    const regionCandidate = /^[A-Z]{2}$/u.test(qualifier) && !countryCity
+    const usRegionCandidate = /^[A-Z]{2}$/u.test(qualifier) && !countryCity
       ? resolveAdministrativeRegion(qualifier, { countryCode: 'US' })
-      : resolveAdministrativeRegion(qualifier, { allowAmbiguous: true });
+      : null;
+    const regionCandidate = usRegionCandidate
+      ?? resolveAdministrativeRegion(qualifier, { allowAmbiguous: true });
     const regionCity = regionCandidate
       ? dictionary.resolveCity(locality, regionCandidate.countryCode)
       : null;
-    if (regionCity && !countryCity) {
-      const location = locationFromRegion(regionCandidate, dictionary, regionCity.cityName);
+    if (regionCandidate && !countryCity) {
+      const location = locationFromRegion(
+        regionCandidate, dictionary, regionCity?.cityName ?? null,
+      );
+      const stateUnresolved = regionCity
+        ? []
+        : [{ source, raw: locality, reason: 'city_unresolved_for_region_country' }];
       return {
-        observations: [{ source, raw, kind: 'city_region_country', status: 'resolved', location }],
-        locations: [location], unresolved: [], arrangement,
+        observations: [{
+          source, raw,
+          kind: regionCity ? 'city_region_country' : 'region_country',
+          status: 'resolved', location,
+        }],
+        locations: [location], unresolved: stateUnresolved, arrangement,
       };
     }
   }
@@ -963,6 +1141,36 @@ function providerLocalityRefinement(candidate, countryHints, dictionary) {
   };
 }
 
+function restrictedUsStateLocations(value, dictionary) {
+  const text = cleanText(value);
+  if (!text) return { locations: [], context: null };
+  const listMatch = text.match(
+    /\b(?:only\s+available\s+to|limited\s+to|limiting\s+hiring\s+to|restricted\s+to|candidates?\s+(?:residing|located|based)|applicants?\s+(?:residing|located|based))[^.;]{0,220}\b(?:U\.?\s*S\.?|United\s+States)\s+states\s*[:\-–—]\s*([^.;]{2,160})/iu,
+  );
+  if (!listMatch) return { locations: [], context: null };
+
+  const codes = [...listMatch[1].matchAll(/\b([A-Z]{2})\b/gu)]
+    .map((match) => match[1]);
+  const regions = [];
+  for (const code of codes) {
+    const region = resolveAdministrativeRegion(code, {
+      countryCode: 'US',
+      allowAmbiguous: true,
+    });
+    if (region) regions.push(region);
+  }
+  const unique = new Map(
+    regions.map((region) => [`${region.countryCode}\u0000${region.regionName}`, region]),
+  );
+  if (unique.size < 2) return { locations: [], context: null };
+  return {
+    locations: [...unique.values()]
+      .map((region) => locationFromRegion(region, dictionary))
+      .filter(Boolean),
+    context: cleanText(listMatch[0]),
+  };
+}
+
 function descriptionEvidence(candidate, primaryLocations, dictionary, scopeFilter) {
   const allow = Array.isArray(scopeFilter?.allow) ? scopeFilter.allow : [];
   const block = Array.isArray(scopeFilter?.block) ? scopeFilter.block : [];
@@ -977,6 +1185,25 @@ function descriptionEvidence(candidate, primaryLocations, dictionary, scopeFilte
   const descriptionArrangements = [];
   const countryHints = [];
   const primaryCountries = [...new Set(primaryLocations.map((item) => item.countryCode))];
+  const restrictedStates = restrictedUsStateLocations(candidate.description, dictionary);
+  if (restrictedStates.locations.length > 0) {
+    locations.push(...restrictedStates.locations);
+    observations.push(...restrictedStates.locations.map((location) => ({
+      source: 'description',
+      raw: restrictedStates.context,
+      kind: 'restricted_admin_region_scope',
+      status: 'resolved',
+      location,
+      context: restrictedStates.context,
+    })));
+    eligibilityEvidence.push({
+      source: 'description',
+      kind: 'restricted_admin_region_scope',
+      disposition: 'location_constraint',
+      locations: restrictedStates.locations,
+      text: restrictedStates.context,
+    });
+  }
 
   for (const window of windows) {
     countryHints.push(...employerCountryHints(window, dictionary));
@@ -993,6 +1220,7 @@ function descriptionEvidence(candidate, primaryLocations, dictionary, scopeFilte
         context: window,
       });
     }
+
     const configuredMarker = firstMatchingTerm(window, markers);
     const marker = configuredMarker
       ?? (/\bauthori[sz](?:ed|ation)\s+to\s+work\b/iu.test(window)
@@ -1381,7 +1609,7 @@ function v2ClaimsForCandidate(candidate, locations, catalog, primaryObservations
     if (observation.status !== 'resolved' || !observation.location) continue;
     const item = catalog.canonicalFromLegacy(observation.location);
     if (!item) continue;
-    if (item.kind === 'country') {
+    if (item.kind === 'country' && observation.kind !== 'country_scope_alternative') {
       const countryCode = claimCountryCode(catalog, item);
       const hasMorePreciseFinalClaim = finalClaims.some((claim) => (
         claim.kind !== 'country' && claimCountryCode(catalog, claim) === countryCode

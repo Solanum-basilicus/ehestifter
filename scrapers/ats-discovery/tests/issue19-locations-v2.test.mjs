@@ -327,3 +327,109 @@ test('boundary country parser does not collapse two explicit countries into one'
   })]);
   assert.deepEqual(result.locationsV2, []);
 });
+
+test('US state abbreviations take precedence over colliding ISO country codes', () => {
+  const [delaware, germany, multiState] = normalizeCandidateLocations([
+    candidate({ rawLocation: 'Millsboro, DE', remoteType: 'On-Site' }),
+    candidate({ rawLocation: 'Berlin, DE', remoteType: 'On-Site' }),
+    candidate({ rawLocation: 'Buffalo, NY, Bridgeport, CT', remoteType: 'On-Site' }),
+  ]);
+  assert.deepEqual(delaware.locationsV2, [
+    { kind: 'adminRegion', locationId: 'geonames:4142224' },
+  ]);
+  assert.deepEqual(germany.locationsV2, [
+    { kind: 'city', locationId: 'geonames:2950159' },
+  ]);
+  assert.deepEqual(new Set(multiState.locationsV2.map((item) => item.locationId)), new Set([
+    'geonames:5110629',
+    'geonames:5282804',
+  ]));
+  assert.equal(delaware.locationsV2.some((item) => item.locationId === 'iso3166:DE'), false);
+});
+
+test('explicit comma-separated country alternatives remain separate v2 branches', () => {
+  const [result] = normalizeCandidateLocations([candidate({
+    rawLocation: 'Remote - Mexico, India, Brazil, Canada',
+  })]);
+  assert.deepEqual(new Set(result.locationsV2.map((item) => item.locationId)), new Set([
+    'iso3166:MX',
+    'iso3166:IN',
+    'iso3166:BR',
+    'iso3166:CA',
+  ]));
+});
+
+test('India provider aliases recover Bengaluru from explicit qualified locations', () => {
+  const [rawRemote, workdayRaw] = normalizeCandidateLocations([
+    candidate({ rawLocation: 'Remote (India - Bangalore ONLY)' }),
+    candidate({ rawLocation: 'IND, Karnataka, Bangalore' }),
+  ]);
+  assert.deepEqual(rawRemote.locationsV2, [
+    { kind: 'city', locationId: 'geonames:1277333' },
+  ]);
+  assert.deepEqual(workdayRaw.locationsV2, [
+    { kind: 'city', locationId: 'geonames:1277333' },
+  ]);
+});
+
+test('restricted US state lists in explicit candidate scope remain state branches', () => {
+  const [result, rawOnly] = normalizeCandidateLocations([
+    candidate({
+      rawLocation: 'Remote (United States - Select States)',
+      description: 'This position is only available to candidates residing in the following U.S. states: FL, IL, MA, MO, OR, TX, and WA. Applications from other states will not be considered.',
+    }),
+    candidate({ rawLocation: 'Remote (United States - Select States)' }),
+  ]);
+  assert.deepEqual(new Set(result.locationsV2.map((item) => item.locationId)), new Set([
+    'geonames:4155751',
+    'geonames:4896861',
+    'geonames:6254926',
+    'geonames:4398678',
+    'geonames:5744337',
+    'geonames:4736286',
+    'geonames:5815135',
+  ]));
+  assert.equal(result.locationsV2.some((item) => item.locationId === 'iso3166:US'), false);
+  assert.deepEqual(rawOnly.locationsV2, []);
+});
+
+test('compensation state lists are not treated as candidate location restrictions', () => {
+  const [result] = normalizeCandidateLocations([candidate({
+    rawLocation: 'Remote',
+    description: 'Compensation varies by U.S. states: CA, NY, TX, and WA. See the salary table for details.',
+  })]);
+  assert.deepEqual(result.locationsV2, []);
+});
+
+test('provider WFH country tokens recover explicit country alternatives', () => {
+  const [result] = normalizeCandidateLocations([candidate({
+    rawLocation: '6 Locations',
+    detailRawLocation: 'Mannheim, Germany; NL_Netherlands_WFH; DE_Germany_WFH; ES_Spain_WFH; BE_Belgium_WFH; Pozuelo de Alarcón, Spain',
+    remoteType: 'On-Site',
+  })]);
+  assert.deepEqual(new Set(result.locationsV2.map((item) => item.locationId)), new Set([
+    'geonames:2873891',
+    'iso3166:NL',
+    'iso3166:DE',
+    'iso3166:ES',
+    'iso3166:BE',
+    'geonames:3112989',
+  ]));
+});
+
+test('qualified provider dash forms retain their narrowest deterministic geography', () => {
+  const [fosterCity, oaks, pune] = normalizeCandidateLocations([
+    candidate({ rawLocation: 'United States - California - Foster City', remoteType: 'On-Site' }),
+    candidate({ rawLocation: 'USA - PA - Oaks', remoteType: 'On-Site' }),
+    candidate({ rawLocation: 'IND-Pune-Equifax Analytics-PEC', remoteType: 'On-Site' }),
+  ]);
+  assert.deepEqual(fosterCity.locationsV2, [
+    { kind: 'city', locationId: 'geonames:5350159' },
+  ]);
+  assert.deepEqual(oaks.locationsV2, [
+    { kind: 'adminRegion', locationId: 'geonames:6254927' },
+  ]);
+  assert.deepEqual(pune.locationsV2, [
+    { kind: 'city', locationId: 'geonames:1259229' },
+  ]);
+});

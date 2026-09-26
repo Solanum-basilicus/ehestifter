@@ -32,6 +32,11 @@ const COUNTRY_ALIASES = new Map([
   ['ivory coast', 'CI'],
   ['cote d ivoire', 'CI'],
   ['viet nam', 'VN'],
+  ['ind', 'IN'],
+]);
+
+const CITY_ALIASES_BY_COUNTRY = new Map([
+  ['IN\u0000bangalore', 'Bengaluru'],
 ]);
 
 function cleanText(value) {
@@ -172,6 +177,11 @@ export function createGeoDictionary(data) {
         const cityName = cityMap.get(key);
         if (cityName) {
           return { cityName, countryCode: code };
+        }
+        const alias = CITY_ALIASES_BY_COUNTRY.get(`${code}\u0000${key}`);
+        if (alias) {
+          const canonical = cityMap.get(lookupKey(alias));
+          if (canonical) return { cityName: canonical, countryCode: code };
         }
       }
       return null;
