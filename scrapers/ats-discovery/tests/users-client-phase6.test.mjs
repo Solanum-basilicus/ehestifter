@@ -30,6 +30,12 @@ function payload() {
       userId: USER,
       cvVersionId: CV,
       cvLastUpdatedUtc: '2026-09-19T00:00:00Z',
+      discoveryEligibility: {
+        enabled: true,
+        hasUsableCv: true,
+        hasPositiveTitleRule: true,
+        reasons: [],
+      },
       discoveryPreferences: preferences(),
       discoveryPreferencesInvalid: false,
       discoveryPreferencesLastUpdatedUtc: '2026-09-20T00:00:00Z',
@@ -44,6 +50,29 @@ test('validates the discovery-preference contract returned by Users', () => {
     result.users[0].discoveryPreferences.title.positive,
     ['Product Manager'],
   );
+});
+
+
+test('requires the Users-owned discovery readiness contract', () => {
+  const missing = payload();
+  delete missing.users[0].discoveryEligibility;
+  assert.throws(
+    () => validateDiscoveryUsersPayload(missing),
+    /discoveryEligibility must be an object/u,
+  );
+});
+
+test('accepts a disabled user with a usable preference document and blank CV state', () => {
+  const value = payload();
+  value.users[0].discoveryEligibility = {
+    enabled: false,
+    hasUsableCv: false,
+    hasPositiveTitleRule: true,
+    reasons: ['no_usable_cv'],
+  };
+  const result = validateDiscoveryUsersPayload(value);
+  assert.equal(result.users[0].discoveryEligibility.enabled, false);
+  assert.deepEqual(result.users[0].discoveryEligibility.reasons, ['no_usable_cv']);
 });
 
 test('one malformed stored preference disables that user without rejecting the envelope', () => {

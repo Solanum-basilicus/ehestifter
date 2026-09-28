@@ -22,6 +22,7 @@ from .ui_jobs_open_query import create_blueprint as bp_jobs_open_query
 from .ui_locations_search import create_blueprint as bp_locations_search
 from .ui_locations_coverage import create_blueprint as bp_locations_coverage
 from .ui_users_discovery_preferences import create_blueprint as bp_users_discovery_preferences
+from .ui_users_discovery_status import create_blueprint as bp_users_discovery_status
 
 
 def register_all(app, auth):
@@ -48,3 +49,4 @@ def register_all(app, auth):
     app.register_blueprint(bp_locations_search(auth))
     app.register_blueprint(bp_locations_coverage(auth))
     app.register_blueprint(bp_users_discovery_preferences(auth))
+    app.register_blueprint(bp_users_discovery_status(auth))

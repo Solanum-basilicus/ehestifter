@@ -128,7 +128,7 @@ The scanner requests bounded discovery profiles from:
 GET /users/internal/discovery-eligible
 ```
 
-The Users response supplies saved discovery filters and profile metadata, not CV text. The scanner compounds eligible profiles into one target scan and records which users cheaply match each candidate.
+The Users response supplies discovery preferences, profile metadata, and an authoritative `discoveryEligibility` state. CV text and blob paths do not cross this API boundary. Users checks the current CV plaintext and positive title rules. ATS Discovery enables matching only when Users reports the profile as ready. It still validates the preference document and fails closed if the document cannot produce a positive title matcher.
 
 For a retained candidate:
 
@@ -146,6 +146,8 @@ The v2-only create contract applies only to the Jobs write payload. Provider
 and detail observations can still use the internal `locations` field. ATS keeps
 these observations, raw text, and normalization diagnostics in run artifacts.
 `workTimeConstraintsV2` remains independent from geography.
+
+Run diagnostics keep readiness blockers separate. `summary.json` reports `discoveryUsersDisabledNoUsableCv`, `discoveryUsersDisabledNoPositiveTitle`, and `discoveryUsersDisabledInvalidPreferences`. One user can contribute to more than one blocker count, but contributes only once to `discoveryUsersFailingClosed`.
 
 `scan.maxCandidatesPerRun` is therefore the normal downstream candidate cap in
 multi-user preflight/import runs. `scan.maxTitleCandidatesBeforeGeography` is a
@@ -481,7 +483,7 @@ What it does **not** do:
 - no compatibility request.
 
 When multi-user discovery is enabled, offline mode may still call the Users API
-to obtain discovery-eligible profiles. Offline normal-catalog target counts come
+to obtain bounded discovery profiles and readiness state. Offline normal-catalog target counts come
 from `discovery-policy.yml`; `--catalog-targets` is intentionally invalid here.
 
 Use this first after adding a company or changing filters/provider policy.

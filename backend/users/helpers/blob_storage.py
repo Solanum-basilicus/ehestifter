@@ -84,6 +84,27 @@ def download_text(blob_path: str, *, encoding: str = "utf-8") -> Optional[str]:
     return data.decode(encoding)
 
 
+def download_texts(blob_paths, *, encoding: str = "utf-8") -> dict[str, Optional[str]]:
+    """Download a bounded set of text blobs with one storage client."""
+    from azure.core.exceptions import ResourceNotFoundError
+
+    unique_paths = list(dict.fromkeys(path for path in blob_paths if path))
+    if not unique_paths:
+        return {}
+
+    container = _get_blob_service_client().get_container_client(_get_container_name())
+    output = {}
+    for blob_path in unique_paths:
+        blob_client = container.get_blob_client(blob_path)
+        try:
+            data = blob_client.download_blob().readall()
+        except ResourceNotFoundError:
+            output[blob_path] = None
+            continue
+        output[blob_path] = data.decode(encoding)
+    return output
+
+
 def download_json(blob_path: str) -> Optional[Any]:
     txt = download_text(blob_path)
     if txt is None:

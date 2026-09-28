@@ -65,7 +65,7 @@ def normalize_guid(value):
     return str(uuid.UUID(str(value))) if value not in (None, "") else None
 
 
-def load_route_module(connection_factory):
+def load_route_module(connection_factory, blob_texts=None):
     azure_module = types.ModuleType("azure")
     functions_module = types.ModuleType("azure.functions")
     functions_module.FunctionApp = object
@@ -81,6 +81,9 @@ def load_route_module(connection_factory):
     db_module.get_connection = connection_factory
     guid_module = types.ModuleType("helpers.guid")
     guid_module.normalize_guid = normalize_guid
+    blob_storage_module = types.ModuleType("helpers.blob_storage")
+    blob_texts = blob_texts or {}
+    blob_storage_module.download_texts = lambda paths: {path: blob_texts.get(path) for path in paths}
 
     discovery_filters_path = (
         Path(__file__).parents[1]
@@ -110,10 +113,33 @@ def load_route_module(connection_factory):
     )
     discovery_preferences_spec.loader.exec_module(discovery_preferences_module)
 
+    discovery_readiness_path = (
+        Path(__file__).parents[1]
+        / "helpers"
+        / "discovery_readiness.py"
+    )
+    discovery_readiness_spec = importlib.util.spec_from_file_location(
+        "helpers.discovery_readiness",
+        discovery_readiness_path,
+    )
+    discovery_readiness_module = importlib.util.module_from_spec(
+        discovery_readiness_spec
+    )
+    with patch.dict(
+        sys.modules,
+        {
+            "helpers": helpers_module,
+            "helpers.discovery_preferences": discovery_preferences_module,
+        },
+    ):
+        discovery_readiness_spec.loader.exec_module(discovery_readiness_module)
+
     helpers_module.db = db_module
     helpers_module.guid = guid_module
+    helpers_module.blob_storage = blob_storage_module
     helpers_module.discovery_filters = discovery_filters_module
     helpers_module.discovery_preferences = discovery_preferences_module
+    helpers_module.discovery_readiness = discovery_readiness_module
 
     module_path = (
         Path(__file__).parents[1]
@@ -133,8 +159,10 @@ def load_route_module(connection_factory):
             "helpers": helpers_module,
             "helpers.db": db_module,
             "helpers.guid": guid_module,
+            "helpers.blob_storage": blob_storage_module,
             "helpers.discovery_filters": discovery_filters_module,
             "helpers.discovery_preferences": discovery_preferences_module,
+            "helpers.discovery_readiness": discovery_readiness_module,
         },
     ):
         spec.loader.exec_module(module)
@@ -150,6 +178,7 @@ class DiscoveryEligibleRouteTests(unittest.TestCase):
             (
                 user_id,
                 cv_version,
+                "cv/text/user-a.txt",
                 datetime(2026, 7, 24, 10, 0, 0),
                 "33333333-3333-4333-8333-333333333333",
                 json.dumps({"title": {"positive": ["Manager"]}}),
@@ -163,6 +192,7 @@ class DiscoveryEligibleRouteTests(unittest.TestCase):
             (
                 excluded_id,
                 "b" * 64,
+                "cv/text/excluded.txt",
                 datetime(2026, 7, 24, 10, 0, 0),
                 "44444444-4444-4444-8444-444444444444",
                 json.dumps({"title": {"positive": ["Engineer"]}}),
@@ -173,6 +203,7 @@ class DiscoveryEligibleRouteTests(unittest.TestCase):
             (
                 excluded_id,
                 "b" * 64,
+                "cv/text/excluded.txt",
                 datetime(2026, 7, 24, 10, 0, 0),
                 "55555555-5555-4555-8555-555555555555",
                 "not-json",
@@ -181,7 +212,9 @@ class DiscoveryEligibleRouteTests(unittest.TestCase):
             ),
         ]
         connection = FakeConnection(rows)
-        module = load_route_module(lambda: connection)
+        module = load_route_module(
+            lambda: connection, {"cv/text/user-a.txt": "Experienced manager\n"}
+        )
         app = FakeApp()
         module.register(app)
 
@@ -205,13 +238,62 @@ class DiscoveryEligibleRouteTests(unittest.TestCase):
             ["Manager"],
         )
         self.assertFalse(payload["users"][0]["discoveryPreferencesInvalid"])
+        self.assertEqual(payload["users"][0]["discoveryEligibility"], {
+            "enabled": True,
+            "hasUsableCv": True,
+            "hasPositiveTitleRule": True,
+            "reasons": [],
+        })
         self.assertEqual(payload["counts"]["invalidDiscoveryPreferences"], 0)
+        self.assertEqual(payload["counts"]["discoveryEnabled"], 1)
+        self.assertEqual(payload["counts"]["disabledNoUsableCv"], 0)
         serialized = json.dumps(payload).lower()
         self.assertNotIn("cvplaintext", serialized)
         self.assertNotIn("cvtextblobpath", serialized)
         self.assertNotIn("filtertext", serialized)
         self.assertIn("top (25)", connection.cursor_value.sql.lower())
         self.assertTrue(connection.closed)
+
+    def test_saved_whitespace_only_cv_is_returned_but_discovery_is_disabled(self):
+        user_id = "11111111-1111-4111-8111-111111111111"
+        rows = [(
+            user_id,
+            "a" * 64,
+            "cv/text/blank.txt",
+            datetime(2026, 9, 20, 10, 0, 0),
+            None,
+            None,
+            json.dumps({
+                "schemaVersion": 1,
+                "title": {
+                    "positive": ["Manager"],
+                    "positivePatterns": [],
+                    "negative": [],
+                },
+                "eligibility": None,
+            }),
+            datetime(2026, 9, 20, 10, 0, 0),
+        )]
+        connection = FakeConnection(rows)
+        module = load_route_module(
+            lambda: connection, {"cv/text/blank.txt": " \r\n\t"}
+        )
+        app = FakeApp()
+        module.register(app)
+
+        response = app.handler(FakeRequest())
+
+        self.assertEqual(response.status_code, 200)
+        payload = json.loads(response.body)
+        self.assertEqual(len(payload["users"]), 1)
+        self.assertEqual(payload["users"][0]["discoveryEligibility"], {
+            "enabled": False,
+            "hasUsableCv": False,
+            "hasPositiveTitleRule": True,
+            "reasons": ["no_usable_cv"],
+        })
+        self.assertEqual(payload["counts"]["discoveryEnabled"], 0)
+        self.assertEqual(payload["counts"]["disabledNoUsableCv"], 1)
 
     def test_invalid_limit_is_rejected_before_database_access(self):
         calls = []

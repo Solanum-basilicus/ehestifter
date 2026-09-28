@@ -11,13 +11,22 @@ const USER_A = '11111111-1111-4111-8111-111111111111';
 const USER_B = '22222222-2222-4222-8222-222222222222';
 
 function user(userId, title, eligibility = null) {
+  const normalizedTitle = { positive: [], positivePatterns: [], negative: [], ...title };
+  const hasPositiveTitleRule = normalizedTitle.positive.length > 0
+    || normalizedTitle.positivePatterns.length > 0;
   return {
     userId,
     cvVersionId: `${userId.slice(0, 8)}-cv`,
+    discoveryEligibility: {
+      enabled: hasPositiveTitleRule,
+      hasUsableCv: true,
+      hasPositiveTitleRule,
+      reasons: hasPositiveTitleRule ? [] : ['no_positive_title'],
+    },
     discoveryPreferencesInvalid: false,
     discoveryPreferences: {
       schemaVersion: 1,
-      title: { positive: [], positivePatterns: [], negative: [], ...title },
+      title: normalizedTitle,
       eligibility,
     },
   };
@@ -34,12 +43,49 @@ function candidate(title = 'Senior Product Manager') {
 
 test('missing preferences and negative-only titles do not enable discovery', () => {
   const matcher = buildDiscoveryMatcher({ users: [
-    { userId: USER_A, cvVersionId: 'a', discoveryPreferences: null, discoveryPreferencesInvalid: false },
+    {
+      userId: USER_A,
+      cvVersionId: 'a',
+      discoveryEligibility: {
+        enabled: false, hasUsableCv: true, hasPositiveTitleRule: false, reasons: ['no_positive_title'],
+      },
+      discoveryPreferences: null,
+      discoveryPreferencesInvalid: false,
+    },
     user(USER_B, { negative: ['Intern'] }),
   ] });
   assert.equal(matcher.enabledUsers.length, 0);
   assert.equal(matcher.compoundedProfile.usersDisabledNoPositiveTitle, 2);
   assert.equal(matcher.matchCandidate(candidate()).allowed, false);
+});
+
+
+test('Users-owned no-CV state disables a user with valid positive title rules', () => {
+  const value = user(USER_A, { positive: ['Product Manager'] });
+  value.discoveryEligibility = {
+    enabled: false,
+    hasUsableCv: false,
+    hasPositiveTitleRule: true,
+    reasons: ['no_usable_cv'],
+  };
+  const matcher = buildDiscoveryMatcher({ users: [value] });
+  assert.equal(matcher.enabledUsers.length, 0);
+  assert.equal(matcher.userArtifact[0].discoveryStatus, 'disabled_no_usable_cv');
+  assert.equal(matcher.compoundedProfile.usersDisabledNoUsableCv, 1);
+  assert.equal(matcher.matchCandidate(candidate()).allowed, false);
+});
+
+test('readiness counters keep independent blockers for one user', () => {
+  const value = user(USER_A, {});
+  value.discoveryEligibility = {
+    enabled: false,
+    hasUsableCv: false,
+    hasPositiveTitleRule: false,
+    reasons: ['no_usable_cv', 'no_positive_title'],
+  };
+  const matcher = buildDiscoveryMatcher({ users: [value] });
+  assert.equal(matcher.compoundedProfile.usersDisabledNoUsableCv, 1);
+  assert.equal(matcher.compoundedProfile.usersDisabledNoPositiveTitle, 1);
 });
 
 test('positive phrases and orderedGap patterns use OR semantics with negative veto', () => {
@@ -83,6 +129,9 @@ test('invalid stored preferences disable one user', () => {
   const matcher = buildDiscoveryMatcher({ users: [{
     userId: USER_A,
     cvVersionId: 'a',
+    discoveryEligibility: {
+      enabled: false, hasUsableCv: true, hasPositiveTitleRule: false, reasons: ['invalid_preferences'],
+    },
     discoveryPreferences: null,
     discoveryPreferencesInvalid: true,
     discoveryPreferencesError: 'bad row',

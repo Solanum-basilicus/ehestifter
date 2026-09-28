@@ -9,7 +9,11 @@ import azure.functions as func
 
 from helpers.db import get_connection
 from helpers.discovery_filters import normalize_discovery_profile
-from helpers.discovery_preferences import normalize_discovery_preferences
+from helpers.discovery_readiness import (
+    build_discovery_readiness,
+    parse_stored_discovery_preferences,
+)
+from helpers.blob_storage import download_texts
 from helpers.guid import normalize_guid
 
 
@@ -40,16 +44,6 @@ def _iso(value):
         return str(value)
 
 
-
-def _stored_discovery_preferences(raw):
-    if not raw:
-        return None, False
-    try:
-        return normalize_discovery_preferences(json.loads(raw)), False
-    except (TypeError, ValueError, json.JSONDecodeError):
-        logging.warning("Ignoring invalid stored discovery preferences")
-        return None, True
-
 def _limit(req: func.HttpRequest) -> int:
     raw = (req.params or {}).get("limit", "100")
     try:
@@ -68,13 +62,11 @@ def register(app: func.FunctionApp):
         auth_level=func.AuthLevel.FUNCTION,
     )
     def get_discovery_eligible_users(req: func.HttpRequest) -> func.HttpResponse:
-        """Return bounded discovery profiles for users with an available CV.
+        """Return bounded discovery profiles and Users-owned readiness state.
 
         CV text and blob paths intentionally never cross this API boundary.
-        A user with no saved filters receives a match-all default profile in
-        the scanner. A user whose saved filters are all malformed remains
-        visible with ``hasSavedFilters=true`` and no valid profiles, allowing
-        the scanner to fail closed for that user.
+        Users checks the current CV plaintext and positive title rules before
+        ATS Discovery can enable matching for a user.
         """
 
         logging.info("USERS/internal/discovery-eligible processed a request")
@@ -91,10 +83,11 @@ def register(app: func.FunctionApp):
             cursor = conn.cursor()
             cursor.execute(
                 f"""
-                WITH EligibleUsers AS (
+                WITH BoundedUsers AS (
                     SELECT TOP ({limit})
                         u.Id,
                         p.CVVersionId,
+                        p.CVTextBlobPath,
                         p.LastUpdated
                     FROM dbo.Users AS u
                     INNER JOIN dbo.UserPreferences AS p
@@ -115,18 +108,19 @@ def register(app: func.FunctionApp):
                             ORDER BY f.CreatedAt DESC, f.Id DESC
                         ) AS FilterRank
                     FROM dbo.UserPreferenceFilters AS f
-                    INNER JOIN EligibleUsers AS u
+                    INNER JOIN BoundedUsers AS u
                         ON u.Id = f.UserId
                 )
                 SELECT
                     u.Id,
                     u.CVVersionId,
+                    u.CVTextBlobPath,
                     u.LastUpdated,
                     f.Id,
                     f.NormalizedJson,
                     dp.PreferencesJson,
                     dp.LastUpdated
-                FROM EligibleUsers AS u
+                FROM BoundedUsers AS u
                 LEFT JOIN RankedFilters AS f
                     ON f.UserId = u.Id
                    AND f.FilterRank <= 20
@@ -145,31 +139,44 @@ def register(app: func.FunctionApp):
                 user = users_by_id.get(user_id)
                 if user is None:
                     discovery_preferences, discovery_preferences_invalid = (
-                        _stored_discovery_preferences(row[5])
+                        parse_stored_discovery_preferences(row[6])
                     )
                     user = {
                         "userId": user_id,
                         "cvVersionId": str(row[1]).strip(),
-                        "cvLastUpdatedUtc": _iso(row[2]),
+                        "_cvTextBlobPath": row[2],
+                        "cvLastUpdatedUtc": _iso(row[3]),
                         "hasSavedFilters": False,
                         "profiles": [],
                         "invalidProfileCount": 0,
                         "discoveryPreferences": discovery_preferences,
                         "discoveryPreferencesInvalid": discovery_preferences_invalid,
-                        "discoveryPreferencesLastUpdatedUtc": _iso(row[6]),
+                        "discoveryPreferencesLastUpdatedUtc": _iso(row[7]),
                     }
                     users_by_id[user_id] = user
-                filter_id = row[3]
+                filter_id = row[4]
                 if filter_id is None:
                     continue
                 user["hasSavedFilters"] = True
-                profile = normalize_discovery_profile(filter_id, row[4])
+                profile = normalize_discovery_profile(filter_id, row[5])
                 if profile is None:
                     user["invalidProfileCount"] += 1
                     continue
                 user["profiles"].append(profile)
 
             users = sorted(users_by_id.values(), key=lambda item: item["userId"])
+            cv_texts = download_texts(
+                [user["_cvTextBlobPath"] for user in users]
+            )
+            for user in users:
+                cv_path = user.pop("_cvTextBlobPath")
+                cv_plain_text = cv_texts.get(cv_path)
+                user["discoveryEligibility"] = build_discovery_readiness(
+                    cv_plain_text=cv_plain_text,
+                    discovery_preferences=user["discoveryPreferences"],
+                    discovery_preferences_invalid=user["discoveryPreferencesInvalid"],
+                )
+
             payload = {
                 "schemaVersion": 1,
                 "generatedAtUtc": datetime.now(timezone.utc).isoformat(),
@@ -187,6 +194,17 @@ def register(app: func.FunctionApp):
                     ),
                     "invalidDiscoveryPreferences": sum(
                         1 for user in users if user["discoveryPreferencesInvalid"]
+                    ),
+                    "discoveryEnabled": sum(
+                        1 for user in users if user["discoveryEligibility"]["enabled"]
+                    ),
+                    "disabledNoUsableCv": sum(
+                        1 for user in users
+                        if "no_usable_cv" in user["discoveryEligibility"]["reasons"]
+                    ),
+                    "disabledNoPositiveTitle": sum(
+                        1 for user in users
+                        if "no_positive_title" in user["discoveryEligibility"]["reasons"]
                     ),
                     "excluded": len(excluded_actual),
                     "excludedConfigured": len(excluded),

@@ -458,11 +458,24 @@ export function buildRunSummary({
     discoveryUsersEnabled: multiUserEnabled
       ? count(discoveryUsers ?? [], (user) => user.discoveryStatus === 'enabled')
       : null,
+    discoveryUsersDisabledNoUsableCv: multiUserEnabled
+      ? count(
+        discoveryUsers ?? [],
+        (user) => user.discoveryEligibility?.reasons?.includes('no_usable_cv') === true,
+      )
+      : null,
     discoveryUsersDisabledNoPositiveTitle: multiUserEnabled
-      ? count(discoveryUsers ?? [], (user) => user.discoveryStatus === 'disabled_no_positive_title')
+      ? count(
+        discoveryUsers ?? [],
+        (user) => user.discoveryEligibility?.reasons?.includes('no_positive_title') === true,
+      )
       : null,
     discoveryUsersDisabledInvalidPreferences: multiUserEnabled
-      ? count(discoveryUsers ?? [], (user) => user.discoveryStatus === 'disabled_invalid_preferences')
+      ? count(
+        discoveryUsers ?? [],
+        (user) => user.discoveryEligibility?.reasons?.includes('invalid_preferences') === true
+          || user.discoveryStatus === 'disabled_invalid_preferences',
+      )
       : null,
     // Kept for one transition release so existing run-summary readers do not fail.
     discoveryUsersWithSavedFilters: null,
@@ -515,6 +528,7 @@ export function buildRunSummary({
         return {
           userId: user.userId,
           status: user.discoveryStatus ?? 'unknown',
+          readinessReasons: user.discoveryEligibility?.reasons ?? [],
           titleCandidatesMatched: titleAdmission?.titleCandidatesMatched ?? 0,
           priorityTitleCandidatesMatched: titleAdmission?.priorityTitleCandidatesMatched ?? 0,
           catalogTitleCandidatesMatched: titleAdmission?.catalogTitleCandidatesMatched ?? 0,

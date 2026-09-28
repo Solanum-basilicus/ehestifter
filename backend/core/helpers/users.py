@@ -149,6 +149,17 @@ def set_cv(context: dict, *, cv_quill_delta) -> dict:
     return r.json()
 
 
+def get_discovery_status(context: dict) -> dict:
+    if not base_url or not fxkey:
+        raise ValueError("Users API env is not configured")
+    url = f"{base_url}/users/discovery-status"
+    headers = _b2c_headers_from_context(context)
+    r = requests.get(url, headers=headers, timeout=10)
+    if not r.ok:
+        raise UpstreamHttpError(r.status_code, r.text)
+    return r.json()
+
+
 def get_discovery_preferences(context: dict) -> dict:
     if not base_url or not fxkey:
         raise ValueError("Users API env is not configured")

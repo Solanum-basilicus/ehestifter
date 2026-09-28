@@ -156,6 +156,10 @@
           <div class="key">Role</div>
           <div id="ui-role"><span class="skeleton" style="display:inline-block; width:80px; height:1em;"></span></div>
         </div>
+        <div class="row">
+          <div class="key">Discovery</div>
+          <div id="discovery-readiness" class="subtle">Loading…</div>
+        </div>
         <p id="ui-error" class="subtle" hidden></p>
       </section>
 
@@ -363,6 +367,7 @@
 
 <script src="{{ url_for('static', filename='js/quill.min.js') }}"></script>
 <script src="{{ url_for('static', filename='js/location-picker.js') }}"></script>
+<script src="{{ url_for('static', filename='js/discovery-status.js') }}"></script>
 <script src="{{ url_for('static', filename='js/discovery-preferences.js') }}"></script>
 
 
@@ -698,9 +703,10 @@
           }
         );
 
-        // success: reset baseline, disable button
+        // Success: reset baseline, disable the button, and refresh profile readiness.
         initialDeltaStr = nowDeltaStr();
         btnSavePrefs.disabled = true;
+        document.dispatchEvent(new CustomEvent('ehestifter:discovery-readiness-changed'));
 
         // merge debug view with latest POST response fields if possible
         if (prefsDebug) {

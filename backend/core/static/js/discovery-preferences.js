@@ -1071,6 +1071,7 @@
           body: JSON.stringify(document),
         });
         setDocument(payload, true);
+        document.dispatchEvent(new CustomEvent('ehestifter:discovery-readiness-changed'));
       } catch (saveError) {
         setError(saveError.message || 'Failed to save discovery preferences.');
       } finally {

@@ -172,6 +172,50 @@ function validateDiscoveryPreferences(value, name) {
   };
 }
 
+
+function validateDiscoveryEligibility(value, name) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${name} must be an object`);
+  }
+  if (typeof value.enabled !== 'boolean') throw new Error(`${name}.enabled must be a boolean`);
+  if (typeof value.hasUsableCv !== 'boolean') {
+    throw new Error(`${name}.hasUsableCv must be a boolean`);
+  }
+  if (typeof value.hasPositiveTitleRule !== 'boolean') {
+    throw new Error(`${name}.hasPositiveTitleRule must be a boolean`);
+  }
+  if (!Array.isArray(value.reasons)) throw new Error(`${name}.reasons must be an array`);
+  const allowedReasons = new Set(['no_usable_cv', 'no_positive_title', 'invalid_preferences']);
+  const reasons = value.reasons.map((reason, index) => {
+    if (typeof reason !== 'string' || !allowedReasons.has(reason)) {
+      throw new Error(`${name}.reasons[${index}] is invalid`);
+    }
+    return reason;
+  });
+  if (new Set(reasons).size !== reasons.length) {
+    throw new Error(`${name}.reasons must not contain duplicates`);
+  }
+  if (value.enabled !== (reasons.length === 0)) {
+    throw new Error(`${name}.enabled does not match reasons`);
+  }
+  if (value.hasUsableCv === reasons.includes('no_usable_cv')) {
+    throw new Error(`${name}.hasUsableCv does not match reasons`);
+  }
+  if (reasons.includes('invalid_preferences') && value.hasPositiveTitleRule) {
+    throw new Error(`${name}.hasPositiveTitleRule must be false for invalid preferences`);
+  }
+  if (!reasons.includes('invalid_preferences')
+    && value.hasPositiveTitleRule === reasons.includes('no_positive_title')) {
+    throw new Error(`${name}.hasPositiveTitleRule does not match reasons`);
+  }
+  return {
+    enabled: value.enabled,
+    hasUsableCv: value.hasUsableCv,
+    hasPositiveTitleRule: value.hasPositiveTitleRule,
+    reasons,
+  };
+}
+
 export function validateDiscoveryUsersPayload(payload, { maxUsers = 100 } = {}) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     throw new Error('Users discovery response must be an object');
@@ -211,10 +255,16 @@ export function validateDiscoveryUsersPayload(payload, { maxUsers = 100 } = {}) 
       }
     }
 
+    const discoveryEligibility = validateDiscoveryEligibility(
+      user.discoveryEligibility,
+      `${name}.discoveryEligibility`,
+    );
+
     return {
       userId: user.userId,
       cvVersionId: boundedVersionId(user.cvVersionId, `${name}.cvVersionId`),
       cvLastUpdatedUtc: optionalTimestamp(user.cvLastUpdatedUtc, `${name}.cvLastUpdatedUtc`),
+      discoveryEligibility,
       discoveryPreferences,
       discoveryPreferencesInvalid,
       discoveryPreferencesError,

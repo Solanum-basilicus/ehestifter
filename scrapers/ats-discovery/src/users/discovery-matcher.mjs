@@ -85,10 +85,24 @@ function compileTitle(preferences) {
 }
 
 function discoveryStatus(user) {
-  if (user.discoveryPreferencesInvalid) return 'disabled_invalid_preferences';
-  if (!user.discoveryPreferences) return 'disabled_no_positive_title';
-  const compiled = compileTitle(user.discoveryPreferences);
-  return compiled.enabled ? 'enabled' : 'disabled_no_positive_title';
+  const eligibility = user.discoveryEligibility;
+  if (!eligibility?.enabled) {
+    if (eligibility?.reasons?.includes('invalid_preferences')) return 'disabled_invalid_preferences';
+    if (eligibility?.reasons?.includes('no_usable_cv')) return 'disabled_no_usable_cv';
+    if (eligibility?.reasons?.includes('no_positive_title')) return 'disabled_no_positive_title';
+    return 'disabled_invalid_preferences';
+  }
+
+  if (user.discoveryPreferencesInvalid || !user.discoveryPreferences) {
+    return 'disabled_invalid_preferences';
+  }
+  return compileTitle(user.discoveryPreferences).enabled
+    ? 'enabled'
+    : 'disabled_invalid_preferences';
+}
+
+function hasEligibilityReason(user, reason) {
+  return user.discoveryEligibility?.reasons?.includes(reason) === true;
 }
 
 export function buildDiscoveryMatcher(usersPayload) {
@@ -109,6 +123,7 @@ export function buildDiscoveryMatcher(usersPayload) {
     cvVersionId: user.cvVersionId,
     cvLastUpdatedUtc: user.cvLastUpdatedUtc,
     discoveryStatus: user.discoveryStatus,
+    discoveryEligibility: user.discoveryEligibility,
     discoveryPreferencesInvalid: user.discoveryPreferencesInvalid,
     discoveryPreferencesError: user.discoveryPreferencesError ?? null,
     matchingEnabled: user.discoveryStatus === 'enabled',
@@ -118,11 +133,15 @@ export function buildDiscoveryMatcher(usersPayload) {
     schemaVersion: 2,
     eligibleUsers: compiledUsers.length,
     discoveryEnabledUsers: enabledUsers.length,
+    usersDisabledNoUsableCv: compiledUsers.filter(
+      (user) => hasEligibilityReason(user, 'no_usable_cv'),
+    ).length,
     usersDisabledNoPositiveTitle: compiledUsers.filter(
-      (user) => user.discoveryStatus === 'disabled_no_positive_title',
+      (user) => hasEligibilityReason(user, 'no_positive_title'),
     ).length,
     usersDisabledInvalidPreferences: compiledUsers.filter(
-      (user) => user.discoveryStatus === 'disabled_invalid_preferences',
+      (user) => hasEligibilityReason(user, 'invalid_preferences')
+        || user.discoveryStatus === 'disabled_invalid_preferences',
     ).length,
   };
 

@@ -463,7 +463,7 @@ Owns:
 - provider adapters and normalized candidate observations;
 - machine-managed catalogs and operator discovery policy;
 - target planning, provider/variant health, cadence, canaries, and bounded request policy;
-- cheap matching of one shared scan against all eligible users;
+- cheap matching of one shared scan against all discovery-enabled users;
 - Jobs canonical-identity preflight, detail enrichment orchestration, location normalization, and guarded import;
 - compatibility request orchestration for matched users;
 - local run artifacts, provider/tenant state, scheduler state, locking, backups, and retention.
@@ -497,7 +497,12 @@ Users domain stores:
 - email,
 - role,
 - current CV metadata,
+- normalized discovery preferences,
 - telegram link state.
+
+Users also owns the derived discovery-readiness decision. Discovery is enabled
+only when the current CV plaintext has non-whitespace content and discovery
+preferences contain at least one positive title phrase or positive title pattern.
 
 #### CV storage model
 
@@ -812,6 +817,8 @@ Agents should preserve these unless explicitly asked to change the model.
 - Jobs API canonical identity is authoritative for deduplication and creation.
 - Detail fetching and shared job creation happen once per candidate, not once per matched user.
 - Compatibility is requested only for matched users; status is never created automatically.
+- Users is authoritative for discovery readiness. ATS Discovery does not inspect CV text.
+- A user without usable CV plaintext or a positive title rule cannot enter candidate matching.
 - New discovery imports use `foundOn = "ats-discovery"`; historical provenance is not rewritten.
 - Direct Compose commands bypass the host scheduler lock and are not the preferred routine operator path.
 
@@ -828,7 +835,8 @@ Users domain currently owns:
 - Telegram link and unlink,
 - CV storage and its public web contract,
 - normalized discovery preferences,
-- bounded discovery-eligible profile output for ATS Discovery,
+- the authoritative discovery-readiness decision,
+- bounded discovery profile output for ATS Discovery,
 - user-related blob management for CV storage,
 - internal plaintext CV snapshot retrieval for enrichment,
 - emitting the safe `CV Updated` analytics event after successful web CV/preferences update.
@@ -885,15 +893,20 @@ Agent rule:
 | `GET /users/by-telegram/{telegram_user_id}` | resolve Telegram account to internal user | telegram bot |
 | `GET/POST /users/cv` | read or update the current CV | web core |
 | `GET/PUT /users/discovery-preferences` | read or replace normalized discovery preferences | web core |
+| `GET /users/discovery-status` | return Users-owned discovery readiness and remediation reasons | web core |
 | `GET /users/internal/{userId}/cv-snapshot` | provide plaintext CV snapshot for enrichment | Enrichment Core |
-| `GET /users/internal/discovery-eligible` | return bounded discovery data without CV text; legacy profiles stay present until issue #19 switches to `discoveryPreferences` | ATS Discovery |
+| `GET /users/internal/discovery-eligible` | return bounded discovery data and readiness without CV text | ATS Discovery |
 
 `GET/POST /users/preferences` remains a temporary compatibility alias for the CV
 contract during the Core/Users deployment transition. New callers must use
 `/users/cv`.
 
-The browser does not call Users or Jobs Functions directly. For discovery
-preference writes, Web Core first validates canonical location selectors
+The browser does not call Users or Jobs Functions directly. The profile page
+reads discovery readiness through Web Core and does not recalculate CV or title
+eligibility in JavaScript. A successful CV or discovery-preference save causes
+the page to refresh the Users-owned readiness state.
+
+For discovery preference writes, Web Core first validates canonical location selectors
 with the Jobs-owned Locations v2 catalog, then sends the document to Users.
 Users validates the complete document shape and stores normalized JSON. Users
 does not own or copy the Jobs location catalog.
@@ -1687,9 +1700,9 @@ Users exposes:
 GET /users/internal/discovery-eligible
 ```
 
-The endpoint returns a bounded set of eligible users and saved discovery filters. CV text does not cross this boundary. Malformed saved filters fail closed. A user with no saved filters follows the scanner's deliberately configured default matching behavior.
+The endpoint returns a bounded set of discovery profiles. CV text and blob paths do not cross this boundary. Users reads the current CV plaintext and returns an authoritative `discoveryEligibility` state for each selected profile. Discovery requires both usable non-whitespace CV plaintext and at least one positive title phrase or positive title pattern. Missing or malformed preferences fail closed. ATS Discovery consumes this state and also validates the preference document defensively.
 
-One scan plan compounds all eligible profiles. Each candidate records the users that pass cheap filters. A candidate matching nobody is rejected before Jobs detail/import and compatibility work.
+One scan plan compounds all discovery-enabled profiles. Each candidate records the users that pass cheap filters. A candidate matching nobody is rejected before Jobs detail/import and compatibility work.
 
 For a retained candidate:
 1. Jobs canonical-identity preflight occurs once;
@@ -1967,8 +1980,9 @@ Agent protocol for hazardous DB work:
 Users discovery input:
 - `GET /users/internal/discovery-eligible`
 - function-key protected;
-- bounded profile/filter output;
-- no CV text.
+- bounded profile and readiness output;
+- Users checks current CV plaintext before it builds readiness;
+- CV text and blob paths do not cross the boundary.
 
 Jobs identity and persistence:
 - `GET /jobs/exists?url=<origin-url>` is authoritative for canonical identity preflight;

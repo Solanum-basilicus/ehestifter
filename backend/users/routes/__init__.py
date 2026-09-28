@@ -6,6 +6,7 @@ from .users_me import register as _reg_users_me
 from .internal_cv_snapshot import register as _reg_internal_cv_snapshot
 from .internal_discovery_eligible import register as _reg_internal_discovery_eligible
 from .discovery_preferences import register as _reg_discovery_preferences
+from .discovery_status import register as _reg_discovery_status
 
 
 def register_all(app):
@@ -17,3 +18,4 @@ def register_all(app):
     _reg_internal_cv_snapshot(app)
     _reg_internal_discovery_eligible(app)
     _reg_discovery_preferences(app)
+    _reg_discovery_status(app)
