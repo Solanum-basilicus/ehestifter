@@ -439,8 +439,25 @@ explicit minimum-job thresholds.
 Rate recommendations distinguish provider throttling from generic reliability
 failures. A rate-limit observation or rate-limit breaker can recommend slower
 pacing; a transient/network breaker by itself does not. A sufficiently high
-transient-error ratio can still independently recommend a decrease. Network
-provider results retain only bounded diagnostic fields such as error code,
+health-significant transient-error ratio can still independently recommend a
+decrease. Maintenance cohorts (`recovery`, `dead_reprobe`, and `long_empty`)
+remain visible in request/error totals, but their non-rate-limit results do not
+consume provider breaker samples or rate-tuning samples. HTTP 429 remains a
+provider-wide signal in every cohort. `rate-observations.json` keeps the total
+`transientErrors` count and also reports `healthRequestsAttempted`,
+`healthSuccesses`, `healthTransientErrors`, and `healthLatencyMs` for the sample
+used by recommendations.
+
+Provider execution is ready-driven across health partitions. Waiting for one
+provider's configured request interval does not reserve a global worker when a
+different provider is ready. Per-provider concurrency, request spacing, and the
+priority-before-normal barrier remain enforced.
+
+An active persisted provider cooldown is reported as a notice. It does not make
+a new run degraded by itself. A circuit opened during the current run and other
+current health warnings still make the run degraded.
+
+Network provider results retain only bounded diagnostic fields such as error code,
 errno, syscall, and hostname so operators can distinguish tenant-local DNS or
 connectivity failures from shared provider health without persisting arbitrary
 exception text or URLs.
@@ -516,6 +533,18 @@ a provider/description conflict. It never silently erases the provider
 observation. Only decisive incompatible evidence blocks import; unresolved,
 unsupported, and inconclusive conflicts are retained in artifacts and propagate
 to Jobs.
+
+High-confidence candidate geography in a description is extracted independently
+of the active user's geography filter. Examples include an explicit candidate
+residence scope or a country-specific work-authorization requirement. User
+preferences decide eligibility after extraction; they do not control which job
+facts can be discovered. Country mentions about customers, partners, or company
+operations are not candidate geography.
+
+Scanner text normalization converts Unicode no-break spaces to ordinary spaces
+before a description reaches the Jobs create payload. Web Core also applies
+defensive wrapping to job descriptions so historical or external long tokens do
+not widen the job page beyond the viewport.
 
 Location parsing treats `Anywhere` as unknown geography unless the source also
 contains an explicit geographic scope. For example, `Anywhere in the United
@@ -715,6 +744,11 @@ state updates, backups, and retention. The default trigger label is `manual`;
 `--trigger systemd|manual|retry` changes recorded trigger metadata. The
 installed units use `systemd`; choosing `retry` does not itself schedule a
 retry.
+
+When `ats-ops run` is started from an interactive terminal, the scanner shows
+its normal progress display. Scheduled systemd runs stay quiet because they do
+not have a TTY. Do not put `--no-progress` in a task's `scannerArgs` unless both
+manual and scheduled runs must suppress progress.
 
 Without `--force`, an already completed current slot is skipped. Use `--force`
 only for an intentional second full execution:

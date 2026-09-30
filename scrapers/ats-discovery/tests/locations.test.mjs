@@ -850,3 +850,22 @@ test('bare PT is recorded only when a work-hours context is present', () => {
   ], { locationScopeFilter });
   assert.equal(unrelated.workTimeConstraints.status, 'none');
 });
+
+test('work authorization refines geography when scope filtering is disabled', () => {
+  const [result] = normalizeCandidateLocations([
+    candidate({
+      rawLocation: 'Remote',
+      remoteType: 'Remote',
+      description: 'Applicants must have authorization to work in the United States.',
+    }),
+  ], { locationScopeFilter: { ...locationScopeFilter, enabled: false } });
+
+  assert.deepEqual(result.locations, [{
+    countryName: 'United States',
+    countryCode: 'US',
+    cityName: null,
+    region: null,
+  }]);
+  assert.ok(result.locationsV2.some((item) => item.locationId === 'iso3166:US'));
+  assert.equal(result.locationEligibility.status, 'unclear');
+});

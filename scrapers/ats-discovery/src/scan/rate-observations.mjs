@@ -3,6 +3,7 @@ import {
   isDurableProviderResult,
   isTransientProviderResult,
 } from './provider-errors.mjs';
+import { isProviderHealthSignificantResult } from './provider-health.mjs';
 
 function percentile(values, fraction) {
   if (values.length === 0) return null;
@@ -21,13 +22,13 @@ function rounded(value) {
 function recommendation(observation, providerPolicy) {
   const config = providerPolicy.recommendations;
   const execution = providerPolicy.execution;
-  const attempted = observation.requestsAttempted;
+  const attempted = observation.healthRequestsAttempted;
   const transientRatio = attempted === 0
     ? 0
-    : observation.transientErrors / attempted;
+    : observation.healthTransientErrors / attempted;
   const successRatio = attempted === 0
     ? 1
-    : observation.successes / attempted;
+    : observation.healthSuccesses / attempted;
 
   if (
     observation.rateLimited > 0
@@ -68,8 +69,8 @@ function recommendation(observation, providerPolicy) {
   if (
     attempted >= config.minimumRequests
     && successRatio >= config.healthySuccessRatio
-    && observation.latencyMs.p95 != null
-    && observation.latencyMs.p95 <= config.fastP95Ms
+    && observation.healthLatencyMs.p95 != null
+    && observation.healthLatencyMs.p95 <= config.fastP95Ms
     && execution.concurrency < config.maximumSuggestedConcurrency
   ) {
     return {
@@ -116,24 +117,30 @@ export function buildRateObservations({
       const provider = results[0]?.provider ?? healthPartition.split(':')[0];
       const providerVariant = results[0]?.providerVariant ?? null;
       const attemptedResults = results.filter((item) => item.status !== 'skipped');
+      const healthResults = attemptedResults.filter(isProviderHealthSignificantResult);
       const durations = attemptedResults.map((item) => item.durationMs);
+      const healthDurations = healthResults.map((item) => item.durationMs);
       const totalDuration = durations.reduce((sum, value) => sum + value, 0);
+      const healthTotalDuration = healthDurations.reduce((sum, value) => sum + value, 0);
       const observation = {
         provider,
         providerVariant,
         healthPartition,
         targetsPlanned: results.length,
         requestsAttempted: attemptedResults.length,
+        healthRequestsAttempted: healthResults.length,
         skippedByCircuit: results.filter(
           (item) => item.skipReason === 'provider_circuit_open',
         ).length,
         successes: results.filter((item) => item.status === 'ok').length,
+        healthSuccesses: healthResults.filter((item) => item.status === 'ok').length,
         errors: results.filter((item) => item.status === 'error').length,
         rateLimited: results.filter(
           (item) => item.errorClass === 'rate_limited',
         ).length,
         durableTenantFailures: results.filter(isDurableProviderResult).length,
         transientErrors: results.filter(isTransientProviderResult).length,
+        healthTransientErrors: healthResults.filter(isTransientProviderResult).length,
         jobsReturned: results.reduce((sum, item) => sum + item.jobsReturned, 0),
         candidatesMatched: results.reduce(
           (sum, item) => sum + (item.candidatesMatched ?? item.candidatesRetained ?? 0),
@@ -155,6 +162,15 @@ export function buildRateObservations({
           p50: percentile(durations, 0.5),
           p95: percentile(durations, 0.95),
           max: durations.length === 0 ? null : Math.max(...durations),
+        },
+        healthLatencyMs: {
+          min: healthDurations.length === 0 ? null : Math.min(...healthDurations),
+          average: healthDurations.length === 0
+            ? null
+            : rounded(healthTotalDuration / healthDurations.length),
+          p50: percentile(healthDurations, 0.5),
+          p95: percentile(healthDurations, 0.95),
+          max: healthDurations.length === 0 ? null : Math.max(...healthDurations),
         },
         policy: {
           concurrency: getProviderPolicy(policy, provider).execution.concurrency,

@@ -134,7 +134,11 @@
 
   .skeleton { background:linear-gradient(90deg,#f4f4f5 25%,#e5e7eb 37%,#f4f4f5 63%); background-size:400% 100%; animation:shimmer 1.2s infinite; border-radius:6px; }
   @keyframes shimmer { 0% { background-position:100% 0; } 100% { background-position:-100% 0; } }
+  .grid-main > * { min-width:0; }
+  .prose { min-width:0; max-width:100%; overflow-wrap:anywhere; word-break:break-word; }
   .prose img { max-width:100%; height:auto; border-radius:8px; }
+  .prose pre { max-width:100%; overflow-x:auto; white-space:pre-wrap; }
+  .prose table { display:block; max-width:100%; overflow-x:auto; }
   .right-rail { width:320px; }
   .sticky-top { position:sticky; top:0; z-index:10; backdrop-filter:saturate(180%) blur(6px); background:rgba(255,255,255,.85); }
   .grid { display:grid; gap:16px; }

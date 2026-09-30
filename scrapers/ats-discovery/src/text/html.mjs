@@ -30,6 +30,13 @@ function decodeEntity(match, entity) {
   return NAMED_ENTITIES.get(normalized) ?? match;
 }
 
+export function normalizeNoBreakWhitespace(value) {
+  if (typeof value !== 'string' || value === '') return '';
+  return value
+    .replace(/[\u00a0\u2007\u202f]/gu, ' ')
+    .replace(/[\u2060\ufeff]/gu, '');
+}
+
 export function decodeHtmlEntities(value) {
   if (typeof value !== 'string' || value === '') return '';
   return value.replace(
@@ -40,7 +47,7 @@ export function decodeHtmlEntities(value) {
 
 export function htmlToPlainText(value) {
   if (typeof value !== 'string' || value.trim() === '') return '';
-  return value
+  const text = value
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
     .replace(/<\s*br\s*\/?>/gi, '\n')
@@ -50,7 +57,8 @@ export function htmlToPlainText(value) {
       '\n',
     )
     .replace(/<[^>]+>/g, ' ')
-    .replace(/&(#x[0-9a-f]+|#[0-9]+|[a-z]+);/gi, decodeEntity)
+    .replace(/&(#x[0-9a-f]+|#[0-9]+|[a-z]+);/gi, decodeEntity);
+  return normalizeNoBreakWhitespace(text)
     .replace(/\r/g, '')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n[ \t]+/g, '\n')
@@ -73,7 +81,7 @@ function escapeHtmlText(value) {
 export function plainTextToSafeHtml(value) {
   if (typeof value !== 'string' || value.trim() === '') return '';
 
-  const normalized = value
+  const normalized = normalizeNoBreakWhitespace(value)
     .replace(/\r\n?|\u2028|\u2029/g, '\n')
     .trim();
 

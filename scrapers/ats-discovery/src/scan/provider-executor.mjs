@@ -4,49 +4,31 @@ import { getProviderPolicy } from '../policy/discovery-policy.mjs';
 import { targetHealthIdentity } from '../providers/_variant.mjs';
 import {
   classifyProviderError,
-  isDurableProviderResult,
   isTransientProviderResult,
   providerErrorMessage,
   providerHttpStatus,
   providerNetworkDiagnostic,
 } from './provider-errors.mjs';
+import { isProviderHealthSignificantResult } from './provider-health.mjs';
 
-// Maintenance targets are intentionally expected to contain stale or
-// inaccessible tenants. Tenant-local 4xx responses must not consume the
-// provider-wide breaker sample. 408 and 429 remain provider-health signals.
-const MAINTENANCE_BUCKETS = new Set([
-  'recovery',
-  'dead_reprobe',
-  'long_empty',
-]);
-function isCircuitEligibleResult(target, result) {
-  if (isDurableProviderResult(result)) return false;
-  if (!MAINTENANCE_BUCKETS.has(target?.scheduleBucket)) return true;
-  if (result?.status !== 'error') return true;
-  const status = result.httpStatus;
-  if (!Number.isInteger(status) || status < 400 || status >= 500) return true;
-  return [408, 429].includes(status);
-}
+const defaultSleep = (milliseconds) => new Promise(
+  (resolve) => setTimeout(resolve, milliseconds),
+);
 
-class Semaphore {
-  constructor(limit) {
-    this.limit = limit;
-    this.active = 0;
-    this.waiters = [];
-  }
-  async acquire() {
-    if (this.active < this.limit) {
-      this.active += 1;
-      return;
-    }
-    await new Promise((resolve) => this.waiters.push(resolve));
-    this.active += 1;
+async function waitForActiveOrDelay(active, waitMs, sleep) {
+  if (sleep !== defaultSleep) {
+    await Promise.race([...active, sleep(waitMs)]);
+    return;
   }
 
-  release() {
-    this.active -= 1;
-    const next = this.waiters.shift();
-    if (next) next();
+  let timerId = null;
+  const timer = new Promise((resolve) => {
+    timerId = setTimeout(resolve, waitMs);
+  });
+  try {
+    await Promise.race([...active, timer]);
+  } finally {
+    if (timerId != null) clearTimeout(timerId);
   }
 }
 function cleanTelemetry(value) {
@@ -100,17 +82,16 @@ function baseProviderResult(target) {
     healthPartition: identity.healthPartition,
     tenant: target.tenant,
     targetClass: target.targetClass,
+    scheduleBucket: target.scheduleBucket ?? null,
     healthOnly: target.healthOnly === true,
   };
 }
 class ProviderGuard {
-  constructor({ identity, policy, monotonicNow, sleep }) {
+  constructor({ identity, policy, monotonicNow }) {
     this.identity = identity;
     this.policy = policy;
     this.monotonicNow = monotonicNow;
-    this.sleep = sleep;
-    this.semaphore = new Semaphore(policy.execution.concurrency);
-    this.pacingChain = Promise.resolve();
+    this.active = 0;
     this.nextStartAtMs = Number.NEGATIVE_INFINITY;
     this.open = false;
     this.breakerEvent = null;
@@ -118,25 +99,22 @@ class ProviderGuard {
     this.rateLimited = 0;
     this.transientErrors = 0;
   }
-  async pace() {
-    let release;
-    const previous = this.pacingChain;
-    this.pacingChain = new Promise((resolve) => { release = resolve; });
-    await previous;
-    try {
-      if (this.open) return false;
-      const now = this.monotonicNow();
-      const waitMs = Math.max(0, this.nextStartAtMs - now);
-      if (waitMs > 0) await this.sleep(waitMs);
-      this.nextStartAtMs = this.monotonicNow()
-        + this.policy.execution.minRequestIntervalMs;
-      return !this.open;
-    } finally {
-      release();
-    }
+  readyInMs() {
+    if (this.open || this.active >= this.policy.execution.concurrency) return Infinity;
+    return Math.max(0, this.nextStartAtMs - this.monotonicNow());
   }
-  maybeOpen(target, result) {
-    if (!isCircuitEligibleResult(target, result)) return;
+  reserveStart() {
+    if (this.readyInMs() !== 0) return false;
+    this.active += 1;
+    this.nextStartAtMs = this.monotonicNow()
+      + this.policy.execution.minRequestIntervalMs;
+    return true;
+  }
+  release() {
+    this.active = Math.max(0, this.active - 1);
+  }
+  maybeOpen(result) {
+    if (!isProviderHealthSignificantResult(result)) return;
     this.requestsAttempted += 1;
     if (result.errorClass === 'rate_limited') this.rateLimited += 1;
     if (isTransientProviderResult(result)) this.transientErrors += 1;
@@ -164,66 +142,37 @@ class ProviderGuard {
       };
     }
   }
-  async execute(target, fetchTarget) {
-    await this.semaphore.acquire();
+  async executeReserved(target, fetchTarget) {
+    const started = this.monotonicNow();
+    let result;
     try {
-      if (this.open) return skippedResult(target, 'provider_circuit_open');
-      const allowed = await this.pace();
-      if (!allowed || this.open) {
-        return skippedResult(target, 'provider_circuit_open');
-      }
-      const started = this.monotonicNow();
-      let result;
-      try {
-        const fetched = normalizedFetchValue(await fetchTarget(target));
-        const telemetry = cleanTelemetry(fetched.telemetry);
-        const inferredOutcome = fetched.jobs.length > 0
-          ? 'listing_success_nonempty'
-          : 'listing_success_empty_unverified';
-        const canaryMinimum = target.canary != null
-          ? target.canary.minimumJobs ?? 1
-          : null;
-        if (canaryMinimum != null && fetched.jobs.length < canaryMinimum) {
-          const error = new Error(
-            `Provider canary expected at least ${canaryMinimum} jobs, received ${fetched.jobs.length}`,
-          );
-          error.code = 'PROVIDER_CANARY_MINIMUM_JOBS';
-          const anomalyTelemetry = cleanTelemetry({
-            ...telemetry,
-            listingOutcome: 'listing_volume_anomaly',
-          });
-          result = {
-            target,
-            jobs: fetched.jobs,
-            error,
-            providerResult: {
-              ...baseProviderResult(target),
-              status: 'error',
-              skipReason: null,
-              errorClass: classifyProviderError(error),
-              errorMessage: providerErrorMessage(error),
-              networkDiagnostic: null,
-              httpStatus: null,
-              jobsReturned: fetched.jobs.length,
-              candidatesMatched: 0,
-              candidatesRetained: 0,
-              candidatesDroppedByCap: 0,
-              durationMs: Math.max(0, Math.round(this.monotonicNow() - started)),
-              acquisitionMode: anomalyTelemetry.acquisitionMode,
-              listingOutcome: anomalyTelemetry.listingOutcome,
-              explicitTotal: anomalyTelemetry.explicitTotal,
-            },
-          };
-        } else result = {
+      const fetched = normalizedFetchValue(await fetchTarget(target));
+      const telemetry = cleanTelemetry(fetched.telemetry);
+      const inferredOutcome = fetched.jobs.length > 0
+        ? 'listing_success_nonempty'
+        : 'listing_success_empty_unverified';
+      const canaryMinimum = target.canary != null
+        ? target.canary.minimumJobs ?? 1
+        : null;
+      if (canaryMinimum != null && fetched.jobs.length < canaryMinimum) {
+        const error = new Error(
+          `Provider canary expected at least ${canaryMinimum} jobs, received ${fetched.jobs.length}`,
+        );
+        error.code = 'PROVIDER_CANARY_MINIMUM_JOBS';
+        const anomalyTelemetry = cleanTelemetry({
+          ...telemetry,
+          listingOutcome: 'listing_volume_anomaly',
+        });
+        result = {
           target,
           jobs: fetched.jobs,
-          error: null,
+          error,
           providerResult: {
             ...baseProviderResult(target),
-            status: 'ok',
+            status: 'error',
             skipReason: null,
-            errorClass: null,
-            errorMessage: null,
+            errorClass: classifyProviderError(error),
+            errorMessage: providerErrorMessage(error),
             networkDiagnostic: null,
             httpStatus: null,
             jobsReturned: fetched.jobs.length,
@@ -231,44 +180,63 @@ class ProviderGuard {
             candidatesRetained: 0,
             candidatesDroppedByCap: 0,
             durationMs: Math.max(0, Math.round(this.monotonicNow() - started)),
-            acquisitionMode: telemetry.acquisitionMode,
-            listingOutcome: telemetry.listingOutcome ?? inferredOutcome,
-            explicitTotal: telemetry.explicitTotal,
+            acquisitionMode: anomalyTelemetry.acquisitionMode,
+            listingOutcome: anomalyTelemetry.listingOutcome,
+            explicitTotal: anomalyTelemetry.explicitTotal,
           },
         };
-      } catch (error) {
-        const telemetry = cleanTelemetry(error?.providerTelemetry);
-        const errorClass = classifyProviderError(error);
-        result = {
-          target,
-          jobs: [],
-          error,
-          providerResult: {
-            ...baseProviderResult(target),
-            status: 'error',
-            skipReason: null,
-            errorClass,
-            errorMessage: providerErrorMessage(error),
-            networkDiagnostic: errorClass === 'network'
-              ? providerNetworkDiagnostic(error)
-              : null,
-            httpStatus: providerHttpStatus(error),
-            jobsReturned: 0,
-            candidatesMatched: 0,
-            candidatesRetained: 0,
-            candidatesDroppedByCap: 0,
-            durationMs: Math.max(0, Math.round(this.monotonicNow() - started)),
-            acquisitionMode: telemetry.acquisitionMode,
-            listingOutcome: telemetry.listingOutcome ?? 'listing_error',
-            explicitTotal: telemetry.explicitTotal,
-          },
-        };
-      }
-      this.maybeOpen(target, result.providerResult);
-      return result;
-    } finally {
-      this.semaphore.release();
+      } else result = {
+        target,
+        jobs: fetched.jobs,
+        error: null,
+        providerResult: {
+          ...baseProviderResult(target),
+          status: 'ok',
+          skipReason: null,
+          errorClass: null,
+          errorMessage: null,
+          networkDiagnostic: null,
+          httpStatus: null,
+          jobsReturned: fetched.jobs.length,
+          candidatesMatched: 0,
+          candidatesRetained: 0,
+          candidatesDroppedByCap: 0,
+          durationMs: Math.max(0, Math.round(this.monotonicNow() - started)),
+          acquisitionMode: telemetry.acquisitionMode,
+          listingOutcome: telemetry.listingOutcome ?? inferredOutcome,
+          explicitTotal: telemetry.explicitTotal,
+        },
+      };
+    } catch (error) {
+      const telemetry = cleanTelemetry(error?.providerTelemetry);
+      const errorClass = classifyProviderError(error);
+      result = {
+        target,
+        jobs: [],
+        error,
+        providerResult: {
+          ...baseProviderResult(target),
+          status: 'error',
+          skipReason: null,
+          errorClass,
+          errorMessage: providerErrorMessage(error),
+          networkDiagnostic: errorClass === 'network'
+            ? providerNetworkDiagnostic(error)
+            : null,
+          httpStatus: providerHttpStatus(error),
+          jobsReturned: 0,
+          candidatesMatched: 0,
+          candidatesRetained: 0,
+          candidatesDroppedByCap: 0,
+          durationMs: Math.max(0, Math.round(this.monotonicNow() - started)),
+          acquisitionMode: telemetry.acquisitionMode,
+          listingOutcome: telemetry.listingOutcome ?? 'listing_error',
+          explicitTotal: telemetry.explicitTotal,
+        },
+      };
     }
+    this.maybeOpen(result.providerResult);
+    return result;
   }
 }
 function skippedResult(target, reason) {
@@ -295,32 +263,127 @@ function skippedResult(target, reason) {
     },
   };
 }
-async function mapLimit(items, limit, worker) {
-  if (!Number.isInteger(limit) || limit <= 0) {
+async function executeReadyGroup({
+  targets,
+  globalConcurrency,
+  guardFor,
+  fetchTarget,
+  sleep,
+  report,
+}) {
+  if (!Number.isInteger(globalConcurrency) || globalConcurrency <= 0) {
     throw new Error('global provider concurrency must be a positive integer');
   }
-  const results = new Array(items.length);
-  let next = 0;
-  async function consume() {
-    while (true) {
-      const index = next;
-      next += 1;
-      if (index >= items.length) return;
-      results[index] = await worker(items[index], index);
+  if (targets.length === 0) return [];
+
+  const queues = new Map();
+  for (const target of targets) {
+    const guard = guardFor(target);
+    const key = guard.identity.healthPartition;
+    if (!queues.has(key)) queues.set(key, { guard, targets: [] });
+    queues.get(key).targets.push(target);
+  }
+  for (const queue of queues.values()) {
+    queue.targets.sort((left, right) => left.sequence - right.sequence);
+  }
+
+  const results = [];
+  const active = new Set();
+  let pending = targets.length;
+
+  function addResult(result) {
+    results.push(result);
+    pending -= 1;
+    report(result);
+  }
+
+  function flushOpenCircuits() {
+    let changed = false;
+    for (const queue of queues.values()) {
+      if (!queue.guard.open || queue.targets.length === 0) continue;
+      for (const target of queue.targets.splice(0)) {
+        addResult(skippedResult(target, 'provider_circuit_open'));
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  function nextReadyQueue() {
+    let selected = null;
+    for (const queue of queues.values()) {
+      if (queue.targets.length === 0 || queue.guard.readyInMs() !== 0) continue;
+      if (!selected || queue.targets[0].sequence < selected.targets[0].sequence) {
+        selected = queue;
+      }
+    }
+    return selected;
+  }
+
+  function earliestWaitMs() {
+    let waitMs = Infinity;
+    for (const queue of queues.values()) {
+      if (queue.targets.length === 0) continue;
+      waitMs = Math.min(waitMs, queue.guard.readyInMs());
+    }
+    return waitMs;
+  }
+
+  function launch(queue) {
+    const target = queue.targets.shift();
+    if (!queue.guard.reserveStart()) {
+      queue.targets.unshift(target);
+      return false;
+    }
+    let task;
+    task = queue.guard.executeReserved(target, fetchTarget)
+      .then((result) => addResult(result))
+      .finally(() => {
+        queue.guard.release();
+        active.delete(task);
+      });
+    active.add(task);
+    return true;
+  }
+
+  while (pending > 0) {
+    flushOpenCircuits();
+    let launched = false;
+    while (active.size < globalConcurrency) {
+      const queue = nextReadyQueue();
+      if (!queue) break;
+      launched = launch(queue) || launched;
+    }
+    if (pending === 0) break;
+    if (launched) continue;
+
+    const waitMs = earliestWaitMs();
+    if (active.size === 0) {
+      if (!Number.isFinite(waitMs)) {
+        throw new Error('provider scheduler stalled with pending targets');
+      }
+      if (waitMs > 0) await sleep(waitMs);
+      continue;
+    }
+
+    if (Number.isFinite(waitMs) && waitMs > 0 && active.size < globalConcurrency) {
+      await waitForActiveOrDelay(active, waitMs, sleep);
+    } else {
+      await Promise.race(active);
     }
   }
-  await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, () => consume()),
-  );
-  return results;
+
+  await Promise.all(active);
+  return results.sort((left, right) => left.target.sequence - right.target.sequence);
 }
+
 export async function executeProviderTargets({
   targets,
   policy,
   globalConcurrency,
   fetchTarget,
   monotonicNow = () => performance.now(),
-  sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  sleep = defaultSleep,
   onProgress = null,
 }) {
   if (!Array.isArray(targets)) throw new Error('targets must be an array');
@@ -354,16 +417,18 @@ export async function executeProviderTargets({
         identity,
         policy: getProviderPolicy(policy, identity.provider),
         monotonicNow,
-        sleep,
       }));
     }
     return guards.get(identity.healthPartition);
   }
   async function executeGroup(group) {
-    return mapLimit(group, globalConcurrency, async (target) => {
-      const result = await guardFor(target).execute(target, fetchTarget);
-      report(result);
-      return result;
+    return executeReadyGroup({
+      targets: group,
+      globalConcurrency,
+      guardFor,
+      fetchTarget,
+      sleep,
+      report,
     });
   }
   const priority = targets.filter((target) => target.targetClass === 'priority');

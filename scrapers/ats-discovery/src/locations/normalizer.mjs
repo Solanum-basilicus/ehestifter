@@ -1049,6 +1049,63 @@ function candidateScopeCountryHints(window, dictionary) {
     }));
 }
 
+function workAuthorizationCountryHints(window, dictionary) {
+  if (negatesRequirement(window)) return [];
+  return dictionary.findCountryMentions(window)
+    .filter((country) => {
+      const term = escapeRegex(cleanText(country.matchedTerm)).replace(/\s+/gu, '\\s+');
+      if (term === '') return false;
+      const authorizationFirst = new RegExp(
+        `\\b(?:legally\\s+)?(?:authori[sz](?:ed|ation)\\s+to\\s+work|right\\s+to\\s+work|work\\s+permit)`+
+        `.{0,35}\\b(?:in|within)\\s+(?:the\\s+)?${term}(?![\\p{L}\\p{N}])`,
+        'iu',
+      );
+      const countryFirst = new RegExp(
+        `(?<![\\p{L}\\p{N}])${term}(?![\\p{L}\\p{N}]).{0,20}`+
+        `\\b(?:work\\s+authori[sz]ation|right\\s+to\\s+work|work\\s+permit)\\b`,
+        'iu',
+      );
+      return authorizationFirst.test(window) || countryFirst.test(window);
+    })
+    .map((country) => ({
+      countryName: country.countryName,
+      countryCode: country.countryCode,
+      matchedTerm: country.matchedTerm,
+      text: window,
+    }));
+}
+
+function openCandidateCountryHints(window, dictionary) {
+  if (negatesRequirement(window)) return [];
+  return dictionary.findCountryMentions(window)
+    .filter((country) => {
+      const term = escapeRegex(cleanText(country.matchedTerm)).replace(/\s+/gu, '\\s+');
+      if (term === '') return false;
+      const openCandidates = new RegExp(
+        `\\b(?:open\\s+to|hiring|eligible)\\s+(?:candidates?|applicants?|employees?)`+
+        `(?:.{0,20}\\b(?:located|based|residing|living))?.{0,12}\\b(?:in|from|within)\\s+`+
+        `(?:the\\s+)?${term}(?![\\p{L}\\p{N}])`,
+        'iu',
+      );
+      return openCandidates.test(window);
+    })
+    .map((country) => ({
+      countryName: country.countryName,
+      countryCode: country.countryCode,
+      matchedTerm: country.matchedTerm,
+      text: window,
+    }));
+}
+
+function intrinsicRestrictionCountryHints(window, dictionary) {
+  const candidates = [
+    ...candidateScopeCountryHints(window, dictionary),
+    ...workAuthorizationCountryHints(window, dictionary),
+    ...openCandidateCountryHints(window, dictionary),
+  ];
+  return [...new Map(candidates.map((item) => [item.countryCode, item])).values()];
+}
+
 function citizenshipScope(window, dictionary, allowedTerm, blockedTerm) {
   if (negatesRequirement(window)) return null;
   if (!/\b(?:citizens?|citizenship)\b/iu.test(window)) return null;
@@ -1206,8 +1263,9 @@ function descriptionEvidence(candidate, primaryLocations, dictionary, scopeFilte
   }
 
   for (const window of windows) {
+    const candidateCountryHints = candidateScopeCountryHints(window, dictionary);
     countryHints.push(...employerCountryHints(window, dictionary));
-    countryHints.push(...candidateScopeCountryHints(window, dictionary));
+    countryHints.push(...candidateCountryHints);
     const descriptionArrangement = workArrangementFromDescriptionPolicy(window);
     if (descriptionArrangement) {
       descriptionArrangements.push(descriptionArrangement);
@@ -1274,6 +1332,32 @@ function descriptionEvidence(candidate, primaryLocations, dictionary, scopeFilte
       effectiveAllowedTerm,
       blockedTerm,
     );
+    const restrictedStateCountryCodes = new Set(
+      restrictedStates.locations.map((location) => location.countryCode),
+    );
+    const intrinsicCountries = intrinsicRestrictionCountryHints(window, dictionary)
+      .filter((country) => !restrictedStateCountryCodes.has(country.countryCode));
+    for (const intrinsicCountry of intrinsicCountries) {
+      const canonicalCountry = dictionary.countryByCode(intrinsicCountry.countryCode);
+      if (!canonicalCountry) continue;
+      const location = locationFromCountry(canonicalCountry);
+      locations.push(location);
+      observations.push({
+        source: 'description',
+        raw: intrinsicCountry.matchedTerm,
+        kind: 'restriction_scope_location',
+        status: 'resolved',
+        location,
+        context: window,
+      });
+      eligibilityEvidence.push({
+        source: 'description',
+        kind: 'intrinsic_restriction_scope',
+        disposition: 'location_constraint',
+        locations: [location],
+        text: window,
+      });
+    }
 
     if (excludesGermany) {
       eligibilityEvidence.push({
@@ -1475,6 +1559,7 @@ function assessEligibility(candidate, locations, consistency, evidence, scopeFil
 
   const explicitLocationConstraints = evidence.filter((item) => (
     item.kind === 'declared_location'
+    || item.kind === 'intrinsic_restriction_scope'
     || (
       item.kind === 'citizenship_scope'
       && item.disposition === 'location_constraint'

@@ -1,5 +1,6 @@
 import { parseJobPostingJsonLd } from './jobposting-jsonld.mjs';
 import { htmlToPlainText } from './text.mjs';
+import { normalizeNoBreakWhitespace } from '../text/html.mjs';
 import { greenhouseHtmlToPlainText } from './greenhouse-text.mjs';
 import {
   createHttpSession,
@@ -995,7 +996,12 @@ async function fetchDetails(candidate, context) {
     case 'workday':
       return { supported: true, ...(await fetchWorkdayDetails(candidate, context)) };
     case 'personio':
-      return { supported: false, provider, reason: 'description_available_in_list_feed' };
+      return {
+        supported: false,
+        provider,
+        reason: 'list_feed_description_missing',
+        message: 'Personio list feed did not provide a description and no Personio detail fetcher is configured.',
+      };
     default:
       return { supported: false, provider };
   }
@@ -1064,12 +1070,13 @@ export async function enrichCandidateDetails(
                 status: 'unsupported_provider',
                 provider,
                 reason: details.reason ?? null,
+                message: details.message ?? null,
               },
             },
           };
         }
         const description = typeof details.description === 'string'
-          ? details.description.trim()
+          ? normalizeNoBreakWhitespace(details.description).trim()
           : '';
         const fetchedRawLocation = typeof details.rawLocation === 'string'
           ? details.rawLocation.trim()

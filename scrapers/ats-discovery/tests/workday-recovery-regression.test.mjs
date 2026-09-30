@@ -218,7 +218,7 @@ test('maintenance rate limits still open the provider circuit', async () => {
   assert.equal(result.batches[2].providerResult.status, 'skipped');
 });
 
-test('maintenance provider-level failures still open the provider circuit', async () => {
+test('maintenance provider-level failures do not open the provider circuit', async () => {
   let calls = 0;
   const result = await executeProviderTargets({
     targets: [0, 1, 2].map((sequence) => ({
@@ -235,9 +235,9 @@ test('maintenance provider-level failures still open the provider circuit', asyn
       throw httpError(500);
     },
   });
-  assert.equal(calls, 2);
-  assert.equal(result.breakerEvents[0].reason, 'transient_error_threshold');
-  assert.equal(result.batches[2].providerResult.status, 'skipped');
+  assert.equal(calls, 3);
+  assert.equal(result.breakerEvents.length, 0);
+  assert.ok(result.batches.every((batch) => batch.providerResult.status === 'error'));
 });
 
 test('repeated classified Workday failures progress through durable tenant state', () => {
@@ -285,4 +285,34 @@ test('repeated classified Workday failures progress through durable tenant state
   });
   assert.equal(second.state.tenants[0].health, 'suspected_dead');
   assert.equal(second.state.tenants[0].consecutiveDurableFailures, 2);
+});
+
+test('bounded Workday canary pagination does not log a truncation warning', async () => {
+  const postings = Array.from({ length: 20 }, (_, index) => ({
+    title: `Job ${index}`,
+    externalPath: `/job/Test/Job-${index}_${index}`,
+    locationsText: 'Berlin, Germany',
+    postedOn: 'Posted Today',
+  }));
+  const messages = [];
+  const originalError = console.error;
+  console.error = (...args) => messages.push(args.join(' '));
+  try {
+    const jobs = await workday.fetch(
+      {
+        name: 'NVIDIA Workday detail canary',
+        careers_url: 'https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite',
+        max_pages: 1,
+        healthOnly: true,
+        canary: { minimumJobs: 1 },
+      },
+      {
+        fetchJson: async () => ({ total: 2000, jobPostings: postings }),
+      },
+    );
+    assert.equal(jobs.length, 20);
+    assert.deepEqual(messages, []);
+  } finally {
+    console.error = originalError;
+  }
 });

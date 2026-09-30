@@ -8,6 +8,7 @@ import {
   matchedTitleKeywords,
 } from './filters.mjs';
 import { executeProviderTargets } from './provider-executor.mjs';
+import { normalizeNoBreakWhitespace } from '../text/html.mjs';
 import { buildLocationScopeFilter } from './location-scope.mjs';
 import {
   classifyProviderError,
@@ -67,7 +68,7 @@ function providerImplementationRef(provider) {
 export function candidateFromJob(job, target, upstreamRef) {
   const postedAtUtc = normalizePostedAt(job.postedAt);
   const description = typeof job.description === 'string'
-    ? job.description.trim()
+    ? normalizeNoBreakWhitespace(job.description).trim()
     : '';
 
   const providerSource = target._provider?.source;

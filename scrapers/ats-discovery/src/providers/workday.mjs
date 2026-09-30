@@ -370,7 +370,7 @@ export default {
     // from the external dataset — there's no portal entry to edit, and no
     // fixed cap can guarantee full coverage of an unbounded company
     // directory anyway, so there's nothing else to suggest.
-    if (stopReason === 'cap') {
+    if (stopReason === 'cap' && entry?.healthOnly !== true) {
       const jobsSummary = `${jobs.length}${total !== null ? ` of ${total}` : ''} jobs`;
       if (sinceMs === null) {
         console.error(`⚠️  workday: ${entry.name} truncated at max_pages=${maxPages} (${jobsSummary}) — raise max_pages on this entry for more`);

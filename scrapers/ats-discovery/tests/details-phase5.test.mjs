@@ -768,3 +768,20 @@ test('Paylocity detail rejects a mismatched provider-native id before fetch', as
   assert.equal(result.detail.status, 'error');
   assert.match(result.detail.error, /must match the source board and provider-native id/);
 });
+
+test('Personio missing list description reports the acquisition gap', async () => {
+  const [result] = await enrichCandidateDetails([candidate({
+    sourceProvider: 'personio',
+    description: '',
+    descriptionStatus: 'missing',
+  })], {
+    concurrency: 1,
+    maxFetches: 1,
+    timeoutMs: 1000,
+    async fetchImpl() { throw new Error('must not fetch'); },
+  });
+  assert.equal(result.detail.status, 'unsupported_provider');
+  assert.equal(result.detail.provider, 'personio');
+  assert.equal(result.detail.reason, 'list_feed_description_missing');
+  assert.match(result.detail.message, /list feed did not provide a description/);
+});

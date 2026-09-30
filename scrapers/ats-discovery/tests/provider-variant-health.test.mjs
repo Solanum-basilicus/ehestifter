@@ -71,6 +71,7 @@ function providerResult(target, overrides = {}) {
     healthPartition: target.healthPartition,
     tenant: target.tenant,
     targetClass: target.targetClass,
+    scheduleBucket: target.scheduleBucket ?? null,
     healthOnly: target.healthOnly,
     status: 'ok',
     skipReason: null,
@@ -587,7 +588,7 @@ test('degraded canary preserves partial jobs for detail diagnostics', async () =
   assert.equal(batch.jobs.length, 5);
 });
 
-test('variant summary remains degraded when planner skips every CSB target by cooldown', () => {
+test('variant summary reports an existing provider cooldown as a notice', () => {
   const parsedPolicy = policy();
   const summary = buildRunSummary({
     runId: 'cooldown-run',
@@ -643,10 +644,11 @@ test('variant summary remains degraded when planner skips every CSB target by co
     policy: parsedPolicy,
   });
   const csb = summary.providerVariants['successfactors:csb'];
-  assert.equal(csb.status, 'degraded');
+  assert.equal(csb.status, 'healthy');
   assert.equal(csb.targetsAttempted, 0);
   assert.equal(csb.skippedProviderCooldown, 1);
-  assert.match(summary.providerHealthWarnings[0], /successfactors:csb/);
+  assert.deepEqual(summary.providerHealthWarnings, []);
+  assert.match(summary.providerHealthNotices[0], /successfactors:csb/);
 });
 
 test('first variant-aware run migrates legacy shared SuccessFactors tenant state', () => {
@@ -953,4 +955,63 @@ test('inconclusive canary detail remains visible without degrading a healthy lis
   assert.equal(summary.providerVariants['successfactors:csb'].status, 'healthy');
   assert.deepEqual(summary.providerHealthWarnings, []);
   assert.match(summary.providerHealthNotices[0], /inconclusive detail samples/);
+});
+
+
+test('maintenance transient failures do not degrade provider summary health', () => {
+  const parsedPolicy = policy({ transientThreshold: 1 });
+  const targets = [0, 1].map((sequence) => sfTarget(
+    sequence,
+    'rmk',
+    `recovery-${sequence}`,
+    { targetClass: 'normal', scheduleBucket: 'recovery' },
+  ));
+  const providerResults = targets.map((target) => providerResult(target, {
+    status: 'error',
+    errorClass: 'network',
+    errorMessage: 'fetch failed',
+    jobsReturned: 0,
+    listingOutcome: 'listing_error',
+  }));
+  const summary = buildRunSummary({
+    runId: 'maintenance-health-run',
+    mode: 'offline',
+    startedAt: NOW,
+    finishedAt: new Date(NOW.getTime() + 1000),
+    targetPlan: {
+      targets,
+      healthPartitions: {
+        'successfactors:rmk': {
+          provider: 'successfactors', providerVariant: 'rmk',
+          healthPartition: 'successfactors:rmk', selectedTargets: 2,
+          selectedCanaries: 0, selectedNormal: 2, skippedNotDue: 0,
+          skippedProviderCooldown: 0, skippedNormalBudget: 0,
+        },
+      },
+      counts: {
+        priority: 0, canary: 0, normal: 2, disabled: 0, disabledRemoved: 0,
+        planningRejected: 0, canaryPlanningRejected: 0, catalogEligible: 2,
+        skippedNotDue: 0, skippedProviderCooldown: 0, skippedNormalBudget: 0,
+        skippedTotal: 0,
+      },
+      limits: {}, catalogs: { ashby: null },
+      sweep: {
+        targetFullSweepDays: 3, estimatedHealthySweepDays: 0,
+        recommendedHealthyTargetsPerRun: 0, recommendedNormalTargetsPerRun: 0,
+        feasibleAtConfiguredBudget: true,
+      },
+    },
+    scanResult: {
+      providerResults, breakerEvents: [], candidates: [], rejected: [],
+      providerIds: ['successfactors'],
+    },
+    evaluated: [],
+    policy: parsedPolicy,
+  });
+  const rmk = summary.providerVariants['successfactors:rmk'];
+  assert.equal(rmk.status, 'healthy');
+  assert.equal(rmk.targetsAttempted, 2);
+  assert.equal(rmk.healthAttempts, 0);
+  assert.equal(rmk.healthErrors, 0);
+  assert.deepEqual(summary.providerHealthWarnings, []);
 });

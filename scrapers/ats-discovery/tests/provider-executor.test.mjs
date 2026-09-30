@@ -27,7 +27,7 @@ function policy({
         },
       },
     },
-    providers: { ashby: {} },
+    providers: { ashby: {}, lever: {} },
   });
 }
 
@@ -214,4 +214,114 @@ test('results are returned in target sequence order', async () => {
     },
   });
   assert.deepEqual(result.batches.map((item) => item.target.sequence), [2, 5, 7]);
+});
+
+
+test('ready providers use global slots while another provider is busy', async () => {
+  const started = [];
+  let releaseAshby;
+  const ashbyGate = new Promise((resolve) => { releaseAshby = resolve; });
+  const targets = [
+    { ...target(0), provider: 'ashby' },
+    { ...target(1), provider: 'ashby' },
+    { ...target(2), provider: 'lever' },
+  ];
+  const running = executeProviderTargets({
+    targets,
+    policy: policy({ concurrency: 1, interval: 0 }),
+    globalConcurrency: 2,
+    fetchTarget: async (item) => {
+      started.push(`${item.provider}:${item.sequence}`);
+      if (item.provider === 'ashby' && item.sequence === 0) await ashbyGate;
+      return [];
+    },
+  });
+
+  while (started.length < 2) await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(started.slice(0, 2), ['ashby:0', 'lever:2']);
+  releaseAshby();
+  await running;
+});
+
+test('provider-specific pacing lets another ready provider use the global slot', async () => {
+  const providerPolicy = parseDiscoveryPolicy({
+    schema_version: 1,
+    defaults: {
+      execution: {
+        concurrency: 1,
+        min_request_interval_ms: 0,
+      },
+    },
+    providers: {
+      ashby: { execution: { min_request_interval_ms: 100 } },
+      lever: { execution: { min_request_interval_ms: 25 } },
+    },
+  });
+  let clock = 0;
+  const starts = [];
+  const sleeps = [];
+  const targets = [
+    { ...target(0), provider: 'ashby' },
+    { ...target(1), provider: 'ashby' },
+    { ...target(2), provider: 'lever' },
+    { ...target(3), provider: 'lever' },
+  ];
+
+  await executeProviderTargets({
+    targets,
+    policy: providerPolicy,
+    globalConcurrency: 1,
+    monotonicNow: () => clock,
+    sleep: async (milliseconds) => {
+      sleeps.push(milliseconds);
+      clock += milliseconds;
+    },
+    fetchTarget: async (item) => {
+      starts.push(`${item.provider}:${item.sequence}@${clock}`);
+      return [];
+    },
+  });
+
+  assert.deepEqual(starts, [
+    'ashby:0@0',
+    'lever:2@0',
+    'lever:3@25',
+    'ashby:1@100',
+  ]);
+  assert.deepEqual(sleeps, [25, 75]);
+});
+
+test('maintenance network failures do not open the provider circuit', async () => {
+  let calls = 0;
+  const error = Object.assign(new Error('reset'), { code: 'ECONNRESET' });
+  const targets = Array.from({ length: 4 }, (_, sequence) => ({
+    ...target(sequence),
+    scheduleBucket: 'recovery',
+  }));
+  const result = await executeProviderTargets({
+    targets,
+    policy: policy({ concurrency: 1, transientThreshold: 1 }),
+    globalConcurrency: 1,
+    fetchTarget: async () => {
+      calls += 1;
+      throw error;
+    },
+  });
+  assert.equal(calls, 4);
+  assert.equal(result.breakerEvents.length, 0);
+  assert.equal(result.batches.every((item) => item.providerResult.scheduleBucket === 'recovery'), true);
+});
+
+test('maintenance rate limits remain provider health signals', async () => {
+  const result = await executeProviderTargets({
+    targets: [
+      { ...target(0), scheduleBucket: 'recovery' },
+      { ...target(1), scheduleBucket: 'recovery' },
+    ],
+    policy: policy({ concurrency: 1, rateLimitThreshold: 1 }),
+    globalConcurrency: 1,
+    fetchTarget: async () => { throw httpError(429); },
+  });
+  assert.equal(result.breakerEvents[0].reason, 'rate_limit_threshold');
+  assert.equal(result.batches[1].providerResult.status, 'skipped');
 });

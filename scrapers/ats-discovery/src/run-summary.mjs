@@ -1,6 +1,7 @@
 import { CATALOG_PROVIDER_IDS } from './catalogs/provider-catalog.mjs';
 import { getProviderPolicy } from './policy/discovery-policy.mjs';
 import { isDurableProviderResult, isTransientProviderResult } from './scan/provider-errors.mjs';
+import { isProviderHealthSignificantResult } from './scan/provider-health.mjs';
 
 function count(items, predicate) {
   return items.filter(predicate).length;
@@ -82,6 +83,7 @@ function providerVariantHealth({
       ?? null;
     const attempted = results.filter((item) => item.status !== 'skipped');
     const errorResults = attempted.filter((item) => item.status === 'error');
+    const healthAttempted = attempted.filter(isProviderHealthSignificantResult);
     const errors = errorResults.length;
     const errorClasses = countBy(errorResults, (item) => item.errorClass ?? 'unknown');
     const httpStatuses = countBy(
@@ -92,7 +94,7 @@ function providerVariantHealth({
       errorResults,
       (item) => item.networkDiagnostic?.code ?? null,
     );
-    const healthErrors = attempted.filter(isTransientProviderResult).length;
+    const healthErrors = healthAttempted.filter(isTransientProviderResult).length;
     const durableTenantFailures = attempted.filter(isDurableProviderResult).length;
     const monitoring = policy
       ? getProviderPolicy(policy, provider).monitoring
@@ -102,9 +104,9 @@ function providerVariantHealth({
         degradedMinimumAttempts: 2,
         degradedErrorRatio: 0.5,
       };
-    const healthErrorRatio = attempted.length === 0
+    const healthErrorRatio = healthAttempted.length === 0
       ? 0
-      : healthErrors / attempted.length;
+      : healthErrors / healthAttempted.length;
     const breaker = breakerByPartition.get(healthPartition) ?? null;
     const listingEmptyAnomalies =
       emptyAnomalyByPartition.get(healthPartition) ?? 0;
@@ -132,19 +134,18 @@ function providerVariantHealth({
     const skippedNotDue = planStats?.skippedNotDue ?? 0;
     const skippedNormalBudget = planStats?.skippedNormalBudget ?? 0;
     const degraded = Boolean(breaker)
-      || skippedProviderCooldown > 0
       || systemicListingEmptyAnomaly
       || listingVolumeAnomalies > 0
       || degradedCanaries.length > 0
       || (
-        attempted.length >= monitoring.degradedMinimumAttempts
+        healthAttempted.length >= monitoring.degradedMinimumAttempts
         && healthErrorRatio >= monitoring.degradedErrorRatio
       );
     const itemWarnings = [];
     const itemNotices = [];
     if (breaker) itemWarnings.push(`circuit open: ${breaker.reason}`);
     if (skippedProviderCooldown > 0) {
-      itemWarnings.push(`${skippedProviderCooldown} target(s) skipped because this health partition is in cooldown`);
+      itemNotices.push(`${skippedProviderCooldown} target(s) skipped because this health partition is in cooldown`);
     }
     if (listingEmptyAnomalies > 0) {
       const message = `${listingEmptyAnomalies}/${attempted.length} attempted target(s) were historical nonempty tenants that returned explicit zero and were made eligible for short re-probe`;
@@ -161,10 +162,10 @@ function providerVariantHealth({
       itemNotices.push(`${inconclusiveCanaries.length}/${canaries.length} provider canary target(s) had inconclusive detail samples`);
     }
     if (
-      attempted.length >= monitoring.degradedMinimumAttempts
+      healthAttempted.length >= monitoring.degradedMinimumAttempts
       && healthErrorRatio >= monitoring.degradedErrorRatio
     ) {
-      itemWarnings.push(`${healthErrors}/${attempted.length} attempted targets had health-significant failures`);
+      itemWarnings.push(`${healthErrors}/${healthAttempted.length} health-significant attempted targets failed transiently`);
     }
     variants[healthPartition] = {
       provider,
@@ -173,6 +174,7 @@ function providerVariantHealth({
       status: degraded ? 'degraded' : 'healthy',
       targetsPlanned: planStats?.selectedTargets ?? results.length,
       targetsAttempted: attempted.length,
+      healthAttempts: healthAttempted.length,
       targetsSkippedBySchedule:
         skippedNotDue + skippedProviderCooldown + skippedNormalBudget,
       skippedNotDue,

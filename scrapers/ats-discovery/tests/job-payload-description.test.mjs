@@ -68,3 +68,10 @@ test('buildCreatePayload still rejects required empty descriptions', () => {
     /Candidate has no description/,
   );
 });
+
+test('buildCreatePayload replaces no-break whitespace before storing HTML', () => {
+  const payload = buildCreatePayload(candidate(
+    'One\u00a0two\u202fthree\u2007four\u2060five',
+  ));
+  assert.equal(payload.description, '<p>One two three fourfive</p>');
+});

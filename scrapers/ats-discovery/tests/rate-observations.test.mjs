@@ -172,3 +172,38 @@ test('multiple providers are reported independently and sorted', () => {
   });
   assert.deepEqual(observations.providers.map((item) => item.provider), ['ashby', 'lever']);
 });
+
+
+test('maintenance failures do not distort provider rate recommendations', () => {
+  const observations = buildRateObservations({
+    providerResults: Array.from({ length: 4 }, (_, sequence) => result({
+      sequence,
+      scheduleBucket: 'recovery',
+      status: 'error',
+      errorClass: 'network',
+    })),
+    policy: policy(),
+  });
+  const ashby = observations.providers[0];
+  assert.equal(ashby.requestsAttempted, 4);
+  assert.equal(ashby.healthRequestsAttempted, 0);
+  assert.equal(ashby.transientErrors, 4);
+  assert.equal(ashby.healthTransientErrors, 0);
+  assert.equal(ashby.recommendation.action, 'hold');
+});
+
+test('maintenance rate limits remain part of provider rate recommendations', () => {
+  const observations = buildRateObservations({
+    providerResults: [result({
+      scheduleBucket: 'recovery',
+      status: 'error',
+      errorClass: 'rate_limited',
+      httpStatus: 429,
+    })],
+    policy: policy({ concurrency: 3, interval: 100 }),
+  });
+  const ashby = observations.providers[0];
+  assert.equal(ashby.healthRequestsAttempted, 1);
+  assert.equal(ashby.healthTransientErrors, 1);
+  assert.equal(ashby.recommendation.action, 'decrease');
+});

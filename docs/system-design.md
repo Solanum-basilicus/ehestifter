@@ -1688,9 +1688,13 @@ The target planner combines:
 
 Priority targets and due provider canaries are processed before normal catalog shards. Healthy catalogs rotate deterministically so a large provider catalog cannot starve smaller providers. Recently relevant tenants can be promoted; long-empty tenants are demoted; suspected/confirmed-dead tenants receive long-interval re-probes.
 
+Provider execution is ready-driven across health partitions. A partition that is waiting for its configured request interval or concurrency slot does not consume a global execution slot. Another ready partition can use that slot. Target order remains stable inside each partition, and the priority phase still completes before the normal phase starts.
+
+Maintenance cohorts (`recovery`, `dead_reprobe`, and `long_empty`) contain tenants that are expected to include stale or inaccessible endpoints. Their non-rate-limit results remain tenant diagnostics but do not contribute to provider-wide breaker ratios, degraded health ratios, or rate-tuning samples. HTTP 429 remains a provider-wide signal in every cohort. Durable tenant-local failures remain excluded from provider-wide health. An already active persisted provider cooldown is a run notice, not a new degradation by itself. A circuit opened during the current run, a degraded canary, or another current provider-health anomaly still degrades the run.
+
 Provider-supported date constraints are used where useful. Otherwise posting age is filtered locally. Request pacing, concurrency, pagination, detail limits, rate observations, and live catalog target caps remain explicit configuration; autonomous rate tuning is not implemented.
 
-Provider canaries are filter-independent health probes. They never call Jobs and never become import candidates. High-risk protocols distinguish explicit empty, suspicious empty, configured canary minimum misses, schema/authentication failure, transport failure, and healthy nonempty outcomes. Ordinary nonzero tenant results are accepted even when they are much smaller than historical counts.
+Provider canaries are filter-independent health probes. They never call Jobs and never become import candidates. High-risk protocols distinguish explicit empty, suspicious empty, configured canary minimum misses, schema/authentication failure, transport failure, and healthy nonempty outcomes. Ordinary nonzero tenant results are accepted even when they are much smaller than historical counts. A page cap on a health-only canary is intentional sampling and does not emit a truncation warning; a normal tracked/catalog scan that reaches its cap still does.
 
 ### 14.4 Multi-user discovery contract
 
@@ -1711,6 +1715,17 @@ For a retained candidate:
 4. the shared job is created once through Jobs;
 5. compatibility is requested through Enrichment Core for each matched user when required;
 6. no application status is created or changed.
+
+Location extraction is a job-fact operation, not a user-filter operation. Explicit
+candidate residence and country-specific work-authorization statements can add
+canonical job geography even when user geography filtering is disabled. User
+preferences are applied only after those job facts are extracted. Description
+parsing uses high-signal candidate wording and does not promote unrelated country
+mentions about customers, partners, or company operations.
+
+ATS Discovery normalizes Unicode no-break whitespace in descriptions before Jobs
+create. Web Core also wraps long description content defensively so historical or
+external text cannot expand the job page beyond its content column.
 
 Detail acquisition distinguishes `unavailable` from `error`. Workday `404`,
 `410`, and `canApply: false` responses, plus the recognized SuccessFactors
