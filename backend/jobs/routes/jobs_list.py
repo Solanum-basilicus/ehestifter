@@ -11,6 +11,7 @@ from helpers.status_normalize import status_key, status_key_case_sql
 from helpers.location_mode import active_location_model
 from helpers.locations_v2 import load_locations_v2_catalog
 from helpers.locations_v2_store import fetch_locations_v2_map
+import time # For debug delay
 
 
 REMOTE_MAP = {
@@ -85,6 +86,11 @@ def register(app: func.FunctionApp):
             if category not in VALID_CATEGORIES:
                 return func.HttpResponse("Invalid 'category'", status_code=400)
 
+            # Debug delay for preloader tests
+            if category == "open":
+                time.sleep(5)
+            # Debug delay for preloader tests
+            
             q = (req.params.get("q") or "").strip()
             search_field = (req.params.get("search_field") or "title_company").strip().lower()
             if search_field not in VALID_SEARCH_FIELDS:
