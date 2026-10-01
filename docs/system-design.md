@@ -1070,6 +1070,7 @@ A user may have:
 | `PUT /jobs/{jobId}/status` | update current user status |
 | `GET /jobs/{jobId}/history` | get job history relevant to current user |
 | `POST /jobs/compatibility` | get compatibility scores for list rendering |
+| `POST /jobs/locations` | get active-model locations for list hydration |
 | `POST /jobs/status` | get statuses for list rendering |
 | `GET /jobs/reports/status` | CSV report of user statuses |
 | `POST /jobs/{jobId}/history` | mostly test helper / possible future enrichment journaling hook |
@@ -1138,7 +1139,11 @@ Current characteristics:
 - Open Opportunities reserves a compact list area while its request is pending and shows a lightweight inline SVG/CSS loader when the request is still pending after 500 ms,
 - My Jobs and All Jobs keep the existing text loading state and do not show the Open Opportunities animation,
 - the loader has no external asset or JavaScript animation loop, only runs its CSS animation while visible, and respects `prefers-reduced-motion`,
-- job-list loads use a browser-side generation guard so a superseded request or delayed loader timer cannot redraw the current list state.
+- job-list loads use a browser-side generation guard so a superseded request or delayed loader timer cannot redraw the current list state,
+- My Jobs and All Jobs render from `GET /jobs` before location and compatibility hydration completes,
+- for My Jobs and All Jobs, list items keep `locations` and `locationsV2` in the response but both arrays are empty; Web then gets active-model locations from `POST /ui/jobs/locations`,
+- Open Opportunities keeps locations on its primary Jobs query because location and compatibility data are part of its eligibility logic,
+- location, compatibility, and status hydration does not block list navigation, filtering, search, or job-detail links.
 
 ### 11.4 Details page behavior
 

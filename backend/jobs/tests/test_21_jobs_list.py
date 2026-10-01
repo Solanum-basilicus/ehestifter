@@ -24,9 +24,12 @@ def test_jobs_list_all(base_url, user_headers, shared_state):
     items = payload.get("items", [])
     assert isinstance(items, list), "Envelope 'items' is not a list"
 
-    if items:
-        assert "locations" in items[0], "Locations array not present in response"
-        assert "AtsVendor" in items[0], "AtsVendor not present in response"
+    for item in items:
+        assert "locations" in item, "Locations array not present in response"
+        assert "locationsV2" in item, "Locations v2 array not present in response"
+        assert item["locations"] == [], "All Jobs must defer v1 locations"
+        assert item["locationsV2"] == [], "All Jobs must defer v2 locations"
+        assert "AtsVendor" in item, "AtsVendor not present in response"
 
     ids = _extract_ids(payload)
     assert job_id in ids, "Job ID not found in category=all response"
@@ -48,12 +51,13 @@ def test_jobs_list_my_returns_success_and_items_have_expected_shape(base_url, us
     items = payload["items"]
     assert isinstance(items, list), "'items' must be a list"
 
-    if items:
-        first = items[0]
-        assert "Id" in first
-        assert "AtsVendor" in first
-        assert "locations" in first
-        assert isinstance(first["locations"], list)
+    for item in items:
+        assert "Id" in item
+        assert "AtsVendor" in item
+        assert "locations" in item
+        assert "locationsV2" in item
+        assert item["locations"] == [], "My Jobs must defer v1 locations"
+        assert item["locationsV2"] == [], "My Jobs must defer v2 locations"
 
 
 def test_jobs_list_all_without_user_context(base_url, auth_headers):

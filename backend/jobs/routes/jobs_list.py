@@ -11,7 +11,6 @@ from helpers.status_normalize import status_key, status_key_case_sql
 from helpers.location_mode import active_location_model
 from helpers.locations_v2 import load_locations_v2_catalog
 from helpers.locations_v2_store import fetch_locations_v2_map
-import time # For debug delay
 
 
 REMOTE_MAP = {
@@ -86,11 +85,6 @@ def register(app: func.FunctionApp):
             if category not in VALID_CATEGORIES:
                 return func.HttpResponse("Invalid 'category'", status_code=400)
 
-            # Debug delay for preloader tests
-            if category == "open":
-                time.sleep(5)
-            # Debug delay for preloader tests
-            
             q = (req.params.get("q") or "").strip()
             search_field = (req.params.get("search_field") or "title_company").strip().lower()
             if search_field not in VALID_SEARCH_FIELDS:
@@ -508,28 +502,31 @@ def register(app: func.FunctionApp):
                 j["Id"] = normalize_guid(str(j["Id"]))
                 norm_ids.append(j["Id"])
 
-            # Fetch locations for selected IDs
+            # My Jobs and All Jobs return the list before location hydration.
+            # Open Opportunities still needs full location data on this request.
             loc_map = {jid: [] for jid in norm_ids}
-            if norm_ids:
-                placeholders = ",".join(["?"] * len(norm_ids))
-                cur.execute(f"""
-                    SELECT JobOfferingId, CountryName, CountryCode, CityName, Region
-                    FROM dbo.JobOfferingLocations
-                    WHERE JobOfferingId IN ({placeholders})
-                    ORDER BY CountryName, CityName
-                """, [normalize_guid(x) for x in norm_ids])
+            loc_v2_map = {jid: [] for jid in norm_ids}
+            if category == "open":
+                if norm_ids:
+                    placeholders = ",".join(["?"] * len(norm_ids))
+                    cur.execute(f"""
+                        SELECT JobOfferingId, CountryName, CountryCode, CityName, Region
+                        FROM dbo.JobOfferingLocations
+                        WHERE JobOfferingId IN ({placeholders})
+                        ORDER BY JobOfferingId, CountryName, CityName
+                    """, norm_ids)
 
-                for (jid, cn, cc, city, region) in cur.fetchall():
-                    jid_norm = normalize_guid(str(jid))
-                    loc_map.setdefault(jid_norm, []).append({
-                        "countryName": cn,
-                        "countryCode": cc,
-                        "cityName": city,
-                        "region": region
-                    })
+                    for (jid, cn, cc, city, region) in cur.fetchall():
+                        jid_norm = normalize_guid(str(jid))
+                        loc_map.setdefault(jid_norm, []).append({
+                            "countryName": cn,
+                            "countryCode": cc,
+                            "cityName": city,
+                            "region": region
+                        })
 
-            catalog = load_locations_v2_catalog() if location_model == "v2" else None
-            loc_v2_map = fetch_locations_v2_map(cur, norm_ids, catalog=catalog)
+                catalog = load_locations_v2_catalog() if location_model == "v2" else None
+                loc_v2_map = fetch_locations_v2_map(cur, norm_ids, catalog=catalog)
 
             for j in jobs:
                 j["locations"] = loc_map.get(j["Id"], [])

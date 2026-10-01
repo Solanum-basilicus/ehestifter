@@ -216,7 +216,7 @@ Locations v1 and Locations v2 writes are independent:
 
 There is no v2-to-v1 shadow write. If an operator returns to v1 after native v2-only jobs exist, those jobs can have no visible location in v1 mode. This is an accepted rollback limitation.
 
-Jobs reads return both representations when they exist. The response also returns `activeLocationModel`. Web uses that value for location presentation.
+Detailed Jobs reads return both representations when they exist. `GET /jobs` keeps both list fields for compatibility, but My Jobs and All Jobs return `locations: []` and `locationsV2: []` so the base list can return before location hydration. Open Opportunities keeps locations on its primary query. Web gets deferred list locations from `POST /jobs/locations`, which reads only the active model and returns `activeLocationModel`.
 
 Issue #8 adds the manual selector contract owned by Jobs:
 

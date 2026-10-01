@@ -423,20 +423,21 @@
     }).join(' ');
   }
 
-  function summarizeLocations(row) {
+  function summarizeLocations(row, locationModel = activeLocationModel) {
     const remote = row.RemoteType && row.RemoteType !== 'Unknown' ? row.RemoteType : '';
+    const prefix = '·\u00a0\u00a0';
 
-    if (activeLocationModel === 'v2') {
+    if (locationModel === 'v2') {
       const locsV2 = Array.isArray(row.locationsV2) ? row.locationsV2 : [];
-      if (!locsV2.length) return `·&nbsp;&nbsp;${remote}` || '';
+      if (!locsV2.length) return remote ? `${prefix}${remote}` : '';
       const parts = locsV2.slice(0, 2).map(locationV2Label).filter(Boolean);
       if (locsV2.length > 2) parts.push(`+${locsV2.length - 2} locations`);
       const geo = parts.join('; ');
-      return remote ? `·&nbsp;&nbsp;${geo} · ${remote}` : `·&nbsp;&nbsp;${geo}`;
+      return remote ? `${prefix}${geo} · ${remote}` : `${prefix}${geo}`;
     }
 
     const locs = Array.isArray(row.locations) ? row.locations : [];
-    if (!locs.length) return `·&nbsp;&nbsp;${remote}` || '';
+    if (!locs.length) return remote ? `${prefix}${remote}` : '';
 
     const byCountry = new Map();
     for (const l of locs) {
@@ -459,7 +460,7 @@
     }
 
     const geo = parts.join('; ');
-    return remote ? `·&nbsp;&nbsp;${geo} · ${remote}` : `·&nbsp;&nbsp;${geo}`;
+    return remote ? `${prefix}${geo} · ${remote}` : `${prefix}${geo}`;
   }
 
   function locationV2Label(loc) {
@@ -474,8 +475,8 @@
     return parts.filter(Boolean).join(', ');
   }
 
-  function fullLocationLabels(row) {
-    if (activeLocationModel === 'v2') {
+  function fullLocationLabels(row, locationModel = activeLocationModel) {
+    if (locationModel === 'v2') {
       return (Array.isArray(row.locationsV2) ? row.locationsV2 : [])
         .map(locationV2Label)
         .filter(Boolean);
@@ -520,6 +521,8 @@
     const atsVendor = (row.AtsVendor || '').trim();
 
     const statusId = `ust_${row.Id}`;
+    const locationSlotId = `ul_${row.Id}`;
+    const locationDetailsId = `uld_${row.Id}`;
     const compatWrapId = `ucw_${row.Id}`;
     const compatSlotId = `uc_${row.Id}`;
 
@@ -534,11 +537,11 @@
             </h4>
             <div class="flex muted" style="flex-wrap:wrap; font-size:14px; gap:8px;">
               ${companyLine ? `<span class="truncate-1" style="max-width:36ch;" title="${escq(companyLine)}">${companyLine}</span>` : ''}
-              ${geo ? `<span class="truncate-1" style="max-width:38ch;" title="${escq(geo)}">${geo}</span>` : ''}
+              <span id="${locationSlotId}">${geo ? `<span class="truncate-1" style="max-width:38ch;" title="${escapeHtml(geo)}">${escapeHtml(geo)}</span>` : ''}</span>
               ${via ? `<span class="chip muted" title="Found on">${escq(via)}</span>` : ''}
               ${atsVendor ? `<span class="chip muted" title="ATS vendor">ATS: ${escapeHtml(atsVendor)}</span>` : ''}
             </div>
-            ${locationsDisclosure}
+            <div id="${locationDetailsId}">${locationsDisclosure}</div>
           </div>
 
           <div style="text-align:right;">
@@ -595,11 +598,12 @@
     renderStatusOptions();
   }
 
-  async function loadStatusesFor(ids) {
+  async function loadStatusesFor(ids, generation) {
     if (!ids || !ids.length) return;
 
     try {
       const data = await postWithRetry('/ui/jobs/status', { jobIds: ids }, 4);
+      if (generation !== listLoadGeneration) return;
       const map = (data && data.statuses) || {};
 
       for (const id of ids) {
@@ -611,12 +615,58 @@
         el.dataset.k = window.Status.statusKey(raw);
       }
     } catch (_) {
+      if (generation !== listLoadGeneration) return;
       for (const id of ids) {
         const el = document.getElementById(`ust_${id}`);
         if (!el) continue;
         el.textContent = 'unavailable';
         el.dataset.k = 'unset';
       }
+    }
+  }
+
+  function renderLocationsFor(row, locationModel) {
+    const slot = document.getElementById(`ul_${row.Id}`);
+    const details = document.getElementById(`uld_${row.Id}`);
+    if (!slot || !details) return;
+
+    const geo = summarizeLocations(row, locationModel);
+    const fullLocations = fullLocationLabels(row, locationModel);
+
+    slot.innerHTML = geo
+      ? `<span class="truncate-1" style="max-width:38ch;" title="${escapeHtml(geo)}">${escapeHtml(geo)}</span>`
+      : '';
+    details.innerHTML = fullLocations.length > 2
+      ? `<details class="job-location-details"><summary>All locations (${fullLocations.length})</summary><div class="muted" style="margin-top:4px; font-size:12px;">${fullLocations.map(escapeHtml).join(' · ')}</div></details>`
+      : '';
+  }
+
+  async function loadLocationsFor(items, generation) {
+    if (!items || !items.length) return;
+    const ids = items.map(item => item.Id).filter(Boolean);
+    if (!ids.length) return;
+
+    try {
+      const data = await postWithRetry('/ui/jobs/locations', { jobIds: ids }, 4);
+      if (generation !== listLoadGeneration) return;
+
+      const locationModel = data?.activeLocationModel === 'v2' ? 'v2' : 'v1';
+      const locations = (data && data.locations) || {};
+      const locationsV2 = (data && data.locationsV2) || {};
+
+      for (const item of items) {
+        const id = item.Id;
+        if (!id) continue;
+        const key = id?.toLowerCase?.();
+        renderLocationsFor({
+          ...item,
+          locations: locations[id] ?? locations[key] ?? [],
+          locationsV2: locationsV2[id] ?? locationsV2[key] ?? [],
+        }, locationModel);
+      }
+    } catch (error) {
+      if (generation !== listLoadGeneration) return;
+      console.warn('Location hydration failed', error);
     }
   }
 
@@ -661,11 +711,12 @@
     wrap.classList.remove('hidden');
   }
 
-  async function loadCompatibilitiesFor(ids) {
+  async function loadCompatibilitiesFor(ids, generation) {
     if (!ids || !ids.length) return;
 
     try {
       const data = await postWithRetry('/ui/jobs/compatibility', { jobIds: ids }, 4);
+      if (generation !== listLoadGeneration) return;
       const map = (data && data.compatibility) || {};
 
       for (const id of ids) {
@@ -673,6 +724,7 @@
         renderCompatibilityFor(id, compat);
       }
     } catch (_) {
+      if (generation !== listLoadGeneration) return;
       for (const id of ids) hideCompatibilityFor(id);
     }
   }
@@ -726,8 +778,9 @@
       setStatus('Ready', { ephemeral: true });
 
       const jobIds = items.map(x => x.Id).filter(Boolean);
-      loadStatusesFor(jobIds);
-      loadCompatibilitiesFor(jobIds);
+      loadStatusesFor(jobIds, generation);
+      loadCompatibilitiesFor(jobIds, generation);
+      if (loadCategory !== 'open') loadLocationsFor(items, generation);
 
     } catch (e) {
       if (generation !== listLoadGeneration) return;
