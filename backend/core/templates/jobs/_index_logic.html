@@ -423,6 +423,13 @@
     }).join(' ');
   }
 
+  function summarizeLocationState(row, state) {
+    const remote = row.RemoteType && row.RemoteType !== 'Unknown' ? row.RemoteType : '';
+    const prefix = '·\u00a0\u00a0';
+    const stateLabel = state === 'unavailable' ? 'locations unavailable' : 'locations loading…';
+    return remote ? `${prefix}${stateLabel} · ${remote}` : `${prefix}${stateLabel}`;
+  }
+
   function summarizeLocations(row, locationModel = activeLocationModel) {
     const remote = row.RemoteType && row.RemoteType !== 'Unknown' ? row.RemoteType : '';
     const prefix = '·\u00a0\u00a0';
@@ -511,8 +518,9 @@
       company && posting ? `<b>${company}</b>, through <b>${posting}</b>`
       : (`<b>${company}</b>` || (posting ? `through <b>${posting}</b>` : ''));
 
-    const geo = summarizeLocations(row);
-    const fullLocations = fullLocationLabels(row);
+    const locationsPending = currentCategory !== 'open';
+    const geo = locationsPending ? summarizeLocationState(row, 'loading') : summarizeLocations(row);
+    const fullLocations = locationsPending ? [] : fullLocationLabels(row);
     const locationsDisclosure = fullLocations.length > 2
       ? `<details class="job-location-details"><summary>All locations (${fullLocations.length})</summary><div class="muted" style="margin-top:4px; font-size:12px;">${fullLocations.map(escapeHtml).join(' · ')}</div></details>`
       : '';
@@ -667,6 +675,15 @@
     } catch (error) {
       if (generation !== listLoadGeneration) return;
       console.warn('Location hydration failed', error);
+      for (const item of items) {
+        const slot = document.getElementById(`ul_${item.Id}`);
+        const details = document.getElementById(`uld_${item.Id}`);
+        if (slot) {
+          const summary = summarizeLocationState(item, 'unavailable');
+          slot.innerHTML = `<span class="truncate-1" style="max-width:38ch;" title="${escapeHtml(summary)}">${escapeHtml(summary)}</span>`;
+        }
+        if (details) details.innerHTML = '';
+      }
     }
   }
 
