@@ -97,7 +97,43 @@
     </div>
 
     <div id="jobs-error" class="hidden"></div>
-    <div id="jobs-list" class="cards" aria-busy="true"></div>
+    <div id="jobs-stage" class="jobs-stage">
+      <div id="open-opportunities-loader" class="open-opportunities-loader" aria-hidden="true">
+        <svg class="open-opportunities-loader-art" viewBox="0 0 180 128" focusable="false">
+          <g class="open-loader-rabbit" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M44 31 C35 21 35 8 39 4 C46 12 49 21 49 29" />
+            <path d="M59 29 C60 17 66 7 72 4 C74 15 70 24 66 32" />
+            <path d="M34 42 C34 31 43 25 55 25 C68 25 76 33 76 44 C76 54 67 60 55 60 C42 60 34 53 34 42 Z" />
+            <circle cx="47" cy="42" r="1.4" fill="currentColor" stroke="none" />
+            <circle cx="63" cy="42" r="1.4" fill="currentColor" stroke="none" />
+            <path d="M54 49 L56 49" />
+            <path d="M39 62 C29 71 29 100 39 111 C47 120 66 120 75 111 C84 101 84 76 74 66 C66 59 47 57 39 62 Z" />
+            <path d="M43 76 C39 82 39 91 44 95" />
+            <path d="M44 95 C49 91 53 88 58 87" />
+          </g>
+          <g class="open-loader-stack" fill="#fff" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="50" y="78" width="24" height="31" rx="1" transform="rotate(7 62 94)" />
+            <rect x="47" y="76" width="24" height="31" rx="1" transform="rotate(-3 59 92)" fill="#f8fafc" />
+            <path d="M52 84 H65 M52 89 H64 M52 94 H62" />
+          </g>
+          <g class="open-loader-paw" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M72 72 C84 69 92 63 102 60" />
+            <path d="M101 57 C106 55 110 57 108 60 C112 60 112 64 108 65 C105 66 103 64 101 62" />
+          </g>
+          <g class="open-loader-tray" fill="#f8fafc" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M115 54 L150 60 L146 108 L111 103 Z" />
+            <path d="M117 67 L145 72 M115 79 L143 84" fill="none" />
+            <path d="M121 48 L146 52 L145 62 L118 58 Z" fill="#fff" />
+          </g>
+          <g class="open-loader-paper" fill="#fff" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="120" y="47" width="24" height="16" rx="1" />
+            <path d="M124 52 H139 M124 56 H136" />
+          </g>
+        </svg>
+        <div class="open-opportunities-loader-label">Sorting opportunities…</div>
+      </div>
+      <div id="jobs-list" class="cards" aria-busy="true"></div>
+    </div>
 
     <div class="pagination" id="pagination" aria-label="Pagination">
       <label class="select" for="pageSize">

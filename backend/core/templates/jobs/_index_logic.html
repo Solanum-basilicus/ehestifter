@@ -102,6 +102,7 @@
   }
 
   const listEl = document.getElementById('jobs-list');
+  const jobsStage = document.getElementById('jobs-stage');
   const statusEl = document.getElementById('jobs-status');
   const errEl = document.getElementById('jobs-error');
   const dbgJobs = document.getElementById('dbg-jobs');
@@ -130,6 +131,7 @@
   const geoAddLink = document.getElementById('geoAddLink');
 
   const VALID_MODES = ['remote', 'onsite', 'hybrid'];
+  const OPEN_LOADER_DELAY_MS = 500;
 
   let pageSize = Number(sessionStorage.getItem('jobs.pageSize') || 25);
   if (![10, 25, 50, 100].includes(pageSize)) pageSize = 25;
@@ -142,6 +144,8 @@
   let searchField = 'title_company';
   let searchText = '';
   let activeLocationModel = 'v1';
+  let listLoadGeneration = 0;
+  let openLoaderTimer = null;
 
   let modes = [];
   let cities = [];
@@ -258,6 +262,39 @@
       errEl?.setAttribute('hidden', 'hidden');
       setStatus(note || 'Loading…', { error: false, ephemeral: false });
     }
+  }
+
+  function clearOpenLoaderTimer() {
+    if (openLoaderTimer === null) return;
+    window.clearTimeout(openLoaderTimer);
+    openLoaderTimer = null;
+  }
+
+  function prepareOpenLoader(generation, category) {
+    clearOpenLoaderTimer();
+    const isOpen = category === 'open';
+    jobsStage?.classList.toggle('open-loader-pending', isOpen);
+
+    if (!isOpen) {
+      jobsStage?.classList.remove('open-loader-visible');
+      return;
+    }
+
+    // Keep the loader visible if a new Open Opportunities request starts.
+    if (jobsStage?.classList.contains('open-loader-visible')) return;
+
+    openLoaderTimer = window.setTimeout(() => {
+      openLoaderTimer = null;
+      if (generation !== listLoadGeneration || currentCategory !== 'open') return;
+      jobsStage?.classList.add('open-loader-visible');
+    }, OPEN_LOADER_DELAY_MS);
+  }
+
+  function finishListLoad(generation) {
+    if (generation !== listLoadGeneration) return;
+    clearOpenLoaderTimer();
+    jobsStage?.classList.remove('open-loader-visible', 'open-loader-pending');
+    setLoading(false);
   }
 
   function buildApiUrl() {
@@ -641,13 +678,17 @@
   }
 
   async function loadPage() {
+    const generation = ++listLoadGeneration;
+    const loadCategory = currentCategory;
     setLoading(true, `Loading page ${page}…`);
+    prepareOpenLoader(generation, loadCategory);
 
     try {
       const url = buildApiUrl();
       syncUrl();
 
       const data = await window.fetchWithRetry(url, 4);
+      if (generation !== listLoadGeneration) return;
 
       if (!data || data.error) {
         throw new Error((data && data.message) || 'Jobs service is warming up');
@@ -689,7 +730,9 @@
       loadCompatibilitiesFor(jobIds);
 
     } catch (e) {
+      if (generation !== listLoadGeneration) return;
       console.error('loadPage error', e);
+      errEl.removeAttribute('hidden');
       errEl.style.display = 'block';
       errEl.innerHTML = `
         <span class="text-dim">Jobs unavailable - ${e.message || e}</span>
@@ -700,6 +743,8 @@
         loadPage();
       });
       setStatus('Failed to load', { error: true, ephemeral: false });
+    } finally {
+      finishListLoad(generation);
     }
   }
 

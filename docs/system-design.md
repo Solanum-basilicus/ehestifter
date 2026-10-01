@@ -1134,7 +1134,11 @@ Current characteristics:
 - filters,
 - search,
 - pagination,
-- partial redraw behavior rather than full page refresh for many interactions.
+- partial redraw behavior rather than full page refresh for many interactions,
+- Open Opportunities reserves a compact list area while its request is pending and shows a lightweight inline SVG/CSS loader when the request is still pending after 500 ms,
+- My Jobs and All Jobs keep the existing text loading state and do not show the Open Opportunities animation,
+- the loader has no external asset or JavaScript animation loop, only runs its CSS animation while visible, and respects `prefers-reduced-motion`,
+- job-list loads use a browser-side generation guard so a superseded request or delayed loader timer cannot redraw the current list state.
 
 ### 11.4 Details page behavior
 
