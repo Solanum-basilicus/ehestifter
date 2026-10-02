@@ -194,6 +194,7 @@
 </style>
 
 <!-- self-hosted scripts -->
+<script src="{{ url_for('static', filename='js/location-display.js') }}"></script>
 <script src="{{ url_for('static', filename='js/htmx.min.js') }}"></script>
 <script src="{{ url_for('static', filename='js/alpine.min.js') }}" defer></script>
 {% endblock %}
@@ -217,12 +218,10 @@
           </div>
           <button class="btn ghost" @click="copy(companyLine())" aria-label="Copy company" aria-disabled="false">📋</button>
 
-          <template x-if="geoLine()">
-            <div class="flex">
-              <div class="sep-vert"></div>
-              <div class="truncate-1" style="max-width:28ch;" :title="geoLine()" x-text="geoLine()"></div>
-            </div>
-          </template>
+          <div id="job-location-wrap" class="flex" style="display:none;">
+            <div class="sep-vert"></div>
+            <div id="job-location-summary"></div>
+          </div>
 
           <template x-if="meta.applyUrl">
             <div class="flex">
@@ -255,12 +254,6 @@
           </template>
         </div>
 
-        <template x-if="fullLocationLabels().length > 2">
-          <details style="margin-top:6px; font-size:12px; color:#4b5563;">
-            <summary style="cursor:pointer;" x-text="'All locations (' + fullLocationLabels().length + ')'" ></summary>
-            <div style="margin-top:4px;" x-text="fullLocationLabels().join(' · ')"></div>
-          </details>
-        </template>
       </div>
 
       <div style="text-align:right;">
@@ -724,7 +717,7 @@
         remoteType:"", firstSeenUtc:"", lastSeenUtc:"",
         repostCount:0, url:"", applyUrl:"",
         foundOn:"", externalId:"", provider:"", providerTenant:"", atsVendor:"",
-        locations: []
+        activeLocationModel:"v1", locations: [], locationsV2: []
       },
       app:{ state:"New", changedAtUtc:null },
       safeDescription:"", descLoaded:false,
@@ -829,6 +822,7 @@
           foundOn, externalId: extId, provider, providerTenant: tenant, atsVendor,
           activeLocationModel, locations: locs, locationsV2: locsV2
         };
+        this.renderLocationSummary();
 
         const rawHtml = this.get(p, ["descriptionHtml","Description","Html"]) || "";
         this.safeDescription = this.sanitizeDescription(rawHtml);
@@ -872,59 +866,21 @@
           : (this.meta.company || "");
       },
 
-      // Render the active location representation.
-      locationV2Label(loc){
-        const ready = String(loc.label || '').trim();
-        if (ready) return ready;
-        const name = String(loc.displayName || '').trim();
-        const region = String(loc.adminRegionName || '').trim();
-        const country = String(loc.countryName || loc.countryCode || '').trim();
-        return [name, region, country]
-          .filter((value, index, values) => value && values.indexOf(value) === index)
-          .join(', ');
-      },
+      renderLocationSummary(){
+        const wrap = document.getElementById('job-location-wrap');
+        const slot = document.getElementById('job-location-summary');
+        if (!wrap || !slot) return;
 
-      fullLocationLabels(){
-        if (this.meta.activeLocationModel === 'v2') {
-          return (this.meta.locationsV2 || []).map(loc => this.locationV2Label(loc)).filter(Boolean);
-        }
-        return (this.meta.locations || []).map(loc => {
-          const country = String(loc.countryName || loc.countryCode || '').trim();
-          const region = String(loc.region || '').trim();
-          const city = String(loc.cityName || '').trim();
-          return [city, region, country]
-            .filter((value, index, values) => value && values.indexOf(value) === index)
-            .join(', ');
-        }).filter(Boolean);
-      },
-
-      geoLine(){
-        const parts = [];
-        if (this.meta.activeLocationModel === 'v2') {
-          const locsV2 = this.meta.locationsV2 || [];
-          for (const loc of locsV2) {
-            const label = this.locationV2Label(loc);
-            if (label) parts.push(label);
-          }
-        } else {
-          const locs = this.meta.locations || [];
-          if (locs.length) {
-          const groups = new Map(); // label -> [cities]
-          for (const it of locs) {
-            const label = (it.countryName || it.countryCode || "").toString().trim();
-            if (!label) continue;
-            if (!groups.has(label)) groups.set(label, []);
-            if (it.cityName) groups.get(label).push(it.cityName);
-          }
-            for (const [label, cities] of groups.entries()) {
-              parts.push(cities.length ? `${label}: ${cities.join(', ')}` : label);
-            }
-          }
-        }
-        const geo = parts.join(' · ');
-        // Append remote type if set
-        if (this.meta.remoteType) return geo ? `${geo}, ${this.meta.remoteType}` : this.meta.remoteType;
-        return geo;
+        const presentation = window.LocationDisplay.buildPresentation({
+          locationModel: this.meta.activeLocationModel,
+          locations: this.meta.locations,
+          locationsV2: this.meta.locationsV2,
+          maxSymbols: 70,
+        });
+        const visible = window.LocationDisplay.renderInto(slot, presentation, {
+          remoteType: this.meta.remoteType,
+        });
+        wrap.style.display = visible ? 'flex' : 'none';
       },
 
       atsLine(){

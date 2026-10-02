@@ -76,3 +76,85 @@
 
 /* Status slot width — prevents layout shift when pill arrives */
 .status-slot { min-width:26ch; display:inline-block; }
+/* Shared compact location summary and full-location popover. */
+.location-inline {
+  display:inline;
+  overflow-wrap:anywhere;
+}
+.location-summary-anchor {
+  border-radius:4px;
+}
+.location-summary-anchor.has-location-popover {
+  cursor:help;
+}
+.location-summary-anchor:focus-visible,
+.location-more:focus-visible {
+  outline:2px solid #6b7280;
+  outline-offset:2px;
+}
+.location-more {
+  padding:0;
+  border:0;
+  background:transparent;
+  color:inherit;
+  cursor:pointer;
+  font:inherit;
+  text-decoration:underline;
+  text-decoration-style:dotted;
+  text-underline-offset:2px;
+}
+.location-more:hover {
+  text-decoration-style:solid;
+}
+.location-popover {
+  position:fixed;
+  z-index:1500;
+  display:none;
+  width:min(460px, calc(100vw - 24px));
+  max-height:min(65vh, 520px);
+  overflow:auto;
+  padding:10px 12px 12px;
+  border:1px solid #d1d5db;
+  border-radius:10px;
+  background:#fff;
+  box-shadow:0 10px 30px rgba(0,0,0,.16);
+  color:#111827;
+  font-size:13px;
+  line-height:1.4;
+}
+.location-popover.is-open {
+  display:block;
+}
+.location-popover-header {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  margin-bottom:6px;
+}
+.location-popover-title {
+  font-weight:600;
+}
+.location-popover-close {
+  padding:0 4px;
+  border:0;
+  background:transparent;
+  color:#4b5563;
+  cursor:pointer;
+  font:inherit;
+  font-size:20px;
+  line-height:1;
+}
+.location-tree-group + .location-tree-group {
+  margin-top:8px;
+}
+.location-tree-heading {
+  font-weight:600;
+}
+.location-tree-row {
+  margin-top:2px;
+  padding-left:14px;
+}
+.location-tree-region {
+  font-weight:500;
+}

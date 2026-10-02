@@ -430,74 +430,6 @@
     return remote ? `${prefix}${stateLabel} · ${remote}` : `${prefix}${stateLabel}`;
   }
 
-  function summarizeLocations(row, locationModel = activeLocationModel) {
-    const remote = row.RemoteType && row.RemoteType !== 'Unknown' ? row.RemoteType : '';
-    const prefix = '·\u00a0\u00a0';
-
-    if (locationModel === 'v2') {
-      const locsV2 = Array.isArray(row.locationsV2) ? row.locationsV2 : [];
-      if (!locsV2.length) return remote ? `${prefix}${remote}` : '';
-      const parts = locsV2.slice(0, 2).map(locationV2Label).filter(Boolean);
-      if (locsV2.length > 2) parts.push(`+${locsV2.length - 2} locations`);
-      const geo = parts.join('; ');
-      return remote ? `${prefix}${geo} · ${remote}` : `${prefix}${geo}`;
-    }
-
-    const locs = Array.isArray(row.locations) ? row.locations : [];
-    if (!locs.length) return remote ? `${prefix}${remote}` : '';
-
-    const byCountry = new Map();
-    for (const l of locs) {
-      const key = (l.countryName || '').trim() || (l.countryCode || '').toUpperCase();
-      const city = (l.cityName || '').trim();
-      if (!key) continue;
-      if (!byCountry.has(key)) byCountry.set(key, new Set());
-      if (city) byCountry.get(key).add(city);
-    }
-
-    const parts = [];
-    for (const [country, citiesSet] of byCountry) {
-      const cityArr = Array.from(citiesSet);
-      const cityStr = cityArr.slice(0, 2).join(', ') + (cityArr.length > 2 ? ', …' : '');
-      parts.push(cityArr.length ? `${country}: ${cityStr}` : country);
-      if (parts.length >= 4) {
-        parts.push('…');
-        break;
-      }
-    }
-
-    const geo = parts.join('; ');
-    return remote ? `${prefix}${geo} · ${remote}` : `${prefix}${geo}`;
-  }
-
-  function locationV2Label(loc) {
-    const label = String(loc.label || '').trim();
-    if (label) return label;
-    const name = String(loc.displayName || '').trim();
-    const region = String(loc.adminRegionName || '').trim();
-    const country = String(loc.countryName || loc.countryCode || '').trim();
-    const parts = [name];
-    if (region && region !== name) parts.push(region);
-    if (country && country !== name && country !== region) parts.push(country);
-    return parts.filter(Boolean).join(', ');
-  }
-
-  function fullLocationLabels(row, locationModel = activeLocationModel) {
-    if (locationModel === 'v2') {
-      return (Array.isArray(row.locationsV2) ? row.locationsV2 : [])
-        .map(locationV2Label)
-        .filter(Boolean);
-    }
-    return (Array.isArray(row.locations) ? row.locations : [])
-      .map((loc) => {
-        const country = String(loc.countryName || loc.countryCode || '').trim();
-        const region = String(loc.region || '').trim();
-        const city = String(loc.cityName || '').trim();
-        return [city, region, country].filter((value, index, values) => value && values.indexOf(value) === index).join(', ');
-      })
-      .filter(Boolean);
-  }
-
   function displayTitle(row) {
     const t = (row.Title || '').trim();
     if (t) return t;
@@ -518,19 +450,12 @@
       company && posting ? `<b>${company}</b>, through <b>${posting}</b>`
       : (`<b>${company}</b>` || (posting ? `through <b>${posting}</b>` : ''));
 
-    const locationsPending = currentCategory !== 'open';
-    const geo = locationsPending ? summarizeLocationState(row, 'loading') : summarizeLocations(row);
-    const fullLocations = locationsPending ? [] : fullLocationLabels(row);
-    const locationsDisclosure = fullLocations.length > 2
-      ? `<details class="job-location-details"><summary>All locations (${fullLocations.length})</summary><div class="muted" style="margin-top:4px; font-size:12px;">${fullLocations.map(escapeHtml).join(' · ')}</div></details>`
-      : '';
     const firstSeen = row.FirstSeenAt || row.CreatedAt || row.LastUpdateAt || '';
     const via = (row.FoundOn || '').trim();
     const atsVendor = (row.AtsVendor || '').trim();
 
     const statusId = `ust_${row.Id}`;
     const locationSlotId = `ul_${row.Id}`;
-    const locationDetailsId = `uld_${row.Id}`;
     const compatWrapId = `ucw_${row.Id}`;
     const compatSlotId = `uc_${row.Id}`;
 
@@ -545,11 +470,10 @@
             </h4>
             <div class="flex muted" style="flex-wrap:wrap; font-size:14px; gap:8px;">
               ${companyLine ? `<span class="truncate-1" style="max-width:36ch;" title="${escq(companyLine)}">${companyLine}</span>` : ''}
-              <span id="${locationSlotId}">${geo ? `<span class="truncate-1" style="max-width:38ch;" title="${escapeHtml(geo)}">${escapeHtml(geo)}</span>` : ''}</span>
+              <span id="${locationSlotId}"></span>
               ${via ? `<span class="chip muted" title="Found on">${escq(via)}</span>` : ''}
               ${atsVendor ? `<span class="chip muted" title="ATS vendor">ATS: ${escapeHtml(atsVendor)}</span>` : ''}
             </div>
-            <div id="${locationDetailsId}">${locationsDisclosure}</div>
           </div>
 
           <div style="text-align:right;">
@@ -574,7 +498,12 @@
   }
 
   function renderCards(items) {
+    window.LocationDisplay.closePopover();
     listEl.innerHTML = items.map(cardHTML).join('');
+    for (const item of items) {
+      if (currentCategory === 'open') renderLocationsFor(item, activeLocationModel);
+      else renderLocationStateFor(item, 'loading');
+    }
   }
 
   function renderChips() {
@@ -633,20 +562,26 @@
     }
   }
 
+  function renderLocationStateFor(row, state) {
+    const slot = document.getElementById(`ul_${row.Id}`);
+    if (!slot) return;
+    slot.textContent = summarizeLocationState(row, state);
+  }
+
   function renderLocationsFor(row, locationModel) {
     const slot = document.getElementById(`ul_${row.Id}`);
-    const details = document.getElementById(`uld_${row.Id}`);
-    if (!slot || !details) return;
+    if (!slot) return;
 
-    const geo = summarizeLocations(row, locationModel);
-    const fullLocations = fullLocationLabels(row, locationModel);
-
-    slot.innerHTML = geo
-      ? `<span class="truncate-1" style="max-width:38ch;" title="${escapeHtml(geo)}">${escapeHtml(geo)}</span>`
-      : '';
-    details.innerHTML = fullLocations.length > 2
-      ? `<details class="job-location-details"><summary>All locations (${fullLocations.length})</summary><div class="muted" style="margin-top:4px; font-size:12px;">${fullLocations.map(escapeHtml).join(' · ')}</div></details>`
-      : '';
+    const presentation = window.LocationDisplay.buildPresentation({
+      locationModel,
+      locations: row.locations,
+      locationsV2: row.locationsV2,
+      maxSymbols: 70,
+    });
+    window.LocationDisplay.renderInto(slot, presentation, {
+      remoteType: row.RemoteType && row.RemoteType !== 'Unknown' ? row.RemoteType : '',
+      prefix: '·  ',
+    });
   }
 
   async function loadLocationsFor(items, generation) {
@@ -675,15 +610,7 @@
     } catch (error) {
       if (generation !== listLoadGeneration) return;
       console.warn('Location hydration failed', error);
-      for (const item of items) {
-        const slot = document.getElementById(`ul_${item.Id}`);
-        const details = document.getElementById(`uld_${item.Id}`);
-        if (slot) {
-          const summary = summarizeLocationState(item, 'unavailable');
-          slot.innerHTML = `<span class="truncate-1" style="max-width:38ch;" title="${escapeHtml(summary)}">${escapeHtml(summary)}</span>`;
-        }
-        if (details) details.innerHTML = '';
-      }
+      for (const item of items) renderLocationStateFor(item, 'unavailable');
     }
   }
 

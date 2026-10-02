@@ -1143,14 +1143,17 @@ Current characteristics:
 - My Jobs and All Jobs render from `GET /jobs` before location and compatibility hydration completes,
 - for My Jobs and All Jobs, list items keep `locations` and `locationsV2` in the response but both arrays are empty; Web then gets active-model locations from `POST /ui/jobs/locations`,
 - Open Opportunities keeps locations on its primary Jobs query because location and compatibility data are part of its eligibility logic,
-- location, compatibility, and status hydration does not block list navigation, filtering, search, or job-detail links.
+- location, compatibility, and status hydration does not block list navigation, filtering, search, or job-detail links,
+- list cards show at most 70 location symbols, group locations under countries, and replace the rest with a `+N` control,
+- the old `All locations` disclosure is not shown on list cards; hover/focus shows the full country/region tree, and `+N` opens the same tree persistently for touch and keyboard use.
 
 ### 11.4 Details page behavior
 
 `job.html` includes notable enrichment-related UX:
 - enricher widget,
 - modal/history inspection flow,
-- history of enrichments accessible via inspect flow.
+- history of enrichments accessible via inspect flow,
+- the same compact location summary as job lists; `+N` opens a persistent full location tree so touch users can inspect long location sets.
 
 ### 11.5 UI interaction model under cold starts
 
