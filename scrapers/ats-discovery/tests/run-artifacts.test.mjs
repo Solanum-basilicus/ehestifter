@@ -83,6 +83,10 @@ test('run summary reports scheduling, breaker, sweep, and state metrics', () => 
       providerResults: [{ status: 'skipped', skipReason: 'provider_circuit_open', errorClass: null, jobsReturned: 0 }],
     },
     evaluated: [],
+    detailTelemetry: {
+      totals: { attempts: 3, rateLimitedResponses: 1 },
+      providers: [{ provider: 'paylocity', attempts: 3, rateLimitedResponses: 1 }],
+    },
     tenantStateChanges: { tenantChanges: [{ health: 'suspected_dead' }], providerChanges: [] },
     rateObservations: { providers: [{ recommendation: { action: 'decrease' } }] },
   });
@@ -92,6 +96,9 @@ test('run summary reports scheduling, breaker, sweep, and state metrics', () => 
   assert.equal(summary.sweepRecommendedTargetsPerRun, 1000);
   assert.equal(summary.tenantsMarkedSuspectedDead, 1);
   assert.equal(summary.rateRecommendationsDecrease, 1);
+  assert.equal(summary.detailAttempts, 3);
+  assert.equal(summary.detailRateLimitedResponses, 1);
+  assert.equal(summary.detailProviderStats[0].provider, 'paylocity');
 });
 
 
@@ -586,4 +593,36 @@ test('provider health summary exposes error class and HTTP status breakdowns', (
   });
   assert.deepEqual(summary.providerVariants.bamboohr.httpStatuses, { 503: 1 });
   assert.deepEqual(summary.providerVariants.bamboohr.networkCodes, { ECONNRESET: 1 });
+});
+
+test('run writer publishes detail telemetry as a separate diagnostic artifact', async () => {
+  await withTempDir(async (directory) => {
+    const detailTelemetry = {
+      schemaVersion: 1,
+      totals: { candidates: 1, attempts: 2, rateLimitedResponses: 1, errors: 0 },
+      providers: [{ provider: 'paylocity', candidates: 1, attempts: 2 }],
+      phases: { candidates: [], canaries: [] },
+    };
+    const runPath = await writeRunArtifacts({
+      dataPath: directory,
+      runId: 'run-detail-telemetry',
+      metadata: { schemaVersion: 2 },
+      targetPlan: { schemaVersion: 2, targets: [] },
+      providerResults: [],
+      tenantStateChanges: null,
+      rateObservations: null,
+      candidates: [],
+      rejected: [],
+      preflightResults: [],
+      detailResults: [],
+      detailTelemetry,
+      locationResults: null,
+      importResults: null,
+      summary: { schemaVersion: 2 },
+    });
+
+    const stored = JSON.parse(await readFile(path.join(runPath, 'detail-telemetry.json'), 'utf8'));
+    assert.equal(stored.runId, 'run-detail-telemetry');
+    assert.deepEqual(stored.totals, detailTelemetry.totals);
+  });
 });

@@ -36,9 +36,9 @@ test('Phase 5 providers expose the stable Ehestifter adapter contract', () => {
   }
 });
 
-test('only Personio claims complete list descriptions', () => {
+test('Personio claims complete list descriptions with a missing-description detail fallback', () => {
   assert.equal(personio.capabilities.listDescription, true);
-  assert.equal(personio.capabilities.detail, false);
+  assert.equal(personio.capabilities.detail, true);
   for (const provider of [bamboohr, icims, paylocity, smartrecruiters, softgarden, successfactors]) {
     assert.equal(provider.capabilities.listDescription, false);
     assert.equal(provider.capabilities.detail, true);

@@ -161,7 +161,9 @@ test('one provider failure does not stop another target', async () => {
 });
 
 test('network failures preserve bounded cause diagnostics', async () => {
-  const cause = Object.assign(new Error('dns lookup failed'), {
+  const cause = Object.assign(new Error(
+    'dns lookup failed https://example.bamboohr.com/path?token=secret token=secret',
+  ), {
     code: 'ENOTFOUND',
     errno: -3008,
     syscall: 'getaddrinfo',
@@ -170,15 +172,47 @@ test('network failures preserve bounded cause diagnostics', async () => {
   const error = new TypeError('fetch failed', { cause });
   const result = await scan([target({ error })]);
   assert.equal(result.providerResults[0].errorClass, 'network');
-  assert.deepEqual(result.providerResults[0].networkDiagnostic, {
-    code: 'ENOTFOUND',
-    errno: -3008,
-    syscall: 'getaddrinfo',
-    hostname: 'example.bamboohr.com',
+  const diagnostic = result.providerResults[0].networkDiagnostic;
+  assert.equal(diagnostic.code, 'ENOTFOUND');
+  assert.equal(diagnostic.errno, -3008);
+  assert.equal(diagnostic.syscall, 'getaddrinfo');
+  assert.equal(diagnostic.hostname, 'example.bamboohr.com');
+  assert.equal(diagnostic.timeoutClass, null);
+  assert.deepEqual(diagnostic.causes, [
+    {
+      name: 'TypeError',
+      message: 'fetch failed',
+      code: null,
+      errno: null,
+      syscall: null,
+      hostname: null,
+    },
+    {
+      name: 'Error',
+      message: 'dns lookup failed https://example.bamboohr.com/path token=[redacted]',
+      code: 'ENOTFOUND',
+      errno: -3008,
+      syscall: 'getaddrinfo',
+      hostname: 'example.bamboohr.com',
+    },
+  ]);
+});
+
+test('Undici connection timeout keeps timeout cause diagnostics', async () => {
+  const cause = Object.assign(new Error('Connect Timeout Error'), {
+    name: 'ConnectTimeoutError',
+    code: 'UND_ERR_CONNECT_TIMEOUT',
   });
-  assert.doesNotMatch(
-    JSON.stringify(result.providerResults[0].networkDiagnostic),
-    /dns lookup failed|fetch failed/u,
+  const error = new TypeError('fetch failed', { cause });
+  const result = await scan([target({ error })]);
+  assert.equal(result.providerResults[0].errorClass, 'timeout');
+  assert.equal(
+    result.providerResults[0].networkDiagnostic.timeoutClass,
+    'UND_ERR_CONNECT_TIMEOUT',
+  );
+  assert.equal(
+    result.providerResults[0].networkDiagnostic.causes[1].message,
+    'Connect Timeout Error',
   );
 });
 
@@ -251,3 +285,12 @@ for (const [name, error, expected] of [
     assert.equal(classifyProviderError(error), expected);
   });
 }
+
+test('Undici socket failures are classified as network failures', async () => {
+  const error = Object.assign(new Error('other side closed'), {
+    code: 'UND_ERR_SOCKET',
+  });
+  const result = await scan([target({ error })]);
+  assert.equal(result.providerResults[0].errorClass, 'network');
+  assert.equal(result.providerResults[0].networkDiagnostic.code, 'UND_ERR_SOCKET');
+});

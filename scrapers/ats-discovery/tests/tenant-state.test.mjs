@@ -308,3 +308,57 @@ test('state maps use case-insensitive provider and tenant identity', () => {
   const maps = tenantStateMaps(state);
   assert.equal(maps.tenants.get('ashby::example').tenant, 'example');
 });
+
+test('healthy canaries clear a persisted provider cooldown for the next run', () => {
+  const previousState = transition({
+    breakerEvents: [{ provider: 'ashby', reason: 'rate_limit_threshold' }],
+  }).state;
+  const finishedAt = new Date('2026-07-20T13:00:00.000Z');
+
+  const next = buildNextTenantState({
+    previousState,
+    targets: [],
+    providerResults: [],
+    rateObservations: { providers: [] },
+    breakerEvents: [],
+    canaryResults: {
+      canaries: [
+        { provider: 'ashby', status: 'healthy' },
+        { provider: 'ashby', status: 'healthy' },
+      ],
+    },
+    policy: policy(),
+    finishedAt,
+  });
+
+  assert.equal(next.state.providers[0].health, 'healthy');
+  assert.equal(next.state.providers[0].cooldownUntilUtc, null);
+  assert.equal(next.changes.providerChanges[0].cooldownRecoveredByCanaries, true);
+});
+
+test('a degraded canary does not clear a persisted provider cooldown', () => {
+  const previousState = transition({
+    breakerEvents: [{ provider: 'ashby', reason: 'rate_limit_threshold' }],
+  }).state;
+  const finishedAt = new Date('2026-07-20T13:00:00.000Z');
+
+  const next = buildNextTenantState({
+    previousState,
+    targets: [],
+    providerResults: [],
+    rateObservations: { providers: [] },
+    breakerEvents: [],
+    canaryResults: {
+      canaries: [
+        { provider: 'ashby', status: 'healthy' },
+        { provider: 'ashby', status: 'degraded' },
+      ],
+    },
+    policy: policy(),
+    finishedAt,
+  });
+
+  assert.equal(next.state.providers[0].health, 'cooldown');
+  assert.equal(next.state.providers[0].cooldownUntilUtc, '2026-07-21T12:00:00.000Z');
+  assert.equal(next.changes.providerChanges.length, 0);
+});

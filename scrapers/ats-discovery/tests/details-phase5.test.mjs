@@ -158,6 +158,49 @@ test('Personio list description skips detail fetching', async () => {
   assert.equal(result.detail.provider, 'personio');
 });
 
+test('Personio fetches same-origin detail when XML description is missing', async () => {
+  const source = candidate({
+    sourceProvider: 'personio',
+    sourceTenant: 'deskbird',
+    url: 'https://deskbird.jobs.personio.com/job/2821657',
+    provenance: {
+      providerNativeId: '2821657',
+      sourceOrigin: 'https://deskbird.jobs.personio.com',
+      healthPartition: 'personio',
+    },
+  });
+  let requested = null;
+  const [result] = await enrichCandidateDetails([source], {
+    concurrency: 1,
+    maxFetches: 1,
+    timeoutMs: 1000,
+    async fetchImpl(url) {
+      requested = String(url);
+      return response(`
+        <html><body>
+          <header>Navigation</header>
+          <main>
+            <h1>Junior Product Marketing Manager</h1>
+            <p>Hybrid - Berlin, Germany</p>
+            <h2>Your mission</h2>
+            <p>Build useful product marketing.</p>
+            <h2>What you need to be successful</h2>
+            <ul><li>Based in or near Berlin.</li></ul>
+          </main>
+          <footer>Powered by Personio</footer>
+        </body></html>
+      `);
+    },
+  });
+
+  assert.equal(requested, source.url);
+  assert.equal(result.detail.status, 'ok');
+  assert.equal(result.descriptionStatus, 'personio-html-detail');
+  assert.match(result.description, /Build useful product marketing/);
+  assert.match(result.description, /Based in or near Berlin/);
+  assert.doesNotMatch(result.description, /Powered by Personio/);
+});
+
 test('unsupported detail status identifies the acquisition provider', async () => {
   const [result] = await enrichCandidateDetails([candidate({
     sourceProvider: 'unknown-ats',
@@ -769,7 +812,8 @@ test('Paylocity detail rejects a mismatched provider-native id before fetch', as
   assert.match(result.detail.error, /must match the source board and provider-native id/);
 });
 
-test('Personio missing list description reports the acquisition gap', async () => {
+test('Personio detail rejects a URL outside the source board without fetching', async () => {
+  let calls = 0;
   const [result] = await enrichCandidateDetails([candidate({
     sourceProvider: 'personio',
     description: '',
@@ -778,10 +822,10 @@ test('Personio missing list description reports the acquisition gap', async () =
     concurrency: 1,
     maxFetches: 1,
     timeoutMs: 1000,
-    async fetchImpl() { throw new Error('must not fetch'); },
+    async fetchImpl() { calls += 1; throw new Error('must not fetch'); },
   });
-  assert.equal(result.detail.status, 'unsupported_provider');
+  assert.equal(calls, 0);
+  assert.equal(result.detail.status, 'error');
   assert.equal(result.detail.provider, 'personio');
-  assert.equal(result.detail.reason, 'list_feed_description_missing');
-  assert.match(result.detail.message, /list feed did not provide a description/);
+  assert.match(result.detail.error, /provider-native job id/);
 });

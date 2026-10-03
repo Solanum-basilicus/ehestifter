@@ -37,6 +37,8 @@ const COUNTRY_ALIASES = new Map([
 
 const CITY_ALIASES_BY_COUNTRY = new Map([
   ['IN\u0000bangalore', 'Bengaluru'],
+  ['DE\u0000frankfurt', 'Frankfurt am Main'],
+  ['DE\u0000munchen', 'Munich'],
 ]);
 
 function cleanText(value) {

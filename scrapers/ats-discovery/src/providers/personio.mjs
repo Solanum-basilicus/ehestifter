@@ -166,7 +166,7 @@ export default {
   source: sourceMeta,
   capabilities: Object.freeze({
     listDescription: true,
-    detail: false,
+    detail: true,
     importReady: true,
     providerDateFilter: false,
   }),

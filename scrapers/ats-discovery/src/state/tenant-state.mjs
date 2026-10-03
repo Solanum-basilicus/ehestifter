@@ -558,7 +558,14 @@ function transitionTenant(previous, target, result, providerPolicy, finishedAt) 
   next.nextEligibleScanAtUtc = next.cooldownUntilUtc;
   return next;
 }
-function providerTransition(previous, observation, breakerEvent, policy, finishedAt) {
+function providerTransition(
+  previous,
+  observation,
+  breakerEvent,
+  policy,
+  finishedAt,
+  canaryRecoveryHealthy = false,
+) {
   const provider = observation?.provider ?? breakerEvent?.provider ?? previous?.provider;
   const providerVariant = observation?.providerVariant
     ?? breakerEvent?.providerVariant
@@ -599,6 +606,9 @@ function providerTransition(previous, observation, breakerEvent, policy, finishe
     );
     next.lastBreakerAtUtc = finishedAt.toISOString();
     next.lastBreakerReason = breakerEvent.reason;
+  } else if (previous?.health === 'cooldown' && canaryRecoveryHealthy) {
+    next.health = 'healthy';
+    next.cooldownUntilUtc = null;
   } else if (
     next.cooldownUntilUtc == null
     || Date.parse(next.cooldownUntilUtc) <= finishedAt.getTime()
@@ -635,6 +645,7 @@ export function buildNextTenantState({
   providerResults,
   rateObservations,
   breakerEvents = [],
+  canaryResults = null,
   policy,
   finishedAt = new Date(),
 }) {
@@ -685,6 +696,21 @@ export function buildNextTenantState({
       item,
     ]),
   );
+  const canariesByProvider = new Map();
+  for (const canary of canaryResults?.canaries ?? []) {
+    const key = canary.healthPartition
+      ?? providerHealthPartition(canary.provider, canary.providerVariant);
+    if (!canariesByProvider.has(key)) canariesByProvider.set(key, []);
+    canariesByProvider.get(key).push(canary);
+  }
+  const healthyCanaryPartitions = new Set(
+    [...canariesByProvider.entries()]
+      .filter(([, canaries]) => (
+        canaries.length > 0
+        && canaries.every((canary) => canary.status === 'healthy')
+      ))
+      .map(([key]) => key),
+  );
   const variantFamiliesObserved = new Set([
     ...(rateObservations?.providers ?? []),
     ...breakerEvents,
@@ -713,6 +739,7 @@ export function buildNextTenantState({
       breakerEvent,
       getProviderPolicy(policy, providerId),
       now,
+      healthyCanaryPartitions.has(healthPartition),
     );
     nextProviders.push(after);
     if (
@@ -728,6 +755,9 @@ export function buildNextTenantState({
         health: after.health,
         cooldownUntilUtc: after.cooldownUntilUtc,
         breakerReason: after.lastBreakerReason,
+        cooldownRecoveredByCanaries: before?.health === 'cooldown'
+          && after.health === 'healthy'
+          && healthyCanaryPartitions.has(healthPartition),
       });
     }
   }

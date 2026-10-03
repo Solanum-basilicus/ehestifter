@@ -869,3 +869,58 @@ test('work authorization refines geography when scope filtering is disabled', ()
   assert.ok(result.locationsV2.some((item) => item.locationId === 'iso3166:US'));
   assert.equal(result.locationEligibility.status, 'unclear');
 });
+
+test('numeric count before Remote is not resolved as geography', () => {
+  const result = normalizeRawLocation('1 Remote');
+
+  assert.deepEqual(result.locations, []);
+  assert.deepEqual(result.unresolved, []);
+  assert.equal(result.arrangement, 'Remote');
+  assert.ok(!result.observations.some((item) => item.location?.countryCode === 'NP'));
+});
+
+test('short German scope declaration refines ambiguous provider cities', () => {
+  const [result] = normalizeCandidateLocations([
+    candidate({
+      rawLocation: 'Remote / Hamburg / Berlin / München',
+      remoteType: 'Remote',
+      description: 'Based in Germany or willing to relocate.',
+    }),
+  ], { locationScopeFilter });
+
+  assert.deepEqual(
+    result.locations.map((item) => [item.countryCode, item.cityName]).sort(),
+    [
+      ['DE', 'Berlin'],
+      ['DE', 'Hamburg'],
+      ['DE', 'Munich'],
+    ],
+  );
+  assert.deepEqual(result.locationNormalization.unresolved, []);
+});
+
+test('Frankfurt with Germany resolves to Frankfurt am Main', () => {
+  assert.deepEqual(normalizeRawLocation('Frankfurt, Germany').locations, [{
+    countryName: 'Germany',
+    countryCode: 'DE',
+    cityName: 'Frankfurt am Main',
+    region: null,
+  }]);
+});
+
+test('ordinary work-with sentence does not create a description location', () => {
+  const [result] = normalizeCandidateLocations([
+    candidate({
+      rawLocation: 'Remote',
+      remoteType: 'Remote',
+      description: 'Work with and learn from other super-smart colleagues.',
+    }),
+  ], { locationScopeFilter });
+
+  assert.ok(!result.locationNormalization.unresolved.some(
+    (item) => /other super-smart colleagues/iu.test(item.raw ?? ''),
+  ));
+  assert.ok(!result.locationNormalization.observations.some(
+    (item) => /other super-smart colleagues/iu.test(item.raw ?? '') && item.source === 'description',
+  ));
+});

@@ -229,6 +229,7 @@ export function buildRunSummary({
   scanResult,
   evaluated,
   preflightResults = null,
+  detailTelemetry = null,
   tenantStateChanges = null,
   rateObservations = null,
   requestedMaxCreates = null,
@@ -600,6 +601,9 @@ export function buildRunSummary({
       (job) => job.detail?.status === 'unavailable',
     ),
     detailErrors: count(evaluated, (job) => job.detail?.status === 'error'),
+    detailAttempts: detailTelemetry?.totals?.attempts ?? 0,
+    detailRateLimitedResponses: detailTelemetry?.totals?.rateLimitedResponses ?? 0,
+    detailProviderStats: detailTelemetry?.providers ?? [],
 
     candidateDescriptionsMissing: count(
       evaluated,

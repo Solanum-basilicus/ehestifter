@@ -36,8 +36,11 @@ test('Greenhouse details populate description without changing scanner provenanc
     canonicalIdentity: {
       provider: 'greenhouse',
       providerTenant: 'example',
-      externalId: '123',
+      externalId: 'legacy-url-identity',
       identitySource: 'url',
+    },
+    provenance: {
+      providerNativeId: '456',
     },
     preflight: {
       status: 'ok',
@@ -80,7 +83,7 @@ test('Greenhouse details populate description without changing scanner provenanc
   assert.equal(calls.length, 1);
   assert.match(
     calls[0],
-    /boards-api\.greenhouse\.io\/v1\/boards\/example\/jobs\/123/,
+    /boards-api\.greenhouse\.io\/v1\/boards\/example\/jobs\/456/,
   );
 
   assert.equal(

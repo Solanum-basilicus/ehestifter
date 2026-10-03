@@ -131,6 +131,7 @@ export async function writeRunArtifacts({
   rejected,
   preflightResults,
   detailResults,
+  detailTelemetry,
   locationResults,
   importResults,
   summary,
@@ -231,6 +232,13 @@ export async function writeRunArtifacts({
       runId,
       detailResults,
     );
+    if (detailTelemetry) {
+      await writeJsonArtifact(
+        stagingPath,
+        'detail-telemetry.json',
+        { ...detailTelemetry, runId },
+      );
+    }
     await writeOptionalJobsArtifact(
       stagingPath,
       'location-results.json',

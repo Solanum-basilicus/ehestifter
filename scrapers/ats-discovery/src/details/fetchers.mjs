@@ -15,6 +15,7 @@ import {
   bambooHRRemoteType,
   bambooHRStructuredLocation,
 } from '../providers/bamboohr.mjs';
+import { executeDetailRequests } from './provider-scheduler.mjs';
 
 const GREENHOUSE_HOST = 'boards-api.greenhouse.io';
 const ASHBY_HOST = 'api.ashbyhq.com';
@@ -35,38 +36,6 @@ class DetailUnavailableError extends Error {
     this.code = 'DETAIL_UNAVAILABLE';
     this.responseStatus = responseStatus;
   }
-}
-
-function safeProgress(onProgress, value) {
-  if (!onProgress) return;
-  try {
-    onProgress(value);
-  } catch {
-    /* Progress is diagnostic and must not affect detail fetching. */
-  }
-}
-
-function mapLimit(items, limit, worker, onProgress) {
-  const results = new Array(items.length);
-  let next = 0;
-  let completed = 0;
-  async function consume() {
-    while (true) {
-      const index = next;
-      next += 1;
-      if (index >= items.length) return;
-      results[index] = await worker(items[index], index);
-      completed += 1;
-      safeProgress(onProgress, {
-        stage: 'details',
-        current: completed,
-        total: items.length,
-      });
-    }
-  }
-  return Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, () => consume()),
-  ).then(() => results);
 }
 
 async function responseBytes(response, label) {
@@ -116,6 +85,7 @@ async function fetchWithTimeout({
         `Detail endpoint returned ${response.status}: ${body.slice(0, 500)}`,
       );
       detailError.status = response.status;
+      detailError.retryAfter = response.headers?.get?.('retry-after') ?? null;
       throw detailError;
     }
     return response;
@@ -633,6 +603,71 @@ async function fetchGreenhouseDetails(candidate, context) {
   };
 }
 
+function elementInnerHtml(source, tagName) {
+  const startRe = new RegExp(`<${tagName}\\b[^>]*>`, 'iu');
+  const match = String(source ?? '').match(startRe);
+  if (!match || match.index == null) return '';
+  const contentStart = match.index + match[0].length;
+  const end = closingTagIndex(String(source ?? ''), tagName, contentStart);
+  return end < 0 ? '' : String(source ?? '').slice(contentStart, end);
+}
+
+async function fetchPersonioDetails(candidate, context) {
+  const identity = sourceIdentity(candidate);
+  const externalId = typeof identity.externalId === 'string'
+    ? identity.externalId.trim()
+    : '';
+  if (!externalId) {
+    throw new Error('Personio detail fetch requires provider-native id');
+  }
+  const source = sourceOriginUrl(candidate, 'Personio');
+  const endpoint = assertPublicHttpsUrl(candidate.url, 'Personio detail URL');
+  if (endpoint.origin !== source.origin) {
+    throw new Error('Personio detail URL must match the configured source origin');
+  }
+  const parts = endpoint.pathname.split('/').filter(Boolean);
+  if (
+    parts.length < 2
+    || parts[0].toLowerCase() !== 'job'
+    || pathSegment(parts[1], 'Personio job id') !== externalId
+  ) {
+    throw new Error('Personio detail URL must contain the provider-native job id');
+  }
+  const html = await fetchTextWithTimeout({
+    fetchImpl: context.fetchImpl,
+    url: endpoint,
+    timeoutMs: context.timeoutMs,
+    options: {
+      redirect: 'error',
+      headers: {
+        'user-agent': BROWSER_LIKE_USER_AGENT,
+        'accept-language': 'en-US,en;q=0.9',
+      },
+    },
+  });
+  const jsonLd = parseJobPostingJsonLd(html, endpoint.href);
+  if (jsonLd?.description) {
+    return {
+      ...jsonLd,
+      descriptionStatus: 'personio-jobposting-jsonld',
+    };
+  }
+
+  const main = elementInnerHtml(html, 'main');
+  const description = htmlToPlainText(main);
+  if (!description) {
+    throw new Error('Personio detail page contains no parseable job description');
+  }
+  return {
+    description,
+    descriptionStatus: 'personio-html-detail',
+    applyUrl: candidate.url,
+    rawLocation: null,
+    locations: [],
+    remoteType: null,
+  };
+}
+
 async function fetchAshbyBoard(tenant, context) {
   const endpoint = new URL(
     `https://${ASHBY_HOST}/posting-api/job-board/${encodeURIComponent(tenant)}`,
@@ -996,12 +1031,7 @@ async function fetchDetails(candidate, context) {
     case 'workday':
       return { supported: true, ...(await fetchWorkdayDetails(candidate, context)) };
     case 'personio':
-      return {
-        supported: false,
-        provider,
-        reason: 'list_feed_description_missing',
-        message: 'Personio list feed did not provide a description and no Personio detail fetcher is configured.',
-      };
+      return { supported: true, ...(await fetchPersonioDetails(candidate, context)) };
     default:
       return { supported: false, provider };
   }
@@ -1014,6 +1044,10 @@ export async function enrichCandidateDetails(
     maxFetches,
     timeoutMs,
     fetchImpl = fetch,
+    policy = null,
+    monotonicNow,
+    wallNow,
+    sleep,
     onProgress = null,
   },
 ) {
@@ -1051,97 +1085,119 @@ export async function enrichCandidateDetails(
     output[index] = { ...output[index], detail: { status: 'skipped_limit' } };
   }
 
-  const fetched = await mapLimit(
-    selectedIndices,
-    concurrency,
-    async (index) => {
-      const candidate = output[index];
-      const provider = candidate.sourceProvider
-        || candidate.canonicalIdentity?.provider
-        || null;
-      try {
-        const details = await fetchDetails(candidate, context);
-        if (!details.supported) {
-          return {
-            index,
-            candidate: {
-              ...candidate,
-              detail: {
-                status: 'unsupported_provider',
-                provider,
-                reason: details.reason ?? null,
-                message: details.message ?? null,
-              },
-            },
-          };
-        }
-        const description = typeof details.description === 'string'
-          ? normalizeNoBreakWhitespace(details.description).trim()
-          : '';
-        const fetchedRawLocation = typeof details.rawLocation === 'string'
-          ? details.rawLocation.trim()
-          : '';
-        const existingRawLocation = typeof candidate.rawLocation === 'string'
-          ? candidate.rawLocation.trim()
-          : '';
-        const detailRawLocation = fetchedRawLocation
-          && fetchedRawLocation.localeCompare(existingRawLocation, undefined, {
-            sensitivity: 'accent',
-          }) !== 0
-          ? fetchedRawLocation
-          : candidate.detailRawLocation || null;
-        return {
-          index,
-          candidate: {
-            ...candidate,
-            applyUrl: safeApplyUrl(details.applyUrl) || candidate.applyUrl || candidate.url,
-            description,
-            descriptionStatus: description ? details.descriptionStatus : 'missing',
-            detailRawLocation,
-            locations: Array.isArray(details.locations) && details.locations.length > 0
-              ? details.locations
-              : candidate.locations,
-            remoteType: details.remoteType || candidate.remoteType,
-            detail: {
-              status: description ? 'ok' : 'missing_description',
-              provider,
-              descriptionStatus: description ? details.descriptionStatus : 'missing',
-            },
-          },
-        };
-      } catch (error) {
-        if (error?.code === 'DETAIL_UNAVAILABLE') {
-          return {
-            index,
-            candidate: {
-              ...candidate,
-              detail: {
-                status: 'unavailable',
-                provider,
-                error: error instanceof Error ? error.message : String(error),
-                responseStatus: Number.isInteger(error?.responseStatus)
-                  ? error.responseStatus
-                  : null,
-              },
-            },
-          };
-        }
-        return {
-          index,
-          candidate: {
-            ...candidate,
-            detail: {
-              status: 'error',
-              provider,
-              error: error instanceof Error ? error.message : String(error),
-            },
-          },
-        };
-      }
-    },
+  const fetched = await executeDetailRequests({
+    items: selectedIndices.map((index) => ({ index, candidate: output[index] })),
+    globalConcurrency: concurrency,
+    policy,
+    monotonicNow,
+    wallNow,
+    sleep,
+    providerFor: ({ candidate }) => (
+      candidate.sourceProvider
+      || candidate.canonicalIdentity?.provider
+      || 'unknown'
+    ),
+    healthPartitionFor: ({ candidate }) => (
+      candidate.provenance?.healthPartition
+      || candidate.sourceProvider
+      || candidate.canonicalIdentity?.provider
+      || 'unknown'
+    ),
+    worker: async ({ candidate }) => fetchDetails(candidate, context),
     onProgress,
-  );
+  });
 
-  for (const item of fetched) output[item.index] = item.candidate;
+  for (const request of fetched) {
+    const { index } = request.item;
+    const candidate = output[index];
+    const provider = candidate.sourceProvider
+      || candidate.canonicalIdentity?.provider
+      || null;
+    const telemetry = {
+      attempts: request.attempts,
+      rateLimitedResponses: request.rateLimitedResponses,
+      durationMs: request.durationMs,
+    };
+
+    if (!request.error) {
+      const details = request.value;
+      if (!details.supported) {
+        output[index] = {
+          ...candidate,
+          detail: {
+            status: 'unsupported_provider',
+            provider,
+            reason: details.reason ?? null,
+            message: details.message ?? null,
+            ...telemetry,
+          },
+        };
+        continue;
+      }
+
+      const description = typeof details.description === 'string'
+        ? normalizeNoBreakWhitespace(details.description).trim()
+        : '';
+      const fetchedRawLocation = typeof details.rawLocation === 'string'
+        ? details.rawLocation.trim()
+        : '';
+      const existingRawLocation = typeof candidate.rawLocation === 'string'
+        ? candidate.rawLocation.trim()
+        : '';
+      const detailRawLocation = fetchedRawLocation
+        && fetchedRawLocation.localeCompare(existingRawLocation, undefined, {
+          sensitivity: 'accent',
+        }) !== 0
+        ? fetchedRawLocation
+        : candidate.detailRawLocation || null;
+      output[index] = {
+        ...candidate,
+        applyUrl: safeApplyUrl(details.applyUrl) || candidate.applyUrl || candidate.url,
+        description,
+        descriptionStatus: description ? details.descriptionStatus : 'missing',
+        detailRawLocation,
+        locations: Array.isArray(details.locations) && details.locations.length > 0
+          ? details.locations
+          : candidate.locations,
+        remoteType: details.remoteType || candidate.remoteType,
+        detail: {
+          status: description ? 'ok' : 'missing_description',
+          provider,
+          descriptionStatus: description ? details.descriptionStatus : 'missing',
+          ...telemetry,
+        },
+      };
+      continue;
+    }
+
+    const error = request.error;
+    if (error?.code === 'DETAIL_UNAVAILABLE') {
+      output[index] = {
+        ...candidate,
+        detail: {
+          status: 'unavailable',
+          provider,
+          error: error instanceof Error ? error.message : String(error),
+          responseStatus: Number.isInteger(error?.responseStatus)
+            ? error.responseStatus
+            : null,
+          ...telemetry,
+        },
+      };
+      continue;
+    }
+
+    output[index] = {
+      ...candidate,
+      detail: {
+        status: 'error',
+        provider,
+        error: error instanceof Error ? error.message : String(error),
+        responseStatus: Number.isInteger(error?.status) ? error.status : null,
+        ...telemetry,
+      },
+    };
+  }
+
   return output;
 }

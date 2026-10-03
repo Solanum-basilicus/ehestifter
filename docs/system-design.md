@@ -1702,9 +1702,11 @@ Priority targets and due provider canaries are processed before normal catalog s
 
 Provider execution is ready-driven across health partitions. A partition that is waiting for its configured request interval or concurrency slot does not consume a global execution slot. Another ready partition can use that slot. Target order remains stable inside each partition, and the priority phase still completes before the normal phase starts.
 
-Maintenance cohorts (`recovery`, `dead_reprobe`, and `long_empty`) contain tenants that are expected to include stale or inaccessible endpoints. Their non-rate-limit results remain tenant diagnostics but do not contribute to provider-wide breaker ratios, degraded health ratios, or rate-tuning samples. HTTP 429 remains a provider-wide signal in every cohort. Durable tenant-local failures remain excluded from provider-wide health. An already active persisted provider cooldown is a run notice, not a new degradation by itself. A circuit opened during the current run, a degraded canary, or another current provider-health anomaly still degrades the run.
+Maintenance cohorts (`recovery`, `dead_reprobe`, and `long_empty`) contain tenants that are expected to include stale or inaccessible endpoints. Their non-rate-limit results remain tenant diagnostics but do not contribute to provider-wide breaker ratios, degraded health ratios, or rate-tuning samples. HTTP 429 remains a provider-wide signal in every cohort. Durable tenant-local failures remain excluded from provider-wide health. An already active persisted provider cooldown is a run notice, not a new degradation by itself. If every configured canary in that health partition is healthy, ATS Discovery clears the persisted cooldown for the next run only; targets skipped while the current plan was built are not injected back into that run. A circuit opened during the current run, a degraded canary, or another current provider-health anomaly still degrades the run.
 
 Provider-supported date constraints are used where useful. Otherwise posting age is filtered locally. Request pacing, concurrency, pagination, detail limits, rate observations, and live catalog target caps remain explicit configuration; autonomous rate tuning is not implemented.
+
+Missing-detail acquisition has separate scheduler state from listing acquisition. It uses the configured provider concurrency and minimum request interval as pacing limits, honors bounded HTTP 429 retry/backoff for that provider, and can run another ready provider while one detail provider waits. Detail throttling does not open or mutate the listing breaker. Per-provider detail attempts, rate limits, retries, and outcomes are emitted as run telemetry.
 
 Provider canaries are filter-independent health probes. They never call Jobs and never become import candidates. High-risk protocols distinguish explicit empty, suspicious empty, configured canary minimum misses, schema/authentication failure, transport failure, and healthy nonempty outcomes. Ordinary nonzero tenant results are accepted even when they are much smaller than historical counts. A page cap on a health-only canary is intentional sampling and does not emit a truncation warning; a normal tracked/catalog scan that reaches its cap still does.
 
@@ -1745,6 +1747,8 @@ withdrawn page, are unavailable observations. Unsafe identity, transport,
 timeout, response-bound, and parser/schema failures remain errors. Canaries do
 not count unavailable samples as parser failures; an all-unavailable sample set
 is inconclusive rather than degraded.
+
+Personio normally supplies descriptions in its XML list feed. If that feed omits a description for a new job, ATS Discovery can fetch the same-origin public `/job/{id}` page after validating the provider-native ID. Greenhouse list acquisition also preserves its native job ID for detail lookup. This does not change the persisted Greenhouse canonical-identity contract; identity migration remains separate work.
 
 ### 14.5 Jobs and Enrichment integration
 
@@ -1811,7 +1815,7 @@ data/state/scheduler-state.json logical scheduler slots and outcomes
 data/backups/                  bounded operational backups
 ```
 
-Representative run artifacts include target plans, provider and canary results, candidates/rejections, user matches, Jobs preflight, detail/location/import results, tenant-state changes, rate observations, summary, and scheduler metadata. A required-input abort also publishes `failure.json` with a bounded sanitized cause chain; it does not publish provider-health observations or mutate tenant/provider state.
+Representative run artifacts include target plans, provider and canary results, candidates/rejections, user matches, Jobs preflight, detail results and provider-level detail telemetry, location/import results, tenant-state changes, rate observations, summary, and scheduler metadata. Geography rejections retain bounded normalized-location and per-user rejection diagnostics so false negatives can be audited without storing full candidate bodies. Network/timeout provider results retain bounded sanitized nested-cause diagnostics so generic transport failures can be classified. A required-input abort also publishes `failure.json` with a bounded sanitized cause chain; it does not publish provider-health observations or mutate tenant/provider state.
 
 Artifacts and logs must not contain service keys, provider cookies/CSRF tokens, CV content, or full user profiles. Operator visibility comes from run summaries, provider/variant warnings, canary outcomes, `ats-ops status`, systemd unit state, and journal output.
 

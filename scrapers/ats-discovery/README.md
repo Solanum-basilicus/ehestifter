@@ -71,6 +71,12 @@ BambooHR location extraction prefers the primary `location` object and uses
 `atsLocation` when the primary object is empty. `locationType` supplies explicit
 On-Site, Remote, or Hybrid evidence; legacy `isRemote: true` remains a fallback.
 
+Personio normally uses the description from its XML list feed. If a new job has
+no usable list description, the detail stage can request that job's same-origin
+public `/job/{id}` page. The page URL must match the configured Personio source
+origin and provider-native job ID. The scanner first uses JobPosting JSON-LD and
+then uses bounded server-rendered `<main>` HTML as a fallback.
+
 iCIMS has two acquisition modes. Classic `*.icims.com` portals keep the full
 portal host as the provider tenant because numeric job IDs are tenant-local. If
 AWS WAF returns its Human Verification CAPTCHA page, ATS Discovery reports
@@ -453,14 +459,24 @@ provider's configured request interval does not reserve a global worker when a
 different provider is ready. Per-provider concurrency, request spacing, and the
 priority-before-normal barrier remain enforced.
 
-An active persisted provider cooldown is reported as a notice. It does not make
-a new run degraded by itself. A circuit opened during the current run and other
-current health warnings still make the run degraded.
+Detail acquisition uses the same provider execution pacing limits but keeps
+separate detail scheduler state. A detail HTTP 429 pauses and retries only that
+provider's detail queue, so another ready provider can continue. Detail retries
+do not open or change the listing provider breaker. `detail-telemetry.json` and
+`summary.json` report per-provider attempts, retries, rate limits, and outcomes.
 
-Network provider results retain only bounded diagnostic fields such as error code,
-errno, syscall, and hostname so operators can distinguish tenant-local DNS or
-connectivity failures from shared provider health without persisting arbitrary
-exception text or URLs.
+An active persisted provider cooldown is reported as a notice. It does not make
+a new run degraded by itself. If every configured canary in that health
+partition is healthy, the scanner clears the persisted cooldown for the next
+run. It does not add targets that were already skipped from the current plan. A
+circuit opened during the current run and other current health warnings still
+make the run degraded.
+
+Network and timeout provider results retain bounded, sanitized cause diagnostics.
+These include error name, message, code, errno, syscall, hostname, and timeout
+class. URL query/fragment data and common secret assignments are removed before
+persistence. This makes generic `fetch failed` results diagnosable without
+storing unbounded exception text.
 
 Each `summary.json` provider-variant entry also aggregates failed requests into
 `errorClasses`, `httpStatuses`, and `networkCodes`. These bounded counters make
@@ -526,6 +542,11 @@ It does **not** create jobs and does not request compatibility.
 `detail-results.json` separates an unavailable posting from acquisition or
 parser failure. An unavailable result is a safe listing/detail race: it remains
 visible for diagnosis but does not count as a detail parser error.
+
+`detail-telemetry.json` records provider-level detail attempts and outcomes,
+including HTTP 429 observations and retries. This is separate from listing
+provider health because a detail endpoint can throttle while listing acquisition
+remains healthy.
 
 Description evidence is secondary. It may refine `Germany` to a confidently
 resolved city such as `Garching`, clarify an unqualified `Remote` scope, or mark
@@ -795,6 +816,7 @@ rejected.json
 user-match-results.json
 preflight-results.json
 detail-results.json
+detail-telemetry.json
 location-results.json
 import-results.json
 tenant-state-changes.json

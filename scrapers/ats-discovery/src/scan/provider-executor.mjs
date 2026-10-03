@@ -220,7 +220,7 @@ class ProviderGuard {
           skipReason: null,
           errorClass,
           errorMessage: providerErrorMessage(error),
-          networkDiagnostic: errorClass === 'network'
+          networkDiagnostic: ['network', 'timeout'].includes(errorClass)
             ? providerNetworkDiagnostic(error)
             : null,
           httpStatus: providerHttpStatus(error),

@@ -70,6 +70,7 @@ export default {
     const json = /** @type {any} */ (await ctx.fetchJson(apiUrl, { redirect: 'error' }));
     const jobs = Array.isArray(json?.jobs) ? json.jobs : [];
     return jobs.filter(/** @param {any} j */ j => j.absolute_url).map(/** @param {any} j */ j => ({
+      id: j.id,
       title: j.title || '',
       url: j.absolute_url,
       company: entry.name,

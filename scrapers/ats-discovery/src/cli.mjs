@@ -18,6 +18,7 @@ import {
   validateLiveCatalogTargetRequest,
 } from './config.mjs';
 import { enrichCandidateDetails } from './details/fetchers.mjs';
+import { buildDetailTelemetry } from './details/telemetry.mjs';
 import { createEnrichmentClient } from './ehestifter/enrichment-client.mjs';
 import { importCandidates } from './ehestifter/import-jobs.mjs';
 import { createJobsClient, preflightCandidates } from './ehestifter/jobs-client.mjs';
@@ -25,6 +26,7 @@ import { repairLeverDescription } from './maintenance/repair-lever-description.m
 import { requestCompatibilityForMatches } from './ehestifter/request-compatibility.mjs';
 import { createUsersClient } from './ehestifter/users-client.mjs';
 import { normalizeCandidateLocations } from './locations/normalizer.mjs';
+import { geographyRejectionDetails } from './locations/rejection-diagnostics.mjs';
 import { applyDiscoveryEligibility } from './locations/discovery-eligibility.mjs';
 import { loadProviders } from './providers/_registry.mjs';
 import { makeHttpCtx } from './providers/_http.mjs';
@@ -130,6 +132,7 @@ async function runScan(args) {
   let canaryResults = null;
   let preflightResults = null;
   let detailResults = null;
+  let detailTelemetry = null;
   let locationResults = null;
   let importResults = null;
   let compatibilityResults = null;
@@ -295,6 +298,7 @@ async function runScan(args) {
           concurrency: config.scan.description.concurrency,
           maxFetches: scanResult.canaryCandidates.length,
           timeoutMs: config.scan.description.timeoutMs,
+          policy: planning.policy,
           onProgress: (event) => progress.update({
             ...event,
             detail: 'provider canaries',
@@ -360,9 +364,15 @@ async function runScan(args) {
         concurrency: config.scan.description.concurrency,
         maxFetches: config.scan.description.maxFetchesPerRun,
         timeoutMs: config.scan.description.timeoutMs,
+        policy: planning.policy,
         onProgress: (event) => progress.update(event),
       });
     }
+
+    detailTelemetry = buildDetailTelemetry({
+      candidateResults: detailResults ?? [],
+      canaryResults: canaryDetailResults ?? [],
+    });
 
     if (args.mode === 'preflight' || args.mode === 'import') {
       failureStage = 'location_normalization';
@@ -384,7 +394,7 @@ async function runScan(args) {
         scanResult.rejected.push(...eligibilityResult.rejected.map((candidate) => ({
           reason: 'no_user_location_match',
           candidate,
-          details: { matchedUserIdsBeforeLocation: candidate.userMatch?.geography?.map((item) => item.userId) ?? [] },
+          details: geographyRejectionDetails(candidate),
         })));
         for (const warning of eligibilityResult.warnings) {
           console.warn(
@@ -506,6 +516,7 @@ async function runScan(args) {
         providerResults: scanResult.providerResults,
         rateObservations,
         breakerEvents: scanResult.breakerEvents,
+        canaryResults,
         policy: planning.policy,
         finishedAt,
       });
@@ -523,6 +534,7 @@ async function runScan(args) {
       scanResult,
       evaluated,
       preflightResults,
+      detailTelemetry,
       tenantStateChanges,
       rateObservations,
       requestedMaxCreates: args.maxCreate,
@@ -589,6 +601,7 @@ async function runScan(args) {
       rejected,
       preflightResults,
       detailResults,
+      detailTelemetry,
       locationResults,
       importResults,
       summary,
@@ -680,6 +693,7 @@ async function runScan(args) {
             : planning?.planningRejections ?? null),
           preflightResults,
           detailResults,
+          detailTelemetry,
           locationResults,
           importResults,
           summary: summary ? {

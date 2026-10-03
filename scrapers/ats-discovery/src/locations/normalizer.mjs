@@ -514,6 +514,20 @@ function parseSegment(segment, dictionary, source) {
     };
   }
 
+  // Some ATS list fields prefix a work arrangement with a count, for example
+  // "1 Remote". A bare count is not geography and must not be resolved as an
+  // administrative-region alias after the arrangement text is removed.
+  if (arrangement && /^\d+$/u.test(cleaned)) {
+    return {
+      observations: [{
+        source, raw, kind: 'work_arrangement', status: 'resolved', arrangement,
+      }],
+      locations,
+      unresolved,
+      arrangement,
+    };
+  }
+
   const anywhereCountryMatch = cleaned.match(
     /^anywhere(?:\s+(?:in|within)|\s*,)\s+(?:the\s+)?(.+)$/iu,
   );
@@ -869,7 +883,7 @@ function extractDeclaredLocationText(window) {
     /\b(?:role|position|job)\s+is\s+based\s+(?:in|at)\s+(.{2,100})$/iu,
     /^(?:based|located)\s+(?:in|at)\s+(.{2,100})$/iu,
     /\b(?:presence|attendance)\s+(?:in|at)\s+(?:our\s+)?(.{2,100}?)(?:\s+(?:office|hq|headquarters))?$/iu,
-    /\bwork(?:\s+[\p{L}\p{N}-]+){0,10}\s+from\s+(?:our\s+)?(.{2,100}?)(?:\s+(?:office|hq|headquarters))?$/iu,
+    /\bwork\s+(?:(?:(?:\d+|one|two|three|four|five|six|seven)\s*(?:days?|times?)\s+(?:a|per)\s+week|regularly|primarily)\s+)?from\s+(?:our\s+)?(.{2,100}?)(?:\s+(?:office|hq|headquarters))?$/iu,
     /\b(?:once[- ]a[- ]week|weekly|\d+\s*(?:days?|times?)\s+(?:a|per)\s+week|required|mandatory|expected)\b.{0,100}\b(?:in|at)\s+(?:our\s+)?(.{2,100}?)(?:\s+(?:office|hq|headquarters))$/iu,
     /\b(?:you|employee|candidate|applicant|must|required|mandatory|expected)\b.{0,80}\b(?:based|located)\s+(?:in|at)\s+(.{2,100})$/iu,
   ];
@@ -877,6 +891,7 @@ function extractDeclaredLocationText(window) {
     const match = text.match(pattern);
     if (match) {
       return cleanText(match[1])
+        .replace(/\s+(?:or|and)\s+(?:(?:be|are)\s+)?(?:willing|open)\s+to\s+relocat(?:e|ing)(?:\s+[^,;.]*)?$/iu, '')
         .replace(/\s+(?:office|hq|headquarters)$/iu, '')
         .replace(/[.;]+$/u, '');
     }
@@ -1039,7 +1054,13 @@ function candidateScopeCountryHints(window, dictionary) {
         `(?:candidates?|applicants?|employees?)(?![\\p{L}\\p{N}])`,
         'iu',
       );
-      return candidateFirst.test(window) || countryFirst.test(window);
+      const shortBasedDeclaration = window.length <= 120 && new RegExp(
+        `^based\\s+(?:in|within)\\s+(?:the\\s+)?${term}(?![\\p{L}\\p{N}])`,
+        'iu',
+      ).test(window);
+      return candidateFirst.test(window)
+        || countryFirst.test(window)
+        || shortBasedDeclaration;
     })
     .map((country) => ({
       countryName: country.countryName,
@@ -1831,6 +1852,12 @@ export function normalizeCandidateLocations(
       description.countryHints,
       dictionary,
     );
+    const refinedProviderLocalities = new Set(
+      providerLocality.observations.map((item) => lookupKey(item.raw)),
+    );
+    const remainingPrimaryUnresolved = primary.unresolved.filter((item) => (
+      !refinedProviderLocalities.has(lookupKey(item.raw))
+    ));
     const refinementPrimaryLocations = primaryLocations.filter((location) => (
       !providerLocality.supersededCountryCodes.includes(location.countryCode)
     ));
@@ -1941,7 +1968,7 @@ export function normalizeCandidateLocations(
           ...providerLocality.observations,
         ],
         unresolved: [
-          ...primary.unresolved,
+          ...remainingPrimaryUnresolved,
           ...description.unresolved,
           ...providerLocality.unresolved,
         ],

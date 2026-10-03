@@ -25,7 +25,12 @@ export function classifyProviderError(error) {
   const codes = chain
     .map((item) => item.code)
     .filter((value) => typeof value === 'string');
-  if (codes.includes('ETIMEDOUT')) return 'timeout';
+  if (codes.some((code) => [
+    'ETIMEDOUT',
+    'UND_ERR_CONNECT_TIMEOUT',
+    'UND_ERR_HEADERS_TIMEOUT',
+    'UND_ERR_BODY_TIMEOUT',
+  ].includes(code))) return 'timeout';
   if (codes.includes('PROVIDER_CANARY_MINIMUM_JOBS')) return 'provider_anomaly';
   if (codes.includes('WORKDAY_TENANT_INVALID')) return 'workday_tenant_invalid';
   if (codes.includes('WORKDAY_TENANT_RESTRICTED')) return 'workday_tenant_restricted';
@@ -46,8 +51,12 @@ export function classifyProviderError(error) {
     'ECONNREFUSED',
     'ENOTFOUND',
     'EAI_AGAIN',
+    'EHOSTDOWN',
     'EHOSTUNREACH',
+    'ENETDOWN',
     'ENETUNREACH',
+    'EPIPE',
+    'UND_ERR_SOCKET',
   ]);
   if (codes.some((code) => networkCodes.has(code))) return 'network';
   if (chain.some(
@@ -68,14 +77,50 @@ function boundedString(value, maxLength) {
   return value.length <= maxLength ? value : value.slice(0, maxLength);
 }
 
+function boundedDiagnosticMessage(value, maxLength) {
+  if (typeof value !== 'string' || value.length === 0) return null;
+  const sanitized = value
+    .replace(/\bhttps?:\/\/[^\s]+/giu, (raw) => {
+      try {
+        const url = new URL(raw);
+        return `${url.origin}${url.pathname}`;
+      } catch {
+        return raw.split(/[?#]/u, 1)[0];
+      }
+    })
+    .replace(
+      /\b(authorization|x-functions-key|api[-_ ]?key|token|code)(\s*[:=]\s*)[^\s,;]+/giu,
+      '$1$2[redacted]',
+    )
+    .replace(/[\u0000-\u001f\u007f]+/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim();
+  return boundedString(sanitized, maxLength);
+}
+
 export function providerNetworkDiagnostic(error) {
   const diagnostic = {
     code: null,
     errno: null,
     syscall: null,
     hostname: null,
+    timeoutClass: null,
+    causes: [],
   };
-  for (const item of errorChain(error)) {
+  for (const item of errorChain(error).slice(0, 6)) {
+    const cause = {
+      name: boundedString(item.name, 100),
+      message: boundedDiagnosticMessage(item.message, 300),
+      code: boundedString(item.code, 80),
+      errno: (typeof item.errno === 'number' || typeof item.errno === 'string')
+        ? (typeof item.errno === 'string' ? boundedString(item.errno, 80) : item.errno)
+        : null,
+      syscall: boundedString(item.syscall, 80),
+      hostname: boundedString(item.hostname, 253),
+    };
+    if (Object.values(cause).some((value) => value != null)) {
+      diagnostic.causes.push(cause);
+    }
     if (diagnostic.code == null) {
       diagnostic.code = boundedString(item.code, 80);
     }
@@ -93,8 +138,23 @@ export function providerNetworkDiagnostic(error) {
     if (diagnostic.hostname == null) {
       diagnostic.hostname = boundedString(item.hostname, 253);
     }
+    if (
+      diagnostic.timeoutClass == null
+      && (
+        item.name === 'AbortError'
+        || item.name === 'TimeoutError'
+        || /TIMEOUT/u.test(String(item.code ?? ''))
+      )
+    ) {
+      diagnostic.timeoutClass = boundedString(
+        item.code ?? item.name,
+        100,
+      );
+    }
   }
-  return Object.values(diagnostic).some((value) => value != null)
+  return Object.entries(diagnostic).some(([key, value]) => (
+    key === 'causes' ? value.length > 0 : value != null
+  ))
     ? diagnostic
     : null;
 }
