@@ -95,3 +95,25 @@ test('BambooHR location type maps known values and keeps legacy remote fallback'
   assert.equal(bambooHRRemoteType({ locationType: '9', isRemote: true }), 'Remote');
   assert.equal(bambooHRRemoteType({ locationType: '9', isRemote: false }), null);
 });
+
+test('BambooHR classifies blocked tenant redirects as tenant-local durable evidence', async () => {
+  const cause = new Error('unexpected redirect');
+  const fetchError = new TypeError('fetch failed', { cause });
+
+  await assert.rejects(
+    bamboohr.fetch(
+      { name: 'Moved tenant', careers_url: 'https://moved.bamboohr.com/careers' },
+      {
+        async fetchJson() {
+          throw fetchError;
+        },
+      },
+    ),
+    (error) => {
+      assert.equal(error.code, 'BAMBOOHR_TENANT_REDIRECTED');
+      assert.match(error.message, /tenant redirected/i);
+      assert.equal(error.cause, fetchError);
+      return true;
+    },
+  );
+});

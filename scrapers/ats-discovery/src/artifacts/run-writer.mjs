@@ -73,7 +73,7 @@ async function writeOptionalJobsArtifact(
   );
 }
 
-function rejectionCandidateForArtifact(candidate) {
+export function rejectionCandidateForArtifact(candidate) {
   if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
     return candidate ?? null;
   }
@@ -102,16 +102,24 @@ function rejectionCandidateForArtifact(candidate) {
   };
 }
 
-function* rejectedItemsForArtifact(items) {
-  for (const item of items) {
+
+export function rejectionForArtifact(item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    return item;
+  }
+  return {
+    ...item,
+    candidate: rejectionCandidateForArtifact(item.candidate),
+  };
+}
+
+async function* rejectedItemsForArtifact(items) {
+  for await (const item of items) {
     if (!item || typeof item !== 'object' || Array.isArray(item)) {
       yield item;
       continue;
     }
-    yield {
-      ...item,
-      candidate: rejectionCandidateForArtifact(item.candidate),
-    };
+    yield rejectionForArtifact(item);
   }
 }
 

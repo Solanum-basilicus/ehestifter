@@ -362,3 +362,20 @@ test('a degraded canary does not clear a persisted provider cooldown', () => {
   assert.equal(next.state.providers[0].cooldownUntilUtc, '2026-07-21T12:00:00.000Z');
   assert.equal(next.changes.providerChanges.length, 0);
 });
+
+test('transient provider breaker uses the shorter transient scheduling cooldown', () => {
+  const next = transition({
+    breakerEvents: [{ provider: 'ashby', reason: 'transient_error_ratio' }],
+  });
+  const provider = next.state.providers[0];
+  assert.equal(provider.health, 'cooldown');
+  assert.equal(provider.cooldownUntilUtc, '2026-07-20T18:00:00.000Z');
+  assert.equal(provider.lastBreakerReason, 'transient_error_ratio');
+});
+
+test('BambooHR tenant redirect is a durable tenant failure', () => {
+  assert.equal(isDurableTenantFailure({
+    errorClass: 'bamboohr_tenant_redirected',
+    httpStatus: null,
+  }), true);
+});

@@ -261,3 +261,30 @@ test('shared candidate serves all matched users in the same fairness round', () 
   assert.equal(result.retained[0].url, 'shared');
   assert.equal(result.retained.length, 2);
 });
+
+test('scan can stream rejections without retaining them in memory', async () => {
+  const target = makeTarget([job(1), job(2), job(3)]);
+  const streamed = [];
+  const result = await runTrackedScan({
+    portalConfig: { max_posting_age_days: 30 },
+    targets: [target],
+    providers: new Map([['ashby', target._provider]]),
+    policy: policy(),
+    concurrency: 1,
+    maxCandidates: 10,
+    upstreamRef: 'ref',
+    nowMs: Date.parse('2026-07-24T12:00:00Z'),
+    monotonicNow: (() => { let tick = 0; return () => ++tick; })(),
+    sleep: async () => {},
+    httpContextFactory: () => ({}),
+    retainRejected: false,
+    onRejected: async (items) => { streamed.push(...items); },
+    candidateMatcher: () => ({ allowed: false, matchedUserIds: [], matchedProfiles: [] }),
+  });
+
+  assert.deepEqual(result.rejected, []);
+  assert.equal(result.rejectedCount, 3);
+  assert.deepEqual(result.rejectionCounts, { no_user_match: 3 });
+  assert.equal(streamed.length, 3);
+  assert.ok(streamed.every((item) => item.reason === 'no_user_match'));
+});

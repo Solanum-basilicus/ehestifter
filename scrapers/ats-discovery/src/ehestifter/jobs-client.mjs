@@ -297,7 +297,7 @@ function safeProgress(onProgress, value) {
   }
 }
 
-async function mapLimit(items, limit, worker, onProgress) {
+async function mapLimit(items, limit, worker, onProgress, onResult = null) {
   const results = new Array(items.length);
   let next = 0;
   let completed = 0;
@@ -307,6 +307,13 @@ async function mapLimit(items, limit, worker, onProgress) {
       next += 1;
       if (index >= items.length) return;
       results[index] = await worker(items[index], index);
+      if (onResult) {
+        try {
+          onResult(results[index], index);
+        } catch {
+          /* Run journaling must never alter Jobs calls. */
+        }
+      }
       completed += 1;
       safeProgress(onProgress, {
         stage: 'preflight',
@@ -325,7 +332,7 @@ export async function preflightCandidates(
   candidates,
   client,
   concurrency,
-  { onProgress = null } = {},
+  { onProgress = null, onResult = null } = {},
 ) {
   return mapLimit(
     candidates,
@@ -357,5 +364,6 @@ export async function preflightCandidates(
       }
     },
     onProgress,
+    onResult,
   );
 }

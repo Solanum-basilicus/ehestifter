@@ -593,6 +593,11 @@ test('provider health summary exposes error class and HTTP status breakdowns', (
   });
   assert.deepEqual(summary.providerVariants.bamboohr.httpStatuses, { 503: 1 });
   assert.deepEqual(summary.providerVariants.bamboohr.networkCodes, { ECONNRESET: 1 });
+  assert.equal(summary.providerErrors, 3);
+  assert.equal(summary.providerErrorsTotal, 3);
+  assert.equal(summary.providerHealthErrors, 3);
+  assert.equal(summary.providerDurableTenantFailures, 0);
+  assert.equal(summary.providerMaintenanceFailures, 0);
 });
 
 test('run writer publishes detail telemetry as a separate diagnostic artifact', async () => {

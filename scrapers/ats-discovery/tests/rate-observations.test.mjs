@@ -207,3 +207,18 @@ test('maintenance rate limits remain part of provider rate recommendations', () 
   assert.equal(ashby.healthTransientErrors, 1);
   assert.equal(ashby.recommendation.action, 'decrease');
 });
+
+test('healthy interval-bound provider does not get a concurrency increase recommendation', () => {
+  const observations = buildRateObservations({
+    providerResults: Array.from({ length: 4 }, (_, sequence) => result({
+      sequence,
+      durationMs: 200,
+    })),
+    policy: policy({ concurrency: 1, interval: 1000 }),
+  });
+  const ashby = observations.providers[0];
+  assert.equal(ashby.throughputLimits.bindingConstraint, 'min_request_interval_ms');
+  assert.equal(ashby.recommendation.action, 'hold');
+  assert.equal(ashby.recommendation.suggestedConcurrency, 1);
+  assert.match(ashby.recommendation.rationale, /request interval already limits throughput/);
+});

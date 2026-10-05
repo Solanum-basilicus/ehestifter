@@ -106,6 +106,24 @@ export function parseBambooHRResponse(json, companyName, origin) {
   return jobs;
 }
 
+
+function bambooHRTenantRedirectError(error) {
+  let current = error;
+  const seen = new Set();
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current);
+    if (/unexpected redirect/iu.test(String(current.message ?? ''))) {
+      const redirected = new Error('BambooHR tenant redirected from the expected API origin', {
+        cause: error,
+      });
+      redirected.code = 'BAMBOOHR_TENANT_REDIRECTED';
+      return redirected;
+    }
+    current = current.cause;
+  }
+  return null;
+}
+
 export default {
   id: 'bamboohr',
   source: sourceMeta,
@@ -129,10 +147,17 @@ export default {
   async fetch(entry, ctx) {
     const origin = resolveBambooHROrigin(entry);
     if (!origin) throw new Error(`bamboohr: cannot resolve tenant for ${entry.name}`);
-    const json = await ctx.fetchJson(`${origin}/careers/list`, {
-      redirect: 'error',
-      headers: { accept: 'application/json' },
-    });
+    let json;
+    try {
+      json = await ctx.fetchJson(`${origin}/careers/list`, {
+        redirect: 'error',
+        headers: { accept: 'application/json' },
+      });
+    } catch (error) {
+      const redirected = bambooHRTenantRedirectError(error);
+      if (redirected) throw redirected;
+      throw error;
+    }
     return parseBambooHRResponse(json, entry.name, origin);
   },
 };

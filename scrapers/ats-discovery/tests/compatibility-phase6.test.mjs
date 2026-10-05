@@ -117,6 +117,7 @@ test('pair and request caps are explicit and deterministic', async () => {
 });
 
 test('latest-check and create failures remain pair-local diagnostics', async () => {
+  const observed = [];
   const result = await requestCompatibilityForMatches({
     importResults: [imported()],
     discoveryUsers: users,
@@ -128,9 +129,11 @@ test('latest-check and create failures remain pair-local diagnostics', async () 
       createRun: async () => { throw new Error('create down'); },
     },
     config: baseConfig,
+    onResult: (item) => observed.push(item.status),
   });
   assert.deepEqual(result.results.map((item) => item.status), [
     'error_latest_check',
     'error_request',
   ]);
+  assert.deepEqual(observed.sort(), ['error_latest_check', 'error_request']);
 });

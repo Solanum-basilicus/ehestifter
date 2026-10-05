@@ -19,6 +19,28 @@ function rounded(value) {
   return value == null ? null : Math.round(value * 1000) / 1000;
 }
 
+function throughputLimits(observation, execution) {
+  const averageLatencyMs = observation.healthLatencyMs.average;
+  const intervalRequestsPerSecond = execution.minRequestIntervalMs > 0
+    ? 1000 / execution.minRequestIntervalMs
+    : Number.POSITIVE_INFINITY;
+  const concurrencyRequestsPerSecond = averageLatencyMs != null && averageLatencyMs > 0
+    ? execution.concurrency * 1000 / averageLatencyMs
+    : Number.POSITIVE_INFINITY;
+  const bindingConstraint = intervalRequestsPerSecond <= concurrencyRequestsPerSecond
+    ? 'min_request_interval_ms'
+    : 'concurrency';
+  return {
+    intervalRequestsPerSecond: Number.isFinite(intervalRequestsPerSecond)
+      ? rounded(intervalRequestsPerSecond)
+      : null,
+    concurrencyRequestsPerSecond: Number.isFinite(concurrencyRequestsPerSecond)
+      ? rounded(concurrencyRequestsPerSecond)
+      : null,
+    bindingConstraint,
+  };
+}
+
 function recommendation(observation, providerPolicy) {
   const config = providerPolicy.recommendations;
   const execution = providerPolicy.execution;
@@ -66,18 +88,34 @@ function recommendation(observation, providerPolicy) {
       rationale: 'A non-rate-limit provider circuit opened; pacing is unchanged without a rate signal.',
     };
   }
+  const throughput = throughputLimits(observation, execution);
   if (
     attempted >= config.minimumRequests
     && successRatio >= config.healthySuccessRatio
     && observation.healthLatencyMs.p95 != null
     && observation.healthLatencyMs.p95 <= config.fastP95Ms
+    && throughput.bindingConstraint === 'concurrency'
     && execution.concurrency < config.maximumSuggestedConcurrency
   ) {
     return {
       action: 'consider_increase',
       suggestedConcurrency: execution.concurrency + 1,
       suggestedMinRequestIntervalMs: execution.minRequestIntervalMs,
-      rationale: 'The sample was healthy and latency remained below the review threshold.',
+      rationale: 'The sample was healthy, latency was low, and concurrency limits observed throughput.',
+    };
+  }
+  if (
+    attempted >= config.minimumRequests
+    && successRatio >= config.healthySuccessRatio
+    && observation.healthLatencyMs.p95 != null
+    && observation.healthLatencyMs.p95 <= config.fastP95Ms
+    && throughput.bindingConstraint === 'min_request_interval_ms'
+  ) {
+    return {
+      action: 'hold',
+      suggestedConcurrency: execution.concurrency,
+      suggestedMinRequestIntervalMs: execution.minRequestIntervalMs,
+      rationale: 'The sample was healthy, but the configured request interval already limits throughput; more concurrency would not materially increase request rate.',
     };
   }
   return {
@@ -178,11 +216,13 @@ export function buildRateObservations({
             getProviderPolicy(policy, provider).execution.minRequestIntervalMs,
         },
       };
+      const providerPolicy = getProviderPolicy(policy, provider);
       return {
         ...observation,
+        throughputLimits: throughputLimits(observation, providerPolicy.execution),
         recommendation: recommendation(
           observation,
-          getProviderPolicy(policy, provider),
+          providerPolicy,
         ),
       };
     });

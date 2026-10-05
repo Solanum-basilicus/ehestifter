@@ -269,6 +269,9 @@ export async function runTrackedScan({
   sleep,
   httpContextFactory = makeHttpCtx,
   onProgress = null,
+  onProviderResult = null,
+  onRejected = null,
+  retainRejected = true,
   candidateMatcher = null,
   applyPortalCandidateFilters = true,
   fairnessSeed = '',
@@ -286,6 +289,12 @@ export async function runTrackedScan({
   }
   if (typeof applyPortalCandidateFilters !== 'boolean') {
     throw new Error('applyPortalCandidateFilters must be a boolean');
+  }
+  if (onRejected != null && typeof onRejected !== 'function') {
+    throw new Error('onRejected must be a function');
+  }
+  if (onProviderResult != null && typeof onProviderResult !== 'function') {
+    throw new Error('onProviderResult must be a function');
   }
 
   const titleEvaluator = buildTitleEvaluator(portalConfig.title_filter);
@@ -307,6 +316,7 @@ export async function runTrackedScan({
     monotonicNow,
     sleep,
     onProgress,
+    onResult: onProviderResult,
     fetchTarget: async (target) => {
       const sinceMs = targetSinceMs(target, portalConfig, nowMs);
       let telemetry = {};
@@ -337,9 +347,23 @@ export async function runTrackedScan({
   const candidates = [];
   const canaryCandidates = [];
   const rejected = [];
+  const rejectionCounts = {};
+  let rejectedCount = 0;
   const seenUrls = new Set();
 
+  async function emitRejected(items) {
+    if (items.length === 0) return;
+    rejectedCount += items.length;
+    for (const item of items) {
+      const reason = item?.reason ?? 'unknown';
+      rejectionCounts[reason] = (rejectionCounts[reason] ?? 0) + 1;
+    }
+    if (retainRejected) rejected.push(...items);
+    if (onRejected) await onRejected(items);
+  }
+
   for (const batch of execution.batches) {
+    const batchRejected = [];
     if (batch.providerResult.status === 'skipped') continue;
 
     if (batch.target.canary != null && batch.jobs.length > 0) {
@@ -363,7 +387,7 @@ export async function runTrackedScan({
 
     if (batch.target.healthOnly) {
       if (batch.error && batch.jobs.length === 0) {
-        rejected.push(reject('provider_fetch_failed', null, {
+        batchRejected.push(reject('provider_fetch_failed', null, {
           company: batch.target.name,
           provider: batch.target.provider,
           providerVariant: batch.target.providerVariant ?? null,
@@ -374,11 +398,12 @@ export async function runTrackedScan({
           error: providerErrorMessage(batch.error),
         }));
       }
+      await emitRejected(batchRejected);
       continue;
     }
 
     if (batch.error && batch.jobs.length === 0) {
-      rejected.push(reject('provider_fetch_failed', null, {
+      batchRejected.push(reject('provider_fetch_failed', null, {
         company: batch.target.name,
         provider: batch.target.provider,
         providerVariant: batch.target.providerVariant ?? null,
@@ -388,25 +413,26 @@ export async function runTrackedScan({
         httpStatus: batch.providerResult.httpStatus,
         error: providerErrorMessage(batch.error),
       }));
+      await emitRejected(batchRejected);
       continue;
     }
 
     for (const job of batch.jobs) {
       const candidate = candidateFromJob(job, batch.target, upstreamRef);
       if (!candidate.title) {
-        rejected.push(reject('missing_title', candidate));
+        batchRejected.push(reject('missing_title', candidate));
         continue;
       }
       if (!candidate.hiringCompanyName) {
-        rejected.push(reject('missing_company', candidate));
+        batchRejected.push(reject('missing_company', candidate));
         continue;
       }
       if (!validHttpUrl(candidate.url)) {
-        rejected.push(reject('missing_or_invalid_url', candidate));
+        batchRejected.push(reject('missing_or_invalid_url', candidate));
         continue;
       }
       if (seenUrls.has(candidate.url)) {
-        rejected.push(reject('duplicate_url_in_run', candidate));
+        batchRejected.push(reject('duplicate_url_in_run', candidate));
         continue;
       }
       seenUrls.add(candidate.url);
@@ -418,7 +444,7 @@ export async function runTrackedScan({
       if (applyPortalCandidateFilters) {
         titleEvaluation = titleEvaluator(candidate.title);
         if (!titleEvaluation.allowed) {
-          rejected.push(reject('title_filter', candidate, {
+          batchRejected.push(reject('title_filter', candidate, {
             positiveMatches: titleEvaluation.positiveMatches,
             negativeMatches: titleEvaluation.negativeMatches,
           }));
@@ -428,7 +454,7 @@ export async function runTrackedScan({
       if (applyPortalCandidateFilters) {
         const locationScope = locationScopeFilter(candidate.rawLocation);
         if (!locationScope.allowed) {
-          rejected.push(reject('location_scope_filter', candidate, {
+          batchRejected.push(reject('location_scope_filter', candidate, {
             reason: locationScope.reason,
             allowedMatches: locationScope.allowedMatches,
             blockedMatches: locationScope.blockedMatches,
@@ -438,18 +464,18 @@ export async function runTrackedScan({
         }
       }
       if (applyPortalCandidateFilters && !locationFilter(candidate.rawLocation)) {
-        rejected.push(reject('location_filter', candidate));
+        batchRejected.push(reject('location_filter', candidate));
         continue;
       }
       const postedAt = candidate.postedAtUtc
         ? Date.parse(candidate.postedAtUtc)
         : undefined;
       if (!postingAgeFilter(postedAt)) {
-        rejected.push(reject('posting_age_filter', candidate));
+        batchRejected.push(reject('posting_age_filter', candidate));
         continue;
       }
       if (applyPortalCandidateFilters && !salaryFilter(candidate.salary)) {
-        rejected.push(reject('salary_filter', candidate));
+        batchRejected.push(reject('salary_filter', candidate));
         continue;
       }
       const matched = applyPortalCandidateFilters
@@ -459,7 +485,7 @@ export async function runTrackedScan({
         applyPortalCandidateFilters
         && !contentFilter(candidate.description, matched)
       ) {
-        rejected.push(reject('content_filter', candidate));
+        batchRejected.push(reject('content_filter', candidate));
         continue;
       }
       if (candidateMatcher) {
@@ -467,13 +493,13 @@ export async function runTrackedScan({
         try {
           userMatch = candidateMatcher(candidate);
         } catch (error) {
-          rejected.push(reject('user_match_error', candidate, {
+          batchRejected.push(reject('user_match_error', candidate, {
             error: error instanceof Error ? error.message : String(error),
           }));
           continue;
         }
         if (!userMatch?.allowed) {
-          rejected.push(reject('no_user_match', candidate));
+          batchRejected.push(reject('no_user_match', candidate));
           continue;
         }
         candidate.matchedUserIds = [...userMatch.matchedUserIds];
@@ -491,6 +517,7 @@ export async function runTrackedScan({
       providerResult.candidatesMatched += 1;
       candidates.push(candidate);
     }
+    await emitRejected(batchRejected);
   }
 
   const admission = admitCandidatesFairly(candidates, maxCandidates, {
@@ -501,22 +528,26 @@ export async function runTrackedScan({
     const result = resultBySequence.get(candidate.provenance?.targetSequence);
     if (result) result.candidatesRetained += 1;
   }
+  const admissionRejected = [];
   for (const candidate of admission.dropped) {
     const result = resultBySequence.get(candidate.provenance?.targetSequence);
     if (result) result.candidatesDroppedByCap += 1;
-    rejected.push(reject('candidate_cap', null, {
+    admissionRejected.push(reject('candidate_cap', null, {
       provider: candidate.sourceProvider,
       tenant: candidate.sourceTenant,
       url: candidate.url,
       matchedUserIds: candidate.matchedUserIds ?? [],
     }));
   }
+  await emitRejected(admissionRejected);
 
   return {
     candidates: admission.retained,
     candidateAdmission: admission.stats,
     canaryCandidates,
     rejected,
+    rejectedCount,
+    rejectionCounts,
     targetCount: targets.length,
     providerIds: [...providers.keys()].sort(),
     providerResults,

@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { normalizeCandidateLocations } from '../src/locations/normalizer.mjs';
 import {
+  annotatePreliminaryDiscoveryEligibility,
   applyDiscoveryEligibility,
   evaluateDiscoveryEligibility,
 } from '../src/locations/discovery-eligibility.mjs';
@@ -432,4 +433,25 @@ test('qualified provider dash forms retain their narrowest deterministic geograp
   assert.deepEqual(pune.locationsV2, [
     { kind: 'city', locationId: 'geonames:1259229' },
   ]);
+});
+
+test('preliminary discovery geography ranks matches, unknowns, and mismatches without dropping users', () => {
+  const germanyUser = user({
+    includeLocations: [{ kind: 'country', locationId: 'iso3166:DE' }],
+    excludeLocations: [],
+    allowUnknownLocation: false,
+  });
+  const normalized = normalizeCandidateLocations([
+    candidate({ rawLocation: 'Berlin, Germany' }),
+    candidate({ rawLocation: 'Remote' }),
+    candidate({ rawLocation: 'Toronto, Canada' }),
+  ]);
+
+  const result = annotatePreliminaryDiscoveryEligibility(normalized, [germanyUser]);
+
+  assert.deepEqual(result.candidates.map((item) => item.preliminaryGeography.status), [
+    'matched', 'unknown', 'mismatch',
+  ]);
+  assert.deepEqual(result.counts, { matched: 1, unknown: 1, mismatch: 1 });
+  assert.deepEqual(result.candidates[2].matchedUserIds, [germanyUser.userId]);
 });

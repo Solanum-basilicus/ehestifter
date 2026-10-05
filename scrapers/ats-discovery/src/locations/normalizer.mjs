@@ -489,6 +489,22 @@ function parseSegment(segment, dictionary, source) {
   const locations = [];
   const unresolved = [];
 
+  const arrangementCountryMatch = raw.match(
+    /\b(?:remote|hybrid|distributed|home\s*office)\s+(?:in|within|from)\s+(?:the\s+)?([^,;|/()]{2,80})/iu,
+  );
+  if (arrangementCountryMatch) {
+    const country = dictionary.resolveCountry(arrangementCountryMatch[1]);
+    if (country) {
+      const location = locationFromCountry(country);
+      return {
+        observations: [{ source, raw, kind: 'country_scope', status: 'resolved', location }],
+        locations: [location],
+        unresolved,
+        arrangement: arrangement ?? 'Remote',
+      };
+    }
+  }
+
   const localToMatch = raw.match(/\b(?:if\s+)?local\s+to\s+([^,;|/]{2,80})$/iu);
   if (localToMatch) {
     const region = resolveAdministrativeRegion(localToMatch[1], { allowAmbiguous: true });
@@ -727,6 +743,18 @@ function parseSegment(segment, dictionary, source) {
     };
   }
 
+  if (arrangement && cleaned && !isNonCity(cleaned)) {
+    const city = dictionary.resolveCity(cleaned);
+    const country = city ? dictionary.countryByCode(city.countryCode) : null;
+    if (city && country) {
+      const location = locationFromCountry(country, city.cityName, null);
+      return {
+        observations: [{ source, raw, kind: 'city_with_work_arrangement', status: 'resolved', location }],
+        locations: [location], unresolved, arrangement,
+      };
+    }
+  }
+
   unresolved.push({ source, raw, reason: 'segment_unresolved' });
   observations.push({ source, raw, kind: 'unknown', status: 'unresolved' });
   return { observations, locations, unresolved, arrangement };
@@ -808,39 +836,72 @@ export function normalizeRawLocation(
 }
 
 function normalizeStructuredLocations(candidate, dictionary) {
+  const sourceItems = (candidate.locations ?? []).map((item) => ({
+    item,
+    result: dictionary.canonicalizeLocation(item),
+  }));
+  const resolvedCountryCodes = new Set(
+    sourceItems
+      .map(({ result }) => result.location?.countryCode)
+      .filter(Boolean),
+  );
+  const sharedCountryCode = resolvedCountryCodes.size === 1
+    ? [...resolvedCountryCodes][0]
+    : null;
+
   const observations = [];
   const locations = [];
   const unresolved = [];
-  for (const item of candidate.locations ?? []) {
-    const result = dictionary.canonicalizeLocation(item);
+  for (const { item, result } of sourceItems) {
     const providerCity = cleanText(item?.cityName);
-    const providerCityLooksLikeCountryScope = Boolean(
-      result.location
-      && !result.location.cityName
+    let refinedResult = result;
+    if (
+      !result.location
+      && sharedCountryCode
       && providerCity
-      && result.unresolved.includes('city_unresolved_for_country')
+      && result.unresolved.includes('country_unresolved')
+    ) {
+      const city = dictionary.resolveCity(providerCity, sharedCountryCode);
+      const country = city ? dictionary.countryByCode(city.countryCode) : null;
+      if (city && country) {
+        refinedResult = {
+          status: 'normalized',
+          location: locationFromCountry(country, city.cityName, cleanText(item?.region) || null),
+          unresolved: [],
+          refinedBySharedCountry: true,
+        };
+      }
+    }
+
+    const providerCityLooksLikeCountryScope = Boolean(
+      refinedResult.location
+      && !refinedResult.location.cityName
+      && providerCity
+      && refinedResult.unresolved.includes('city_unresolved_for_country')
       && workArrangementFromText(providerCity)
       && dictionary.findCountryMentions(providerCity).some((country) => (
-        country.countryCode === result.location.countryCode
+        country.countryCode === refinedResult.location.countryCode
       )),
     );
-    const location = result.location
-      && !result.location.cityName
+    const location = refinedResult.location
+      && !refinedResult.location.cityName
       && providerCity
-      && result.unresolved.includes('city_unresolved_for_country')
+      && refinedResult.unresolved.includes('city_unresolved_for_country')
       && !providerCityLooksLikeCountryScope
-      ? { ...result.location, cityName: providerCity }
-      : result.location;
+      ? { ...refinedResult.location, cityName: providerCity }
+      : refinedResult.location;
     const issues = providerCityLooksLikeCountryScope
-      ? result.unresolved.filter((reason) => reason !== 'city_unresolved_for_country')
-      : result.unresolved;
+      ? refinedResult.unresolved.filter((reason) => reason !== 'city_unresolved_for_country')
+      : refinedResult.unresolved;
     if (location) locations.push(location);
     observations.push({
       source: 'provider_structured',
       raw: item,
-      kind: providerCityLooksLikeCountryScope
-        ? 'structured_country_scope'
-        : 'structured_location',
+      kind: refinedResult.refinedBySharedCountry
+        ? 'structured_city_with_shared_country'
+        : providerCityLooksLikeCountryScope
+          ? 'structured_country_scope'
+          : 'structured_location',
       status: location ? 'resolved' : 'unresolved',
       location,
       issues,
@@ -886,6 +947,7 @@ function extractDeclaredLocationText(window) {
     /\bwork\s+(?:(?:(?:\d+|one|two|three|four|five|six|seven)\s*(?:days?|times?)\s+(?:a|per)\s+week|regularly|primarily)\s+)?from\s+(?:our\s+)?(.{2,100}?)(?:\s+(?:office|hq|headquarters))?$/iu,
     /\b(?:once[- ]a[- ]week|weekly|\d+\s*(?:days?|times?)\s+(?:a|per)\s+week|required|mandatory|expected)\b.{0,100}\b(?:in|at)\s+(?:our\s+)?(.{2,100}?)(?:\s+(?:office|hq|headquarters))$/iu,
     /\b(?:you|employee|candidate|applicant|must|required|mandatory|expected)\b.{0,80}\b(?:based|located)\s+(?:in|at)\s+(.{2,100})$/iu,
+    /\bbas(?:é|ée|é\(e\))\s+à\s+(.{2,100})$/iu,
   ];
   for (const pattern of patterns) {
     const match = text.match(pattern);
@@ -907,7 +969,8 @@ function mandatoryPresence(window) {
 function explicitLocationDeclaration(window) {
   return /^(?:[-*•]\s*)?(?:work\s+)?location\s*[:\-–—]/iu.test(window)
     || /\b(?:role|position|job)\s+is\s+based\s+(?:in|at)\b/iu.test(window)
-    || /^(?:based|located)\s+(?:in|at)\b/iu.test(window);
+    || /^(?:based|located)\s+(?:in|at)\b/iu.test(window)
+    || /\bbas(?:é|ée|é\(e\))\s+à\b/iu.test(window);
 }
 
 function resolvedScopeLocations(terms, dictionary, source, context) {
@@ -1445,6 +1508,26 @@ function descriptionEvidence(candidate, primaryLocations, dictionary, scopeFilte
           }],
           unresolved: [],
         };
+      }
+    }
+    if (parsed.locations.length === 0 && primaryCountries.length === 0) {
+      const city = dictionary.resolveCity(stripArrangementWords(declared));
+      if (city) {
+        const country = dictionary.countryByCode(city.countryCode);
+        const location = country
+          ? locationFromCountry(country, city.cityName, null)
+          : null;
+        if (location) {
+          parsed = {
+            status: 'normalized_city_country',
+            locations: [location],
+            observations: [{
+              source: 'description', raw: declared, kind: 'explicit_unambiguous_city',
+              status: 'resolved', location,
+            }],
+            unresolved: [],
+          };
+        }
       }
     }
     for (const observation of parsed.observations) {

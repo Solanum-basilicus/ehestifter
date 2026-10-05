@@ -4,9 +4,11 @@ import { fileURLToPath } from 'node:url';
 
 import {
   createRunId,
+  rejectionForArtifact,
   writeRunArtifacts,
   writeRunFailureArtifact,
 } from './artifacts/run-writer.mjs';
+import { createRunJournal } from './artifacts/run-journal.mjs';
 import {
   catalogSyncSummary,
   syncAllProviderCatalogs,
@@ -27,11 +29,15 @@ import { requestCompatibilityForMatches } from './ehestifter/request-compatibili
 import { createUsersClient } from './ehestifter/users-client.mjs';
 import { normalizeCandidateLocations } from './locations/normalizer.mjs';
 import { geographyRejectionDetails } from './locations/rejection-diagnostics.mjs';
-import { applyDiscoveryEligibility } from './locations/discovery-eligibility.mjs';
+import {
+  annotatePreliminaryDiscoveryEligibility,
+  applyDiscoveryEligibility,
+} from './locations/discovery-eligibility.mjs';
 import { loadProviders } from './providers/_registry.mjs';
 import { makeHttpCtx } from './providers/_http.mjs';
 import { publishPrerequisiteFailureRun } from './prerequisite-failure-run.mjs';
 import {
+  buildErrorDiagnostic,
   classifyPrerequisiteFailure,
   classifyRuntimeFailure,
 } from './run-failure.mjs';
@@ -74,6 +80,80 @@ function progressDetail(event) {
   return [event.provider, event.tenant]
     .filter(Boolean)
     .join(':');
+}
+
+function journalCandidateRef(candidate) {
+  return {
+    sourceProvider: candidate?.sourceProvider ?? null,
+    sourceTenant: candidate?.sourceTenant ?? null,
+    providerNativeId: candidate?.provenance?.providerNativeId ?? null,
+    url: candidate?.url ?? null,
+    title: candidate?.title ?? null,
+  };
+}
+
+function detailJournalRecord(request, kind = 'candidate') {
+  return {
+    kind,
+    candidate: journalCandidateRef(request?.item?.candidate),
+    provider: request?.provider ?? null,
+    healthPartition: request?.healthPartition ?? null,
+    attempts: request?.attempts ?? 0,
+    rateLimitedResponses: request?.rateLimitedResponses ?? 0,
+    durationMs: request?.durationMs ?? null,
+    error: request?.error ? buildErrorDiagnostic(request.error) : null,
+    details: request?.value ? {
+      supported: request.value.supported ?? true,
+      description: request.value.description ?? null,
+      descriptionStatus: request.value.descriptionStatus ?? null,
+      applyUrl: request.value.applyUrl ?? null,
+      rawLocation: request.value.rawLocation ?? null,
+      locations: request.value.locations ?? [],
+      remoteType: request.value.remoteType ?? null,
+      reason: request.value.reason ?? null,
+      message: request.value.message ?? null,
+    } : null,
+  };
+}
+
+function preflightJournalRecord(candidate) {
+  return {
+    candidate: journalCandidateRef(candidate),
+    canonicalIdentity: candidate?.canonicalIdentity ?? null,
+    existingJobId: candidate?.existingJobId ?? null,
+    preflight: candidate?.preflight ?? null,
+  };
+}
+
+function locationJournalRecord(candidate) {
+  return {
+    candidate: journalCandidateRef(candidate),
+    rawLocation: candidate?.rawLocation ?? null,
+    detailRawLocation: candidate?.detailRawLocation ?? null,
+    remoteType: candidate?.remoteType ?? null,
+    locations: candidate?.locations ?? [],
+    locationsV2: candidate?.locationsV2 ?? [],
+    locationNormalization: candidate?.locationNormalization ?? null,
+    locationEligibility: candidate?.locationEligibility ?? null,
+    preliminaryGeography: candidate?.preliminaryGeography ?? null,
+  };
+}
+
+function importJournalRecord(candidate) {
+  const importResult = candidate?.import ?? null;
+  return {
+    candidate: journalCandidateRef(candidate),
+    existingJobId: candidate?.existingJobId ?? null,
+    import: importResult ? {
+      status: importResult.status ?? null,
+      jobId: importResult.jobId ?? null,
+      reconciled: importResult.reconciled ?? null,
+      responseStatus: importResult.responseStatus ?? null,
+      reason: importResult.reason ?? null,
+      consistency: importResult.consistency ?? null,
+      error: importResult.error ?? null,
+    } : null,
+  };
 }
 
 async function runCatalogSync(provider) {
@@ -139,7 +219,7 @@ async function runScan(args) {
   let rateObservations = null;
   let tenantStateChanges = null;
   let summary = null;
-  let rejected = null;
+  let runJournal = null;
   let runPublished = false;
   let publishedRunPath = null;
   let failureStage = 'runtime_config_load';
@@ -256,6 +336,22 @@ async function runScan(args) {
     });
     const { executionTargets, targetsSkippedNoEligibleUsers } = discoveryExecution;
 
+    failureStage = 'run_journal_init';
+    runJournal = await createRunJournal({
+      dataPath: config.paths.data,
+      runId,
+      startedAt,
+    });
+    runJournal.record('target-plan', planning.plan);
+    runJournal.recordMany(
+      'rejected',
+      planning.planningRejections.map(rejectionForArtifact),
+    );
+    await runJournal.checkpoint('provider_scan', {
+      plannedTargets: executionTargets.length,
+      planningRejected: planning.planningRejections.length,
+    });
+
     progress.update({
       stage: 'scan',
       current: 0,
@@ -281,6 +377,17 @@ async function runScan(args) {
         ...event,
         detail: progressDetail(event),
       }),
+      onProviderResult: (result) => runJournal.record('provider-results', result),
+      onRejected: async (items) => {
+        runJournal.recordMany('rejected', items.map(rejectionForArtifact));
+      },
+      retainRejected: false,
+    });
+    runJournal.recordMany('candidates', scanResult.candidates);
+    await runJournal.checkpoint('provider_scan_complete', {
+      providerResults: scanResult.providerResults.length,
+      candidates: scanResult.candidates.length,
+      rejected: scanResult.rejectedCount,
     });
 
     let canaryDetailResults = null;
@@ -303,8 +410,15 @@ async function runScan(args) {
             ...event,
             detail: 'provider canaries',
           }),
+          onResult: (request) => runJournal.record(
+            'detail-requests',
+            detailJournalRecord(request, 'provider_canary'),
+          ),
         },
       );
+      await runJournal.checkpoint('provider_canary_details_complete', {
+        canaryDetailCandidates: scanResult.canaryCandidates.length,
+      });
     }
     failureStage = 'provider_canary_evaluation';
     const hasCanaryTargets = planning.runtimeTargets.some(
@@ -318,6 +432,34 @@ async function runScan(args) {
         generatedAt: new Date(),
       })
       : null;
+
+    if (
+      config.multiUser.enabled
+      && discoveryMatcher
+      && (args.mode === 'preflight' || args.mode === 'import')
+    ) {
+      failureStage = 'preliminary_location_normalization';
+      const preliminaryLocations = normalizeCandidateLocations(
+        scanResult.candidates,
+        { locationScopeFilter: null },
+      );
+      const preliminaryEligibility = annotatePreliminaryDiscoveryEligibility(
+        preliminaryLocations,
+        discoveryMatcher.users,
+      );
+      scanResult.candidates = preliminaryEligibility.candidates;
+      scanResult.preliminaryDiscoveryEligibility = {
+        counts: preliminaryEligibility.counts,
+        warnings: preliminaryEligibility.warnings,
+      };
+      runJournal.recordMany(
+        'preliminary-locations',
+        scanResult.candidates.map(locationJournalRecord),
+      );
+      await runJournal.checkpoint('preliminary_location_complete', {
+        counts: preliminaryEligibility.counts,
+      });
+    }
 
     let client = null;
     if (args.mode === 'preflight' || args.mode === 'import') {
@@ -334,8 +476,15 @@ async function runScan(args) {
         config.scan.jobsApiConcurrency,
         {
           onProgress: (event) => progress.update(event),
+          onResult: (candidate) => runJournal.record(
+            'preflight-results',
+            preflightJournalRecord(candidate),
+          ),
         },
       );
+      await runJournal.checkpoint('preflight_complete', {
+        candidates: preflightResults.length,
+      });
     }
 
     if (
@@ -366,6 +515,14 @@ async function runScan(args) {
         timeoutMs: config.scan.description.timeoutMs,
         policy: planning.policy,
         onProgress: (event) => progress.update(event),
+        onResult: (request) => runJournal.record(
+          'detail-requests',
+          detailJournalRecord(request, 'candidate'),
+        ),
+      });
+      await runJournal.checkpoint('detail_enrichment_complete', {
+        candidates: detailResults.length,
+        requestedMaximum: config.scan.description.maxFetchesPerRun,
       });
     }
 
@@ -391,11 +548,19 @@ async function runScan(args) {
           discoveryMatcher.users,
         );
         locationResults = eligibilityResult.candidates;
-        scanResult.rejected.push(...eligibilityResult.rejected.map((candidate) => ({
+        const geographyRejections = eligibilityResult.rejected.map((candidate) => ({
           reason: 'no_user_location_match',
           candidate,
           details: geographyRejectionDetails(candidate),
-        })));
+        }));
+        scanResult.rejectedCount += geographyRejections.length;
+        scanResult.rejectionCounts.no_user_location_match = (
+          scanResult.rejectionCounts.no_user_location_match ?? 0
+        ) + geographyRejections.length;
+        runJournal.recordMany(
+          'rejected',
+          geographyRejections.map(rejectionForArtifact),
+        );
         for (const warning of eligibilityResult.warnings) {
           console.warn(
             `[ats-discovery] ignored invalid discovery location selector `
@@ -411,18 +576,24 @@ async function runScan(args) {
             fairnessSeed: runId,
           },
         );
-        for (const candidate of postGeographyAdmission.dropped) {
-          scanResult.rejected.push({
-            reason: 'candidate_cap_after_geography',
-            candidate: null,
-            details: {
-              provider: candidate.sourceProvider,
-              tenant: candidate.sourceTenant,
-              url: candidate.url,
-              matchedUserIds: candidate.matchedUserIds ?? [],
-            },
-          });
-        }
+        const postGeographyRejected = postGeographyAdmission.dropped.map((candidate) => ({
+          reason: 'candidate_cap_after_geography',
+          candidate: null,
+          details: {
+            provider: candidate.sourceProvider,
+            tenant: candidate.sourceTenant,
+            url: candidate.url,
+            matchedUserIds: candidate.matchedUserIds ?? [],
+          },
+        }));
+        scanResult.rejectedCount += postGeographyRejected.length;
+        scanResult.rejectionCounts.candidate_cap_after_geography = (
+          scanResult.rejectionCounts.candidate_cap_after_geography ?? 0
+        ) + postGeographyRejected.length;
+        runJournal.recordMany(
+          'rejected',
+          postGeographyRejected.map(rejectionForArtifact),
+        );
         scanResult.titleCandidateAdmission = scanResult.candidateAdmission;
         scanResult.candidateAdmission = postGeographyAdmission.stats;
         scanResult.candidates = postGeographyAdmission.retained;
@@ -435,12 +606,23 @@ async function runScan(args) {
       }
     }
 
+    if (locationResults) {
+      runJournal.recordMany(
+        'location-results',
+        locationResults.map(locationJournalRecord),
+      );
+      await runJournal.checkpoint('location_normalization_complete', {
+        candidates: locationResults.length,
+        rejected: scanResult.rejectionCounts.no_user_location_match ?? 0,
+      });
+    }
+
     failureStage = 'user_match_artifact';
     userMatchResults = discoveryMatcher
       ? buildUserMatchArtifact({
         discoveryMatcher,
         candidates: locationResults ?? scanResult.candidates,
-        rejected: scanResult.rejected,
+        rejectionCounts: scanResult.rejectionCounts,
       })
       : null;
 
@@ -455,6 +637,13 @@ async function runScan(args) {
         maxCreates: args.maxCreate,
         requireDescription: config.scan.requireDescriptionForCreate,
         onProgress: (event) => progress.update(event),
+        onResult: (candidate) => runJournal.record(
+          'import-results',
+          importJournalRecord(candidate),
+        ),
+      });
+      await runJournal.checkpoint('import_complete', {
+        candidates: importResults.length,
       });
     }
 
@@ -483,6 +672,13 @@ async function runScan(args) {
         client: enrichmentClient,
         config: config.multiUser.compatibility,
         onProgress: (event) => progress.update(event),
+        onResult: (result) => runJournal.record('compatibility-results', result),
+      });
+      await runJournal.checkpoint('compatibility_complete', {
+        evaluatedPairs: compatibilityResults.evaluatedPairs,
+        requested: compatibilityResults.results.filter(
+          (item) => item.status === 'requested',
+        ).length,
       });
     }
 
@@ -548,10 +744,7 @@ async function runScan(args) {
       targetsSkippedNoEligibleUsers,
     });
 
-    rejected = [
-      ...planning.planningRejections,
-      ...scanResult.rejected,
-    ];
+    if (runJournal) await runJournal.flush();
     failureStage = 'artifact_publish';
     const runPath = await writeRunArtifacts({
       dataPath: config.paths.data,
@@ -598,7 +791,9 @@ async function runScan(args) {
       userMatchResults,
       compatibilityResults,
       candidates: scanResult.candidates,
-      rejected,
+      rejected: runJournal
+        ? runJournal.records('rejected')
+        : [...planning.planningRejections, ...scanResult.rejected],
       preflightResults,
       detailResults,
       detailTelemetry,
@@ -622,6 +817,7 @@ async function runScan(args) {
       }
     }
 
+    if (runJournal) await runJournal.remove();
     progress.clear();
     progressCleared = true;
     console.log(JSON.stringify({
@@ -648,6 +844,7 @@ async function runScan(args) {
     if (config && runPublished && publishedRunPath) {
       try {
         await writeRunFailureArtifact(publishedRunPath, failure);
+        if (runJournal) await runJournal.remove();
         progress.clear();
         progressCleared = true;
         console.log(JSON.stringify({
@@ -688,9 +885,11 @@ async function runScan(args) {
           userMatchResults,
           compatibilityResults,
           candidates: scanResult?.candidates ?? null,
-          rejected: rejected ?? (scanResult
-            ? [...(planning?.planningRejections ?? []), ...scanResult.rejected]
-            : planning?.planningRejections ?? null),
+          rejected: runJournal
+            ? runJournal.records('rejected')
+            : (scanResult
+              ? [...(planning?.planningRejections ?? []), ...scanResult.rejected]
+              : planning?.planningRejections ?? null),
           preflightResults,
           detailResults,
           detailTelemetry,
@@ -704,6 +903,7 @@ async function runScan(args) {
         });
         runPublished = true;
         publishedRunPath = runPath;
+        if (runJournal) await runJournal.remove();
         progress.clear();
         progressCleared = true;
         console.log(JSON.stringify({

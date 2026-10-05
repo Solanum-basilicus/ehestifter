@@ -178,9 +178,13 @@ export function buildDiscoveryMatcher(usersPayload) {
   };
 }
 
-export function buildUserMatchArtifact({ discoveryMatcher, candidates, rejected }) {
+export function buildUserMatchArtifact({
+  discoveryMatcher,
+  candidates,
+  rejectionCounts = {},
+}) {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     sourceGeneratedAtUtc: discoveryMatcher.sourceGeneratedAtUtc,
     compoundedProfile: discoveryMatcher.compoundedProfile,
     users: discoveryMatcher.userArtifact,
@@ -192,13 +196,11 @@ export function buildUserMatchArtifact({ discoveryMatcher, candidates, rejected 
       matchedTitles: candidate.userMatch?.matchedTitles ?? [],
       geography: candidate.userMatch?.geography ?? [],
     })),
-    rejectedNoUserMatch: rejected
-      .filter((item) => item.reason === 'no_user_match')
-      .map((item) => ({
-        url: item.candidate?.url ?? item.details?.url ?? null,
-        sourceProvider: item.candidate?.sourceProvider ?? null,
-        sourceTenant: item.candidate?.sourceTenant ?? null,
-      })),
+    rejectedNoUserMatch: {
+      count: rejectionCounts.no_user_match ?? 0,
+      artifact: 'rejected.json',
+      reason: 'no_user_match',
+    },
   };
 }
 

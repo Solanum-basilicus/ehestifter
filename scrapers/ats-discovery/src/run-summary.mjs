@@ -24,6 +24,13 @@ function countBy(items, keyFor) {
   );
 }
 
+function rejectionCount(scanResult, reason) {
+  if (scanResult?.rejectionCounts && Object.hasOwn(scanResult.rejectionCounts, reason)) {
+    return scanResult.rejectionCounts[reason] ?? 0;
+  }
+  return count(scanResult?.rejected ?? [], (item) => item.reason === reason);
+}
+
 function providerVariantHealth({
   providerResults,
   breakerEvents,
@@ -362,7 +369,23 @@ export function buildRunSummary({
 
     providersLoaded: scanResult.providerIds,
     providerSuccesses: count(providerResults, (result) => result.status === 'ok'),
+    // Compatibility alias. Prefer the explicit provider error counters below.
     providerErrors: count(providerResults, (result) => result.status === 'error'),
+    providerErrorsTotal: count(providerResults, (result) => result.status === 'error'),
+    providerHealthErrors: count(
+      providerResults,
+      (result) => result.status === 'error' && isProviderHealthSignificantResult(result),
+    ),
+    providerDurableTenantFailures: count(
+      providerResults,
+      (result) => result.status === 'error' && isDurableProviderResult(result),
+    ),
+    providerMaintenanceFailures: count(
+      providerResults,
+      (result) => result.status === 'error'
+        && !isProviderHealthSignificantResult(result)
+        && !isDurableProviderResult(result),
+    ),
     providerRateLimited: count(
       providerResults,
       (result) => result.errorClass === 'rate_limited',
@@ -486,10 +509,7 @@ export function buildRunSummary({
     discoveryUsersFailingClosed: multiUserEnabled
       ? count(discoveryUsers ?? [], (user) => user.discoveryStatus !== 'enabled')
       : null,
-    candidatesRejectedNoUserMatch: count(
-      scanResult.rejected,
-      (item) => item.reason === 'no_user_match',
-    ),
+    candidatesRejectedNoUserMatch: rejectionCount(scanResult, 'no_user_match'),
     userCandidateMatches: scanResult.candidates.reduce(
       (total, job) => total + (job.matchedUserIds?.length ?? 0),
       0,
@@ -553,11 +573,11 @@ export function buildRunSummary({
       scanResult.candidates,
       (job) => job.sourceMode === 'catalog',
     ),
-    rejected: scanResult.rejected.length + targetPlan.counts.planningRejected,
-    locationScopeRejected: count(
-      scanResult.rejected,
-      (item) => item.reason === 'location_scope_filter',
-    ),
+    rejected: (scanResult.rejectedCount ?? scanResult.rejected.length)
+      + targetPlan.counts.planningRejected,
+    rejectionCounts: scanResult.rejectionCounts ?? {},
+    locationScopeRejected: rejectionCount(scanResult, 'location_scope_filter'),
+    preliminaryGeography: scanResult.preliminaryDiscoveryEligibility?.counts ?? null,
 
     preflightChecked: preflightOk,
     preflightExisting,
@@ -600,7 +620,13 @@ export function buildRunSummary({
       evaluated,
       (job) => job.detail?.status === 'unavailable',
     ),
+    // Compatibility alias for errors in the final evaluated candidate set.
     detailErrors: count(evaluated, (job) => job.detail?.status === 'error'),
+    finalCandidateDetailErrors: count(
+      evaluated,
+      (job) => job.detail?.status === 'error',
+    ),
+    detailErrorsTotal: detailTelemetry?.totals?.errors ?? 0,
     detailAttempts: detailTelemetry?.totals?.attempts ?? 0,
     detailRateLimitedResponses: detailTelemetry?.totals?.rateLimitedResponses ?? 0,
     detailProviderStats: detailTelemetry?.providers ?? [],

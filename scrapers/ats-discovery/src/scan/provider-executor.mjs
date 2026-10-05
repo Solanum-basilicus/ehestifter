@@ -385,15 +385,26 @@ export async function executeProviderTargets({
   monotonicNow = () => performance.now(),
   sleep = defaultSleep,
   onProgress = null,
+  onResult = null,
 }) {
   if (!Array.isArray(targets)) throw new Error('targets must be an array');
   if (typeof fetchTarget !== 'function') throw new Error('fetchTarget must be a function');
   if (onProgress != null && typeof onProgress !== 'function') {
     throw new Error('onProgress must be a function');
   }
+  if (onResult != null && typeof onResult !== 'function') {
+    throw new Error('onResult must be a function');
+  }
   let completed = 0;
   function report(result) {
     completed += 1;
+    if (onResult) {
+      try {
+        onResult(result.providerResult);
+      } catch {
+        /* Run journaling must never alter provider execution. */
+      }
+    }
     if (!onProgress) return;
     try {
       onProgress({

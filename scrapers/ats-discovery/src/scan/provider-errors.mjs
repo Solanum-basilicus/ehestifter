@@ -34,6 +34,7 @@ export function classifyProviderError(error) {
   if (codes.includes('PROVIDER_CANARY_MINIMUM_JOBS')) return 'provider_anomaly';
   if (codes.includes('WORKDAY_TENANT_INVALID')) return 'workday_tenant_invalid';
   if (codes.includes('WORKDAY_TENANT_RESTRICTED')) return 'workday_tenant_restricted';
+  if (codes.includes('BAMBOOHR_TENANT_REDIRECTED')) return 'bamboohr_tenant_redirected';
   if (codes.includes('WORKDAY_REQUEST_REJECTED')) return 'provider_schema';
   if (codes.includes('ICIMS_WAF_CAPTCHA')) return 'waf_captcha';
   if (codes.includes('ICIMS_JIBE_QUERY_REJECTED')) return 'provider_schema';
@@ -160,9 +161,11 @@ export function providerNetworkDiagnostic(error) {
 }
 
 export function isDurableProviderResult(result) {
-  if (['workday_tenant_invalid', 'workday_tenant_restricted'].includes(
-    result?.errorClass,
-  )) return true;
+  if ([
+    'workday_tenant_invalid',
+    'workday_tenant_restricted',
+    'bamboohr_tenant_redirected',
+  ].includes(result?.errorClass)) return true;
   return result?.errorClass === 'http_4xx'
     && [404, 410].includes(result.httpStatus);
 }

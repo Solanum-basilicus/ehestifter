@@ -1702,9 +1702,9 @@ Priority targets and due provider canaries are processed before normal catalog s
 
 Provider execution is ready-driven across health partitions. A partition that is waiting for its configured request interval or concurrency slot does not consume a global execution slot. Another ready partition can use that slot. Target order remains stable inside each partition, and the priority phase still completes before the normal phase starts.
 
-Maintenance cohorts (`recovery`, `dead_reprobe`, and `long_empty`) contain tenants that are expected to include stale or inaccessible endpoints. Their non-rate-limit results remain tenant diagnostics but do not contribute to provider-wide breaker ratios, degraded health ratios, or rate-tuning samples. HTTP 429 remains a provider-wide signal in every cohort. Durable tenant-local failures remain excluded from provider-wide health. An already active persisted provider cooldown is a run notice, not a new degradation by itself. If every configured canary in that health partition is healthy, ATS Discovery clears the persisted cooldown for the next run only; targets skipped while the current plan was built are not injected back into that run. A circuit opened during the current run, a degraded canary, or another current provider-health anomaly still degrades the run.
+Maintenance cohorts (`recovery`, `dead_reprobe`, and `long_empty`) contain tenants that are expected to include stale or inaccessible endpoints. Their non-rate-limit results remain tenant diagnostics but do not contribute to provider-wide breaker ratios, degraded health ratios, or rate-tuning samples. HTTP 429 remains a provider-wide signal in every cohort. Durable tenant-local failures remain excluded from provider-wide health. BambooHR redirects from the expected tenant API origin are durable tenant-local evidence and are not followed. An already active persisted provider cooldown is a run notice, not a new degradation by itself. If every configured canary in that health partition is healthy, ATS Discovery clears the persisted cooldown for the next run only; targets skipped while the current plan was built are not injected back into that run. Rate-limit provider breakers use the configured rate-limit cooldown; other provider breakers use the shorter transient-failure cooldown. A circuit opened during the current run, a degraded canary, or another current provider-health anomaly still degrades the run.
 
-Provider-supported date constraints are used where useful. Otherwise posting age is filtered locally. Request pacing, concurrency, pagination, detail limits, rate observations, and live catalog target caps remain explicit configuration; autonomous rate tuning is not implemented.
+Provider-supported date constraints are used where useful. Otherwise posting age is filtered locally. Request pacing, concurrency, pagination, detail limits, rate observations, and live catalog target caps remain explicit configuration; autonomous rate tuning is not implemented. Rate recommendations compare the request-interval throughput limit with the concurrency/latency throughput limit before suggesting more concurrency.
 
 Missing-detail acquisition has separate scheduler state from listing acquisition. It uses the configured provider concurrency and minimum request interval as pacing limits, honors bounded HTTP 429 retry/backoff for that provider, and can run another ready provider while one detail provider waits. Detail throttling does not open or mutate the listing breaker. Per-provider detail attempts, rate limits, retries, and outcomes are emitted as run telemetry.
 
@@ -1722,6 +1722,13 @@ The endpoint returns a bounded set of discovery profiles. CV text and blob paths
 
 One scan plan compounds all discovery-enabled profiles. Each candidate records the users that pass cheap filters. A candidate matching nobody is rejected before Jobs detail/import and compatibility work.
 
+For candidates that pass title matching, ATS Discovery performs a preliminary
+normalization of listing geography before bounded detail acquisition. This pass
+does not reject a candidate or remove a matched user. It only orders missing
+detail work: likely geography matches first, unknown or unresolved geography
+next, and apparent mismatches last. Final eligibility still runs after detail
+enrichment so description evidence can correct or extend listing geography.
+
 For a retained candidate:
 1. Jobs canonical-identity preflight occurs once;
 2. detail is fetched once when the candidate is missing and detail is required;
@@ -1736,6 +1743,14 @@ canonical job geography even when user geography filtering is disabled. User
 preferences are applied only after those job facts are extracted. Description
 parsing uses high-signal candidate wording and does not promote unrelated country
 mentions about customers, partners, or company operations.
+
+Explicit work-arrangement country forms such as `Remote in the US` retain the
+country scope. When one provider-structured location establishes exactly one
+country, unresolved sibling city-only structured locations can use that country
+for deterministic city resolution. This rule does not apply when provider
+structured locations establish multiple countries. High-confidence French
+candidate declarations such as `basé à <city>` and `basée à <city>` are also
+recognized.
 
 ATS Discovery normalizes Unicode no-break whitespace in descriptions before Jobs
 create. Web Core also wraps long description content defensively so historical or
@@ -2109,11 +2124,12 @@ Not currently used for:
 ATS Discovery stores operational data under `scrapers/ats-discovery/data`:
 - machine-managed provider catalogs;
 - immutable-ish run artifacts;
+- incremental `<run-id>.partial` NDJSON journals while a run is active;
 - tenant/provider health and cadence state;
 - scheduler logical-slot state;
 - bounded state backups.
 
-These are scanner-owned files, not product-domain records. Catalog/state replacement is atomic where implemented. Historical run artifacts are retained as evidence and are not rewritten during product renames. Active scheduler state corruption fails closed rather than silently resetting and risking duplicate work.
+These are scanner-owned files, not product-domain records. Catalog/state replacement is atomic where implemented. During provider scanning and later side-effecting stages, bounded-buffer partial journals preserve incremental evidence and prevent the complete rejection corpus from remaining in process memory. Final `rejected.json` remains complete for diagnosis but omits repeated descriptions and catalog payloads from each rejection record; large job text remains in candidate/detail evidence. A successful atomic run publication removes its partial journal. If the process or container stops before publication, the partial directory remains for diagnosis. Historical run artifacts are retained as evidence and are not rewritten during product renames. Active scheduler state corruption fails closed rather than silently resetting and risking duplicate work.
 
 ### 17.4 Analytics storage and external export
 

@@ -40,6 +40,27 @@ test('array envelope writer streams iterable items into ordinary atomic JSON', a
   );
 });
 
+test('array envelope writer accepts async iterable items', async (t) => {
+  const directory = await temporaryDirectory(t);
+  const filePath = path.join(directory, 'async-streamed.json');
+  async function* items() {
+    yield { index: 1 };
+    await Promise.resolve();
+    yield { index: 2 };
+  }
+
+  await writeJsonArrayEnvelopeAtomic(filePath, {
+    header: { schemaVersion: 1 },
+    arrayProperty: 'items',
+    items: items(),
+  });
+
+  assert.deepEqual(JSON.parse(await readFile(filePath, 'utf8')), {
+    schemaVersion: 1,
+    items: [{ index: 1 }, { index: 2 }],
+  });
+});
+
 test('run writer streams compact rejection diagnostics without full descriptions', async (t) => {
   const dataPath = await temporaryDirectory(t);
   const rejected = [{

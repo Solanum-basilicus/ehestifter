@@ -105,6 +105,52 @@ export function evaluateDiscoveryEligibility(
   return { allowed: false, reason: 'no_matching_location_branch', arrangement };
 }
 
+
+export function annotatePreliminaryDiscoveryEligibility(
+  candidates,
+  discoveryUsers,
+  { catalog = getDefaultLocationsV2Catalog() } = {},
+) {
+  const userById = new Map(discoveryUsers.map((user) => [user.userId, user]));
+  const warnings = [];
+  const counts = { matched: 0, unknown: 0, mismatch: 0 };
+  const output = candidates.map((candidate) => {
+    const geography = [];
+    for (const userId of candidate.matchedUserIds ?? []) {
+      const user = userById.get(userId);
+      if (!user) continue;
+      geography.push({
+        userId,
+        ...evaluateDiscoveryEligibility(candidate, user, { catalog, warnings }),
+      });
+    }
+    const allowed = geography.filter((item) => item.allowed).map((item) => item.userId);
+    const unresolved = candidate.locationNormalization?.unresolved ?? [];
+    const unknownReason = geography.some((item) => [
+      'unknown_location_rejected',
+      'no_valid_positive_selector',
+    ].includes(item.reason));
+    const status = allowed.length > 0
+      ? 'matched'
+      : (unknownReason || unresolved.length > 0 || (candidate.locationsV2 ?? []).length === 0)
+        ? 'unknown'
+        : 'mismatch';
+    counts[status] += 1;
+    return {
+      ...candidate,
+      userMatch: {
+        ...(candidate.userMatch ?? {}),
+        preliminaryGeography: geography,
+      },
+      preliminaryGeography: {
+        status,
+        matchedUserIds: allowed.sort(),
+      },
+    };
+  });
+  return { candidates: output, warnings, counts };
+}
+
 export function applyDiscoveryEligibility(
   candidates,
   discoveryUsers,

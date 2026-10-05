@@ -600,9 +600,12 @@ function providerTransition(
   }
   if (breakerEvent) {
     next.health = 'cooldown';
+    const cooldownMinutes = breakerEvent.reason === 'rate_limit_threshold'
+      ? policy.scheduling.rateLimitCooldownMinutes
+      : policy.scheduling.transientFailureCooldownMinutes;
     next.cooldownUntilUtc = addMinutes(
       finishedAt,
-      policy.execution.breaker.cooldownMinutes,
+      cooldownMinutes,
     );
     next.lastBreakerAtUtc = finishedAt.toISOString();
     next.lastBreakerReason = breakerEvent.reason;

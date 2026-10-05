@@ -16,6 +16,7 @@ export async function importCandidates(
     maxCreates,
     requireDescription,
     onProgress = null,
+    onResult = null,
   },
 ) {
   const results = [];
@@ -129,6 +130,13 @@ export async function importCandidates(
       }
     }
     results.push(output);
+    if (onResult) {
+      try {
+        onResult(output, index);
+      } catch {
+        /* Run journaling must never alter imports. */
+      }
+    }
     safeProgress(onProgress, index + 1, candidates.length);
   }
 

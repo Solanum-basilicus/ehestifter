@@ -202,3 +202,34 @@ test('Ashby details reuse one board request and preserve structured primary loca
   );
   assert.equal(results[1].remoteType, 'Hybrid');
 });
+
+test('detail budget prioritizes preliminary geography matches before mismatches', async () => {
+  const base = {
+    preflight: { status: 'ok', exists: false },
+    description: '',
+    descriptionStatus: 'missing',
+    sourceTenant: 'example',
+    provenance: { healthPartition: 'unsupported' },
+  };
+  const results = await enrichCandidateDetails([
+    {
+      ...base,
+      url: 'https://example.test/mismatch',
+      sourceProvider: 'unsupported',
+      preliminaryGeography: { status: 'mismatch' },
+    },
+    {
+      ...base,
+      url: 'https://example.test/matched',
+      sourceProvider: 'unsupported',
+      preliminaryGeography: { status: 'matched' },
+    },
+  ], {
+    concurrency: 1,
+    maxFetches: 1,
+    timeoutMs: 1000,
+  });
+
+  assert.equal(results[0].detail.status, 'skipped_limit');
+  assert.equal(results[1].detail.status, 'unsupported_provider');
+});

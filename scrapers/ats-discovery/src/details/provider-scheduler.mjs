@@ -127,6 +127,7 @@ export async function executeDetailRequests({
   wallNow = () => Date.now(),
   sleep = defaultSleep,
   onProgress = null,
+  onResult = null,
 }) {
   if (!Array.isArray(items)) throw new Error('detail items must be an array');
   if (!Number.isInteger(globalConcurrency) || globalConcurrency <= 0) {
@@ -136,6 +137,9 @@ export async function executeDetailRequests({
     throw new Error('detail rateLimitRetries must be a non-negative integer');
   }
   if (typeof worker !== 'function') throw new Error('detail worker must be a function');
+  if (onResult != null && typeof onResult !== 'function') {
+    throw new Error('detail onResult must be a function');
+  }
   if (items.length === 0) return [];
 
   const guards = new Map();
@@ -188,6 +192,13 @@ export async function executeDetailRequests({
     results.push(result);
     pending -= 1;
     completed += 1;
+    if (onResult) {
+      try {
+        onResult(result);
+      } catch {
+        /* Run journaling must never alter detail execution. */
+      }
+    }
     safeProgress(onProgress, completed, items.length);
   }
 

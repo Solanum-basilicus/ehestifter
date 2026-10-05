@@ -924,3 +924,71 @@ test('ordinary work-with sentence does not create a description location', () =>
     (item) => /other super-smart colleagues/iu.test(item.raw ?? '') && item.source === 'description',
   ));
 });
+
+test('remote country phrase keeps United States scope', () => {
+  const result = normalizeRawLocation('Seattle, SF, NYC, Remote in the US');
+  assert.equal(result.arrangement, 'Remote');
+  assert.deepEqual(result.locations, [{
+    countryName: 'United States',
+    countryCode: 'US',
+    cityName: null,
+    region: null,
+  }]);
+});
+
+test('remote Toronto resolves through the global major-city fallback', () => {
+  const [result] = normalizeCandidateLocations([
+    candidate({ rawLocation: 'Toronto (Remote)', remoteType: 'Remote' }),
+  ], { locationScopeFilter });
+  assert.deepEqual(result.locations, [{
+    countryName: 'Canada',
+    countryCode: 'CA',
+    cityName: 'Toronto',
+    region: null,
+  }]);
+});
+
+test('French based-at declaration extracts Montpellier', () => {
+  const [result] = normalizeCandidateLocations([
+    candidate({
+      rawLocation: 'Remote',
+      remoteType: 'Remote',
+      description: 'Le Business Development Manager est basé à Montpellier.',
+    }),
+  ], { locationScopeFilter });
+  assert.deepEqual(result.locations, [{
+    countryName: 'France',
+    countryCode: 'FR',
+    cityName: 'Montpellier',
+    region: null,
+  }]);
+});
+
+test('structured sibling cities inherit one unambiguous provider country', () => {
+  const [result] = normalizeCandidateLocations([
+    candidate({
+      rawLocation: '5 Locations',
+      remoteType: 'On-Site',
+      locations: [
+        { cityName: 'Eschborn', countryName: 'Germany' },
+        { cityName: 'Stuttgart' },
+        { cityName: 'Hannover' },
+        { cityName: 'Munich' },
+        { cityName: 'Hamburg' },
+      ],
+    }),
+  ], { locationScopeFilter });
+  assert.deepEqual(
+    result.locations.map((item) => [item.countryCode, item.cityName]).sort(),
+    [
+      ['DE', 'Eschborn'],
+      ['DE', 'Hamburg'],
+      ['DE', 'Hannover'],
+      ['DE', 'Munich'],
+      ['DE', 'Stuttgart'],
+    ],
+  );
+  assert.ok(result.locationNormalization.observations.some(
+    (item) => item.kind === 'structured_city_with_shared_country',
+  ));
+});

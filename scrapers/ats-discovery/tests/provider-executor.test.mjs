@@ -325,3 +325,31 @@ test('maintenance rate limits remain provider health signals', async () => {
   assert.equal(result.breakerEvents[0].reason, 'rate_limit_threshold');
   assert.equal(result.batches[1].providerResult.status, 'skipped');
 });
+
+test('durable BambooHR tenant redirects do not open the provider circuit', async () => {
+  let calls = 0;
+  const targets = Array.from({ length: 60 }, (_, sequence) => ({
+    ...target(sequence),
+    provider: 'bamboohr',
+    healthPartition: 'bamboohr',
+    scheduleBucket: 'healthy',
+  }));
+  const result = await executeProviderTargets({
+    targets,
+    policy: policy({ concurrency: 2, transientThreshold: 2 }),
+    globalConcurrency: 2,
+    fetchTarget: async () => {
+      calls += 1;
+      throw Object.assign(new Error('BambooHR tenant redirected from the expected API origin'), {
+        code: 'BAMBOOHR_TENANT_REDIRECTED',
+      });
+    },
+  });
+
+  assert.equal(calls, 60);
+  assert.equal(result.breakerEvents.length, 0);
+  assert.equal(
+    result.batches.every((item) => item.providerResult.errorClass === 'bamboohr_tenant_redirected'),
+    true,
+  );
+});

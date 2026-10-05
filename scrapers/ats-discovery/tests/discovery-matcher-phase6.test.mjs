@@ -144,9 +144,19 @@ test('user-match artifact preserves structured explainability', () => {
   const matcher = buildDiscoveryMatcher({ users: [user(USER_A, { positive: ['Product Manager'] })] });
   const match = matcher.matchCandidate(candidate());
   const job = { ...candidate(), matchedUserIds: match.matchedUserIds, userMatch: { matchedTitles: match.matchedTitles } };
-  const artifact = buildUserMatchArtifact({ discoveryMatcher: matcher, candidates: [job], rejected: [] });
+  const artifact = buildUserMatchArtifact({
+    discoveryMatcher: matcher,
+    candidates: [job],
+    rejectionCounts: { no_user_match: 123 },
+  });
+  assert.equal(artifact.schemaVersion, 3);
   assert.equal(artifact.users[0].matchingEnabled, true);
   assert.deepEqual(artifact.matches[0].matchedTitles[0].positiveMatches, ['Product Manager']);
+  assert.deepEqual(artifact.rejectedNoUserMatch, {
+    count: 123,
+    artifact: 'rejected.json',
+    reason: 'no_user_match',
+  });
 });
 
 test('no discovery-enabled users suppress candidate targets but preserve provider canaries', () => {

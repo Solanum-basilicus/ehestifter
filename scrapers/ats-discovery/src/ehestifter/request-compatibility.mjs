@@ -7,7 +7,7 @@ function safeProgress(onProgress, current, total) {
   }
 }
 
-async function mapLimit(items, limit, worker, onProgress) {
+async function mapLimit(items, limit, worker, onProgress, onResult = null) {
   const results = new Array(items.length);
   let next = 0;
   let completed = 0;
@@ -17,6 +17,13 @@ async function mapLimit(items, limit, worker, onProgress) {
       next += 1;
       if (index >= items.length) return;
       results[index] = await worker(items[index], index);
+      if (onResult) {
+        try {
+          onResult(results[index], index);
+        } catch {
+          /* Run journaling must never alter compatibility requests. */
+        }
+      }
       completed += 1;
       safeProgress(onProgress, completed, items.length);
     }
@@ -80,6 +87,7 @@ export async function requestCompatibilityForMatches({
   client,
   config,
   onProgress = null,
+  onResult = null,
 }) {
   const allPairs = buildCompatibilityPairs(importResults, discoveryUsers);
   const pairs = allPairs.slice(0, config.maxPairsPerRun);
@@ -159,6 +167,7 @@ export async function requestCompatibilityForMatches({
       }
     },
     onProgress,
+    onResult,
   );
 
   return {

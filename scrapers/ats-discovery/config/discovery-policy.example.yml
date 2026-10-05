@@ -27,7 +27,6 @@ defaults:
       transient_error_threshold: 8
       transient_error_ratio_threshold: 0.5
       minimum_requests_for_ratio: 10
-      cooldown_minutes: 1440
   recommendations:
     minimum_requests: 20
     healthy_success_ratio: 0.98
@@ -129,7 +128,6 @@ providers:
         transient_error_threshold: 5
         transient_error_ratio_threshold: 0.4
         minimum_requests_for_ratio: 5
-        cooldown_minutes: 1440
 
   bamboohr:
     catalog_enabled: false

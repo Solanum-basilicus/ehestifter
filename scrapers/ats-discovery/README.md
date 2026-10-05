@@ -452,7 +452,10 @@ consume provider breaker samples or rate-tuning samples. HTTP 429 remains a
 provider-wide signal in every cohort. `rate-observations.json` keeps the total
 `transientErrors` count and also reports `healthRequestsAttempted`,
 `healthSuccesses`, `healthTransientErrors`, and `healthLatencyMs` for the sample
-used by recommendations.
+used by recommendations. Healthy-provider increase recommendations also compare
+the configured request interval with the throughput implied by concurrency and
+observed average latency. The scanner does not recommend more concurrency when
+the minimum request interval is already the limiting control.
 
 Provider execution is ready-driven across health partitions. Waiting for one
 provider's configured request interval does not reserve a global worker when a
@@ -470,7 +473,17 @@ a new run degraded by itself. If every configured canary in that health
 partition is healthy, the scanner clears the persisted cooldown for the next
 run. It does not add targets that were already skipped from the current plan. A
 circuit opened during the current run and other current health warnings still
-make the run degraded.
+make the run degraded. A rate-limit provider breaker uses
+`scheduling.rate_limit_cooldown_minutes`; another provider breaker uses
+`scheduling.transient_failure_cooldown_minutes`. The legacy
+`execution.breaker.cooldown_minutes` key is accepted so old local policy files
+still load, but it no longer controls persisted provider cooldown state.
+
+BambooHR keeps redirect following disabled. If a tenant careers API redirects
+away from the expected tenant API origin, that observation is durable
+tenant-local evidence instead of a provider-wide network failure. This prevents
+a set of moved or retired customer tenants from opening the BambooHR provider
+circuit. The scanner still does not follow the redirect.
 
 Network and timeout provider results retain bounded, sanitized cause diagnostics.
 These include error name, message, code, errno, syscall, hostname, and timeout
@@ -531,11 +544,19 @@ Use this first after adding a company or changing filters/provider policy.
 What it adds on top of the provider scan:
 
 - calls Jobs `/jobs/exists` for canonical identity and duplicate status;
+- normalizes listing geography and ranks bounded missing-detail work so likely
+  geography matches run first, unknown geography runs next, and apparent
+  mismatches run last;
 - fetches bounded missing details for Jobs-missing candidates when configured;
 - canonicalizes provider and description-derived locations against the Web Core
   geography snapshot;
 - evaluates final location eligibility after detail enrichment;
 - writes preflight/detail/location artifacts.
+
+The preliminary geography pass is an ordering hint only. It does not remove a
+candidate or matched user. Final location eligibility still runs after detail
+acquisition, so description evidence can recover a candidate whose listing
+location was missing, incomplete, or misleading.
 
 It does **not** create jobs and does not request compatibility.
 
@@ -581,6 +602,14 @@ scanner keeps the original legacy text for diagnostics and can emit that
 canonical country as the v2 fallback. Unqualified bare cities remain unresolved
 unless an existing narrow rule can disambiguate them; the scanner does not
 generally guess a country from a city name.
+
+Work-arrangement composites such as `Remote in the US` retain the explicit
+country scope. A structured location list can use one unambiguous structured
+country to resolve sibling city-only entries from the same provider payload.
+This is used for provider lists such as one German city with additional German
+cities; it is not a general bare-city country guess. High-confidence French
+candidate declarations such as `basé à Montpellier` or `basée à Montpellier`
+are also recognized as description location evidence.
 
 The scanner also owns a small administrative-region dictionary separate from
 Web Core geography. It currently covers US states/DC and aliases, German
@@ -797,10 +826,27 @@ Scanner-owned local paths include:
 ```text
 data/catalogs/                 machine-managed catalogs
 data/runs/<run-id>/            immutable-ish run evidence
+data/runs/<run-id>.partial/    incremental evidence for an active run
 data/state/tenant-state.json   provider/tenant cadence and health
 data/state/scheduler-state.json logical scheduler slots and outcomes
 data/backups/                  bounded scheduler/scanner-state backups
 ```
+
+During a run, ATS Discovery writes bounded-buffer NDJSON evidence under the
+`.partial` directory. Provider results and scan rejections are recorded while
+the scan is active. Later stages record candidate/detail, preflight, location,
+import, and compatibility evidence as those stages complete. Checkpoints flush
+the buffers at stage boundaries. This gives a failed container useful evidence
+without keeping the complete rejection corpus in process memory. A successful
+atomic run publication removes the partial directory.
+
+`rejected.json` remains a complete diagnostic artifact, not a sampled log. Its
+candidate shape omits large descriptions and catalog payloads, but keeps the
+identity, title, raw location, provenance, and rejection details needed for
+later analysis. The final writer replays the incremental rejection journal and
+writes normal JSON without first rebuilding the full rejection array in memory.
+`user-match-results.json` stores the exact `no_user_match` count and points to
+`rejected.json` instead of duplicating one entry per rejected URL.
 
 A normal run can emit:
 
@@ -835,6 +881,15 @@ diagnosis, but it never updates `tenant-state.json` outside the normal persisten
 `summary.json` reports unavailable detail observations separately through
 `detailUnavailable` and reports their no-write import outcome through
 `importDetailUnavailableSkipped`.
+
+Provider error totals are explicit. `providerErrorsTotal` counts every provider
+error, `providerHealthErrors` counts errors that are provider-health signals,
+`providerDurableTenantFailures` counts tenant-local durable failures, and
+`providerMaintenanceFailures` counts the remaining non-health maintenance
+failures. `providerErrors` remains as a compatibility alias for the total.
+Likewise, `detailErrorsTotal` reports all detail-stage errors while
+`finalCandidateDetailErrors` reports errors that remain in the final evaluated
+candidate set; `detailErrors` remains the compatibility alias for the latter.
 
 Historical runs are retained as evidence. Product renames must not rewrite existing run artifacts or historical job provenance.
 

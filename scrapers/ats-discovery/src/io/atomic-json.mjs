@@ -100,8 +100,10 @@ export async function writeJsonArrayEnvelopeAtomic(filePath, {
   if (Object.hasOwn(header, arrayProperty)) {
     throw new Error(`header must not contain array property ${arrayProperty}`);
   }
-  if (!items || typeof items[Symbol.iterator] !== 'function') {
-    throw new TypeError('items must be iterable');
+  const syncIterable = items && typeof items[Symbol.iterator] === 'function';
+  const asyncIterable = items && typeof items[Symbol.asyncIterator] === 'function';
+  if (!syncIterable && !asyncIterable) {
+    throw new TypeError('items must be iterable or async iterable');
   }
   if (!Number.isInteger(chunkSizeCharacters) || chunkSizeCharacters < 1024) {
     throw new TypeError('chunkSizeCharacters must be an integer of at least 1024');
@@ -136,7 +138,7 @@ export async function writeJsonArrayEnvelopeAtomic(filePath, {
 
     let first = true;
     let index = 0;
-    for (const item of items) {
+    for await (const item of items) {
       const serialized = JSON.stringify(item);
       if (serialized === undefined) {
         throw new TypeError(`array item ${index} is not JSON serializable`);

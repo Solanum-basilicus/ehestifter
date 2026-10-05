@@ -32,7 +32,6 @@ const DEFAULTS = Object.freeze({
       transientErrorThreshold: 8,
       transientErrorRatioThreshold: 0.5,
       minimumRequestsForRatio: 10,
-      cooldownMinutes: 1440,
     }),
   }),
   recommendations: Object.freeze({
@@ -210,6 +209,16 @@ function parseLookback(raw, base, name) {
 
 function parseBreaker(raw, base, name) {
   const value = optionalObject(raw, name);
+  if (value.cooldown_minutes != null) {
+    // Accept the legacy key so existing operator policy files still load.
+    // Persisted provider cooldowns use the scheduling cooldown settings.
+    finiteNumber(
+      value.cooldown_minutes,
+      null,
+      `${name}.cooldown_minutes`,
+      { min: 1, max: 60 * 24 * 30 },
+    );
+  }
   return {
     rateLimitThreshold: integer(
       value.rate_limit_threshold,
@@ -234,12 +243,6 @@ function parseBreaker(raw, base, name) {
       base.minimumRequestsForRatio,
       `${name}.minimum_requests_for_ratio`,
       { min: 1, max: 1000 },
-    ),
-    cooldownMinutes: finiteNumber(
-      value.cooldown_minutes,
-      base.cooldownMinutes,
-      `${name}.cooldown_minutes`,
-      { min: 1, max: 60 * 24 * 30 },
     ),
   };
 }

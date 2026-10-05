@@ -1049,6 +1049,7 @@ export async function enrichCandidateDetails(
     wallNow,
     sleep,
     onProgress = null,
+    onResult = null,
   },
 ) {
   const context = {
@@ -1080,8 +1081,14 @@ export async function enrichCandidateDetails(
     return candidate;
   });
 
-  const selectedIndices = eligibleIndices.slice(0, maxFetches);
-  for (const index of eligibleIndices.slice(maxFetches)) {
+  const geographyPriority = { matched: 0, unknown: 1, mismatch: 2 };
+  const prioritizedEligibleIndices = [...eligibleIndices].sort((left, right) => {
+    const leftPriority = geographyPriority[output[left].preliminaryGeography?.status] ?? 1;
+    const rightPriority = geographyPriority[output[right].preliminaryGeography?.status] ?? 1;
+    return leftPriority - rightPriority || left - right;
+  });
+  const selectedIndices = prioritizedEligibleIndices.slice(0, maxFetches);
+  for (const index of prioritizedEligibleIndices.slice(maxFetches)) {
     output[index] = { ...output[index], detail: { status: 'skipped_limit' } };
   }
 
@@ -1105,6 +1112,7 @@ export async function enrichCandidateDetails(
     ),
     worker: async ({ candidate }) => fetchDetails(candidate, context),
     onProgress,
+    onResult,
   });
 
   for (const request of fetched) {
