@@ -11,6 +11,7 @@ const NAMED_ENTITIES = new Map([
   ['quot', '"'],
   ['apos', "'"],
   ['nbsp', ' '],
+  ['bull', '•'],
 ]);
 
 function decodeEntity(match, entity) {

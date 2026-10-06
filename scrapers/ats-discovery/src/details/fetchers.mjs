@@ -16,6 +16,7 @@ import {
   bambooHRStructuredLocation,
 } from '../providers/bamboohr.mjs';
 import { executeDetailRequests } from './provider-scheduler.mjs';
+import { parsePaylocityHtmlDetails } from './paylocity-html.mjs';
 
 const GREENHOUSE_HOST = 'boards-api.greenhouse.io';
 const ASHBY_HOST = 'api.ashbyhq.com';
@@ -895,7 +896,7 @@ function assertJsonLdSource(candidate) {
   throw new Error(`Unsupported JSON-LD source provider: ${candidate.sourceProvider}`);
 }
 
-async function fetchJsonLdDetails(candidate, context) {
+async function fetchJsonLdPage(candidate, context) {
   const endpoint = assertJsonLdSource(candidate);
   const browserHeaders = ['icims', 'paylocity'].includes(candidate.sourceProvider)
     ? {
@@ -909,11 +910,39 @@ async function fetchJsonLdDetails(candidate, context) {
     timeoutMs: context.timeoutMs,
     options: { headers: browserHeaders },
   });
+  return { endpoint, html };
+}
+
+async function fetchJsonLdDetails(candidate, context) {
+  const { endpoint, html } = await fetchJsonLdPage(candidate, context);
   const parsed = parseJobPostingJsonLd(html, endpoint.href);
   if (!parsed) throw new Error('Detail page contains no parseable JobPosting JSON-LD');
   return {
     ...parsed,
     descriptionStatus: `${candidate.sourceProvider}-jobposting-jsonld`,
+  };
+}
+
+async function fetchPaylocityDetails(candidate, context) {
+  const { endpoint, html } = await fetchJsonLdPage(candidate, context);
+  const jsonLd = parseJobPostingJsonLd(html, endpoint.href);
+  if (jsonLd) {
+    return {
+      ...jsonLd,
+      descriptionStatus: 'paylocity-jobposting-jsonld',
+    };
+  }
+
+  const identity = sourceIdentity(candidate);
+  const page = parsePaylocityHtmlDetails(html, endpoint, identity.externalId);
+  if (!page) {
+    throw new Error(
+      'Detail page contains neither JobPosting JSON-LD nor a parseable Paylocity job description',
+    );
+  }
+  return {
+    ...page,
+    descriptionStatus: 'paylocity-html-detail',
   };
 }
 
@@ -1018,8 +1047,9 @@ async function fetchDetails(candidate, context) {
     case 'bamboohr':
       return { supported: true, ...(await fetchBambooHRDetails(candidate, context)) };
     case 'icims':
-    case 'paylocity':
       return { supported: true, ...(await fetchJsonLdDetails(candidate, context)) };
+    case 'paylocity':
+      return { supported: true, ...(await fetchPaylocityDetails(candidate, context)) };
     case 'ashby':
       return { supported: true, ...(await fetchAshbyDetails(candidate, context)) };
     case 'smartrecruiters':

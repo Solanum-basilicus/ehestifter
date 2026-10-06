@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -201,6 +202,84 @@ test('Ashby details reuse one board request and preserve structured primary loca
     'Second description',
   );
   assert.equal(results[1].remoteType, 'Hybrid');
+});
+
+
+function paylocityCandidate() {
+  return {
+    url: 'https://recruiting.paylocity.com/Recruiting/Jobs/Details/4497769',
+    applyUrl: 'https://recruiting.paylocity.com/Recruiting/Jobs/Details/4497769',
+    foundOn: 'ats-discovery',
+    description: '',
+    descriptionStatus: 'missing',
+    rawLocation: 'Remote',
+    locations: [],
+    remoteType: 'Unknown',
+    sourceProvider: 'paylocity',
+    sourceTenant: '21aecddf-6bcb-40b9-b363-ea03a9703ff3',
+    canonicalIdentity: {
+      provider: 'paylocity',
+      providerTenant: '21aecddf-6bcb-40b9-b363-ea03a9703ff3',
+      externalId: '4497769',
+      identitySource: 'provider-native-id',
+    },
+    provenance: {
+      sourceOrigin: 'https://recruiting.paylocity.com/',
+      providerNativeId: '4497769',
+    },
+    preflight: {
+      status: 'ok',
+      exists: false,
+    },
+  };
+}
+
+test('Paylocity details use server-rendered HTML when JobPosting JSON-LD is absent', async () => {
+  const fixtureUrl = new URL('./fixtures/paylocity-detail-no-jsonld.html', import.meta.url);
+  const html = await readFile(fixtureUrl, 'utf8');
+  let calls = 0;
+
+  const [result] = await enrichCandidateDetails([paylocityCandidate()], {
+    concurrency: 1,
+    maxFetches: 1,
+    timeoutMs: 1000,
+    fetchImpl: async () => {
+      calls += 1;
+      return new Response(html, { status: 200, headers: { 'content-type': 'text/html' } });
+    },
+  });
+
+  assert.equal(calls, 1);
+  assert.equal(result.detail.status, 'ok');
+  assert.equal(result.descriptionStatus, 'paylocity-html-detail');
+  assert.match(result.description, /Lead regional channel development/);
+  assert.equal(result.detailRawLocation, 'Fully Remote • Remote - CAN, CAN');
+  assert.equal(result.remoteType, 'Remote');
+  assert.equal(
+    result.applyUrl,
+    'https://recruiting.paylocity.com/Recruiting/Jobs/Apply/4497769',
+  );
+});
+
+test('Paylocity details keep JobPosting JSON-LD as the primary source', async () => {
+  const jsonLd = JSON.stringify({
+    '@context': 'https://schema.org',
+    '@type': 'JobPosting',
+    description: '<p>Primary JSON-LD description.</p>',
+    url: 'https://recruiting.paylocity.com/Recruiting/Jobs/Apply/4497769',
+  });
+  const html = `<script type="application/ld+json">${jsonLd}</script>`;
+
+  const [result] = await enrichCandidateDetails([paylocityCandidate()], {
+    concurrency: 1,
+    maxFetches: 1,
+    timeoutMs: 1000,
+    fetchImpl: async () => new Response(html, { status: 200 }),
+  });
+
+  assert.equal(result.detail.status, 'ok');
+  assert.equal(result.descriptionStatus, 'paylocity-jobposting-jsonld');
+  assert.equal(result.description, 'Primary JSON-LD description.');
 });
 
 test('detail budget prioritizes preliminary geography matches before mismatches', async () => {

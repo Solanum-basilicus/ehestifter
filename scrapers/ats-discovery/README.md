@@ -95,7 +95,12 @@ Paylocity uses the public `/Recruiting/Jobs/All/{board-uuid}` page and parses it
 `window.pageData` JSON object without JavaScript evaluation. Public detail URLs
 contain the job ID but not the board UUID. The scanner therefore uses the Jobs
 explicit identity lookup with `(paylocity, board UUID, job ID)` before detail or
-import. Jobs remains the authority for canonical job identity and persistence.
+import. Some Paylocity detail pages omit `JobPosting` JSON-LD while still
+rendering the complete job description on the server. Detail enrichment keeps
+JSON-LD as the primary source and, when it is absent, parses the same validated
+HTML response only after it finds one Description section and an apply link for
+the expected native job ID. The fallback does not make an additional request.
+Jobs remains the authority for canonical job identity and persistence.
 
 SuccessFactors has independent health partitions:
 

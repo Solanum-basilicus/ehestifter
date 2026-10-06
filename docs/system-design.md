@@ -1765,6 +1765,8 @@ is inconclusive rather than degraded.
 
 Personio normally supplies descriptions in its XML list feed. If that feed omits a description for a new job, ATS Discovery can fetch the same-origin public `/job/{id}` page after validating the provider-native ID. Greenhouse list acquisition also preserves its native job ID for detail lookup. This does not change the persisted Greenhouse canonical-identity contract; identity migration remains separate work.
 
+Paylocity detail enrichment first uses `JobPosting` JSON-LD from the validated public detail URL. Some Paylocity pages omit JSON-LD but server-render the complete job content. For those pages, the same response can be parsed through a strict HTML fallback that requires one Description section and a same-origin `/Recruiting/Jobs/Apply/{native-id}` link for the expected job. The fallback makes no second provider request and does not change Paylocity canonical identity.
+
 ### 14.5 Jobs and Enrichment integration
 
 Jobs remains authoritative for canonical identity and persistence:
