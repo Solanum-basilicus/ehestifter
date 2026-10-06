@@ -4,7 +4,7 @@
 _ALLOWED = {
     "url", "title", "hiringCompanyName", "postingCompanyName",
     "foundOn", "provider", "providerTenant", "atsVendor", "externalId",
-    "remoteType", "description", "locations", "locationsV2", "workTimeConstraintsV2"
+    "remoteType", "description", "locationsV2", "workTimeConstraintsV2"
 }
 
 # Fields that must be treated read-only in EDIT mode (client also disables them)
@@ -28,37 +28,26 @@ def clean_job_payload(body: dict, *, for_update: bool = False) -> dict:
             continue
 
         v = body[k]
-        if v in ("", None):
-            continue
-
-        if k == "locations":
-            # Keep an explicit empty list on update so the caller can clear v1.
+        if k == "locationsV2":
+            # Keep invalid values for Jobs validation. Do not silently remove
+            # a selection or turn invalid input into an empty location list.
             if isinstance(v, list):
-                locs = []
+                selections = []
                 for item in v:
                     if not isinstance(item, dict):
+                        selections.append(item)
                         continue
-                    locs.append({
-                        "countryName": (item.get("countryName") or "").strip(),
-                        "countryCode": (item.get("countryCode") or None),
-                        "cityName": (item.get("cityName") or None),
-                        "region": (item.get("region") or None),
-                    })
-                out[k] = locs
+                    identity = {}
+                    for key in ("kind", "locationId"):
+                        value = item.get(key)
+                        identity[key] = value.strip() if isinstance(value, str) else value
+                    selections.append(identity)
+                out[k] = selections
+            else:
+                out[k] = v
             continue
 
-        if k == "locationsV2":
-            # The UI does not resolve canonical IDs in issue #21. Pass through
-            # canonical selections supplied by a later selector implementation.
-            if isinstance(v, list):
-                out[k] = [
-                    {
-                        "kind": (item.get("kind") or "").strip(),
-                        "locationId": (item.get("locationId") or "").strip(),
-                    }
-                    for item in v
-                    if isinstance(item, dict)
-                ]
+        if v in ("", None):
             continue
 
         if k == "workTimeConstraintsV2":

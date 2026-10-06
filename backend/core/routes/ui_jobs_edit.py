@@ -2,6 +2,7 @@ from flask import Blueprint, request, jsonify, render_template, abort
 from helpers.http import jobs_base, jobs_fx_headers, fx_get, fx_put_json
 from helpers.users import get_in_app_user_id
 from helpers.job_form import clean_job_payload
+from helpers.locations import lookup_locations
 from helpers.ids import normalize_guid  # robust, case-insensitive GUID compare
 
 def _pick(d: dict, *keys):
@@ -14,21 +15,6 @@ def _pick(d: dict, *keys):
 
 def _map_api_job_to_initial(job: dict) -> dict:
     """Prepare initial JSON expected by job_edit.html shared form (case-agnostic)."""
-    # Normalize locations (accept both new camelCase and legacy PascalCase)
-    locs = _pick(job, "locations", "Locations") or []
-    norm_locs = []
-    if isinstance(locs, list):
-        for it in locs:
-            if not isinstance(it, dict):
-                continue
-            norm_locs.append({
-                "countryName": _pick(it, "countryName", "CountryName") or "",
-                "countryCode": _pick(it, "countryCode", "CountryCode"),
-                "cityName":   _pick(it, "cityName", "CityName"),
-                "region":     _pick(it, "region", "Region"),
-            })
-
-
     locs_v2 = _pick(job, "locationsV2", "LocationsV2") or []
     norm_locs_v2 = []
     if isinstance(locs_v2, list):
@@ -38,8 +24,6 @@ def _map_api_job_to_initial(job: dict) -> dict:
             norm_locs_v2.append({
                 "kind": _pick(item, "kind", "LocationKind") or "",
                 "locationId": _pick(item, "locationId", "LocationId") or "",
-                "displayName": _pick(item, "displayName", "DisplayName") or "",
-                "countryCode": _pick(item, "countryCode", "CountryCode"),
             })
 
     work_time_v2 = _pick(job, "workTimeConstraintsV2", "WorkTimeConstraintsV2") or []
@@ -67,11 +51,29 @@ def _map_api_job_to_initial(job: dict) -> dict:
         "remoteType": (_pick(job, "remoteType", "RemoteType") or "Unknown"),
         # HTML description (accept different casings)
         "descriptionHtml": _pick(job, "description", "Description") or "",
-        "locations": norm_locs,
         "locationsV2": norm_locs_v2,
         "workTimeConstraintsV2": norm_work_time_v2,
-        "activeLocationModel": _pick(job, "activeLocationModel", "ActiveLocationModel") or "v1",
     }
+
+def _resolve_location_details(initial: dict, user_id: str) -> None:
+    """Resolve display data without changing the stored location identities."""
+    initial["locationDetails"] = []
+    initial["locationLookupFailed"] = False
+    selectors = initial["locationsV2"]
+    if not selectors:
+        return
+    try:
+        response = lookup_locations({"userId": user_id}, selectors)
+        if not response.ok:
+            raise ValueError("Location lookup failed")
+        payload = response.json()
+        details = payload.get("items")
+        if not isinstance(details, list):
+            raise ValueError("Location lookup returned invalid display data")
+        initial["locationDetails"] = details
+    except Exception:
+        # Lookup is for display only. The user can still edit the job.
+        initial["locationLookupFailed"] = True
 
 def create_blueprint(auth):
     bp = Blueprint("ui_jobs_edit", __name__)
@@ -112,6 +114,7 @@ def create_blueprint(auth):
             abort(403)
 
         initial = _map_api_job_to_initial(job)
+        _resolve_location_details(initial, uid)
         return render_template(
             "job_edit.html",
             title="Edit job",

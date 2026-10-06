@@ -12,6 +12,7 @@ from helpers.url_helpers import deduce_from_url
 from helpers.analytics import emit_jobs_event, correlation_id_from_request
 from helpers.locations_v2 import load_locations_v2_catalog
 from helpers.locations_v2_store import (
+    canonicalize_locations_v2,
     replace_native_locations_v2,
     replace_work_time_constraints_v2,
 )
@@ -188,6 +189,12 @@ def create_job_record(req: func.HttpRequest, cur, data: dict, analytics_meta: di
     if not is_valid:
         raise ValueError(error)
 
+    catalog = None
+    if "locationsV2" in data:
+        catalog = load_locations_v2_catalog()
+        # Reject unknown identities before any database write.
+        canonicalize_locations_v2(catalog, data["locationsV2"])
+
     url = data.get("url")
     heur = deduce_from_url(url) if url else {}
     foundOn = data.get("foundOn") or heur.get("foundOn") or "corporate-site"
@@ -270,7 +277,6 @@ def create_job_record(req: func.HttpRequest, cur, data: dict, analytics_meta: di
     # Locations v1 and v2 writes are independent. Do not create a rollback
     # projection when the caller supplies only Locations v2.
     if "locationsV2" in data:
-        catalog = load_locations_v2_catalog()
         replace_native_locations_v2(cur, catalog, job_id, data["locationsV2"])
 
     if "workTimeConstraintsV2" in data:
@@ -372,4 +378,3 @@ def register(app: func.FunctionApp):
             )
 
             return func.HttpResponse(f"Server error: {str(e)}", status_code=500)
-            

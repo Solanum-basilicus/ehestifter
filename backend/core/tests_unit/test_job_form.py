@@ -49,6 +49,21 @@ def test_job_form_keeps_explicit_empty_location_arrays():
         for_update=True,
     )
 
-    assert result["locations"] == []
+    assert "locations" not in result
     assert result["locationsV2"] == []
     assert result["workTimeConstraintsV2"] == []
+
+
+def test_job_form_drops_legacy_locations_on_create_and_update():
+    for for_update in (False, True):
+        result = clean_job_payload(
+            {"locations": [{"countryName": "Germany", "cityName": "Berlin"}]},
+            for_update=for_update,
+        )
+        assert "locations" not in result
+
+
+def test_job_form_keeps_invalid_v2_input_for_jobs_validation():
+    for value in (None, "not-a-list", ["not-an-object"], [{"kind": [], "locationId": 123}]):
+        result = clean_job_payload({"locationsV2": value}, for_update=True)
+        assert result["locationsV2"] == value

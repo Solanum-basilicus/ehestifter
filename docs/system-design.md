@@ -1126,6 +1126,14 @@ Important template composition:
 - create/edit uses:
   - `backend/core/templates/jobs/_job_form.html`
 
+Manual job create/edit uses the same canonical `LocationPicker` and shared
+picker styles as Discovery Preferences. The form sends only `locationsV2`
+identities. Core resolves edit labels through Jobs lookup, keeps the stored
+identities if lookup fails, and does not derive selections from v1 text. An
+empty selection sends `locationsV2: []`. Work arrangement remains independent
+from geography. Jobs validates canonical IDs before create/update writes.
+The detailed behavior and legacy-backfill limit are in `docs/locations-v2.md`.
+
 ### 11.3 Job list behavior
 
 `index.html` is the main interaction surface.

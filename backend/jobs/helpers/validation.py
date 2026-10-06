@@ -65,14 +65,14 @@ def validate_job_payload(data: dict, for_update=False) -> (bool, str):
     # Locations v2 validation. Canonical ID existence is checked against the
     # local catalog in the persistence layer.
     locs_v2 = data.get("locationsV2")
-    if locs_v2 is not None:
+    if "locationsV2" in data:
         if not isinstance(locs_v2, list):
             return False, "locationsV2 must be an array"
         for i, loc in enumerate(locs_v2):
             if not isinstance(loc, dict):
                 return False, f"locationsV2[{i}] must be an object"
             kind = loc.get("kind")
-            if kind not in {"city", "adminRegion", "country", "globalRegion"}:
+            if not isinstance(kind, str) or kind not in {"city", "adminRegion", "country", "globalRegion"}:
                 return False, f"locationsV2[{i}].kind is invalid"
             location_id = loc.get("locationId")
             if not isinstance(location_id, str) or not location_id.strip():

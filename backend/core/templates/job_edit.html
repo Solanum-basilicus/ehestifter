@@ -2,6 +2,7 @@
 
 {% block head_extra %}
 <link href="{{ url_for('static', filename='css/quill.snow.css') }}" rel="stylesheet">
+<link href="{{ url_for('static', filename='css/location-picker.css') }}" rel="stylesheet">
 <style>
   .card { border:1px solid #e5e7eb; border-radius:12px; background:#fff; }
   .btn { padding:8px 12px; border:1px solid #e5e7eb; border-radius:8px; cursor:pointer; background:#f9fafb; }
@@ -21,13 +22,6 @@
   .actions-top { display:flex; gap:8px; margin-bottom:6px; align-items:center; }
   .actions-top a[aria-disabled="true"] { pointer-events:none; opacity:.6; }
 
-  .loc-row { display:grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr) max-content;
-    gap:8px; align-items:center; margin-bottom:8px; }
-  .loc-row input { width:100%; min-width:0; }
-  .loc-row .country, .loc-row .city { min-width:0; }
-  .loc-row button[data-act="del"] { width:28px; height:28px; padding:0;
-    text-align:center; line-height:1; box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center; }
-  .loc-actions { display:flex; gap:8px; }
   .section-subtle { padding:10px; border:1px dashed #e5e7eb; border-radius:8px; background:#fafafa; }
 
   .ql-toolbar.ql-snow { border:1px solid #e5e7eb; border-radius:8px 8px 0 0; }

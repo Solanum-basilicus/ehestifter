@@ -2,6 +2,7 @@
 
 {% block head_extra %}
 <link href="{{ url_for('static', filename='css/quill.snow.css') }}" rel="stylesheet">
+<link href="{{ url_for('static', filename='css/location-picker.css') }}" rel="stylesheet">
 
 <style>
   /* lightweight card + layout */
@@ -73,30 +74,14 @@
   .discovery-input { width:100%; }
   .term-add-row, .range-controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .term-add-row .discovery-input { flex:1; min-width:220px; }
-  .term-chips, .location-picker-selected, .range-list { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px; }
-  .term-chip, .location-chip, .range-chip {
+  .term-chips, .range-list { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px; }
+  .term-chip, .range-chip {
     display:inline-flex; align-items:center; gap:6px; border:1px solid #d1d5db;
     background:#f9fafb; border-radius:999px; padding:4px 8px; font-size:12px;
   }
-  .term-chip button, .location-chip-remove, .range-chip button {
+  .term-chip button, .range-chip button {
     border:0; background:transparent; color:#6b7280; cursor:pointer; padding:0 2px; font:inherit;
   }
-  .location-chip.is-stale { border-color:#f59e0b; background:#fffbeb; }
-  .location-picker { position:relative; }
-  .location-picker-input-row { position:relative; }
-  .location-picker-menu {
-    position:absolute; z-index:50; top:100%; left:0; right:0; max-height:280px; overflow:auto;
-    background:#fff; border:1px solid #d1d5db; border-radius:8px; box-shadow:0 8px 20px rgba(15,23,42,.12);
-    margin-top:4px;
-  }
-  .location-picker-option { padding:9px 10px; cursor:pointer; border-bottom:1px solid #f3f4f6; }
-  .location-picker-option:last-child { border-bottom:0; }
-  .location-picker-option:hover, .location-picker-option.is-active { background:#f3f4f6; }
-  .location-picker-option-main { display:flex; align-items:center; justify-content:space-between; gap:12px; }
-  .location-kind { color:#6b7280; font-size:11px; white-space:nowrap; }
-  .location-picker-empty { padding:10px; color:#6b7280; font-size:12px; }
-  .location-picker-hint { margin-top:4px; }
-  .location-picker.is-disabled { opacity:.65; }
   .arrangements { display:grid; gap:10px; }
   .arrangement { border:1px solid #e5e7eb; border-radius:10px; padding:10px 12px; }
   .arrangement-toggle { display:flex; gap:8px; align-items:center; font-weight:600; }

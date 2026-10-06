@@ -248,6 +248,31 @@ Search ranking can use population to order otherwise comparable same-name city
 results. Population is presentation metadata only. It must never silently
 change a selected canonical identity or resolve an ambiguous ingestion claim.
 
+## Manual Web create and edit
+
+The manual Web job form uses the same canonical place picker as Discovery
+Preferences. It supports cities, administrative regions, countries, and global
+regions. Each selection is an alternative job location. The form sends only
+`locationsV2`, with `{kind, locationId}` for each selection. It sends an empty
+array when no location is selected, including when the user removes the last
+location. Core does not forward legacy `locations` from this form.
+
+On edit, Core loads stored v2 identities and resolves display data through
+Jobs lookup. If lookup fails or an identity is missing from the selector index,
+the picker keeps that identity and displays its ID with a warning. Jobs remains
+responsible for identity validation at save. Display labels are not write data.
+Canonical ID validation runs before create or update writes. Unknown IDs return
+HTTP 400.
+
+A job without v2 geography has an empty picker. The form does not derive v2
+identities from legacy country or city text. The work-arrangement field remains
+independent from geography. Editing v2 locations does not change old v1 rows.
+
+The legacy backfill skips jobs with native v2 rows. If all v2 rows of an old
+job are removed, a later backfill can use that job's remaining v1 rows again.
+Do not use the legacy backfill to restore manual location edits after this
+cutover.
+
 ## Open Opportunities eligibility contract
 
 Jobs exposes `POST /jobs/open/query`. Core exposes `POST /ui/jobs/open/query`. Core passes the authenticated user ID in the normal Jobs header. The request body carries normalized eligibility criteria. Jobs does not call Users and does not read Users storage.

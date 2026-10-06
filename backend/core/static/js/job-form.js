@@ -1,7 +1,6 @@
 // Shared init for create/edit pages
-// Requires: quill.min.js, job-url-helpers.js, geo-dict.js, and a bootstrap window.__JOB_FORM_CTX__
+// Requires: quill.min.js, job-url-helpers.js, location-picker.js, and window.__JOB_FORM_CTX__
 // Exports: window.initJobForm(opts)
-import { loadGeoDict, countryLookup, prioritizedCountries, citiesByCountry } from "/static/js/geo-dict.js";
 
 (function(){
   const DESC_LIMIT = 20000;
@@ -43,109 +42,7 @@ import { loadGeoDict, countryLookup, prioritizedCountries, citiesByCountry } fro
     }
   }
 
-  function cityDatalistId(cc) { return `cities_${cc}`; }
-
-  function attachLocationsEditor(locHost) {
-    function addLocRow(init = {}) {
-      const row = document.createElement('div');
-      row.className = 'loc-row';
-      row.innerHTML = `
-        <input type="text" class="country" placeholder="Country" list="countriesList" value="${init.countryName || ''}">
-        <input type="text" class="city" placeholder="City (optional)" value="${init.cityName || ''}" list="">
-        <button type="button" class="btn" data-act="del" aria-label="Remove location" title="Remove">✕</button>
-      `;
-      row.querySelector('[data-act="del"]').addEventListener('click', () => row.remove());
-      const countryInput = row.querySelector('.country');
-      const cityInput = row.querySelector('.city');
-
-      const ccInit = (init.countryCode || '').toUpperCase();
-      const countryObj =
-        (ccInit && countryLookup(ccInit)) ||
-        (init.countryName && countryLookup(init.countryName)) || null;
-
-      function refreshCities() {
-        const m = countryLookup(countryInput.value);
-        const currentCC = (m?.code || '').toUpperCase();
-        const listId = cityDatalistId(currentCC || 'NONE');
-        let listEl = document.getElementById(listId);
-        if (!listEl) {
-          listEl = document.createElement('datalist');
-          listEl.id = listId;
-          document.body.appendChild(listEl);
-        }
-        const cities = citiesByCountry(currentCC);
-        listEl.innerHTML = cities.map(c => `<option value="${c}"></option>`).join('');
-        cityInput.setAttribute('list', listId);
-      }
-
-      function setCountryConfirmed(c, { preserveCity = false } = {}) {
-        countryInput.value = c.name;
-        if (!preserveCity) {
-          cityInput.value = '';
-        }
-        refreshCities();
-      }
-
-
-      function clearCountryTransient() {
-        cityInput.value = '';
-        refreshCities();
-      }
-
-      countryInput.addEventListener('input', () => {
-        if (!countryInput.value.trim()) {
-          clearCountryTransient();
-          return;
-        }
-        clearCountryTransient();
-      });
-      countryInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Tab' && !e.shiftKey) {
-          const val = countryInput.value.trim();
-          const exact = countryLookup(val);
-          if (exact) { setCountryConfirmed(exact); return; }
-          const matches = window.countryMatches
-            ? window.countryMatches(val)
-            : prioritizedCountries().filter(x =>
-                x.name.toLowerCase().startsWith(val.toLowerCase()) ||
-                x.code.toLowerCase().startsWith(val.toLowerCase()));
-          if (matches.length === 1) setCountryConfirmed(matches[0]);
-        }
-      });
-      function confirmOnResolve() {
-        const m = countryLookup(countryInput.value);
-        if (m) setCountryConfirmed(m);
-        else clearCountryTransient();
-      }
-      countryInput.addEventListener('change', confirmOnResolve);
-      countryInput.addEventListener('blur', confirmOnResolve);
-
-      if (countryObj) setCountryConfirmed(countryObj, { preserveCity: !!init.cityName });
-      else if (ccInit) refreshCities();
-
-      locHost.appendChild(row);
-      return row; // allow callers to focus fields
-    }
-
-    function readLocations() {
-      const rows = [...locHost.querySelectorAll('.loc-row')];
-      const out = [];
-      for (const r of rows) {
-        const countryDisplay = r.querySelector('.country').value.trim();
-        const city = r.querySelector('.city').value.trim();
-        const cm = countryLookup(countryDisplay);
-        const cn = cm ? cm.name : (countryDisplay || '');
-        const code = cm ? cm.code : null;
-        if (!cn && !code && !city) continue;
-        out.push({ countryName: cn || '', countryCode: code || null, cityName: city || null });
-      }
-      return out;
-    }
-
-    return { addLocRow, readLocations };
-  }
-
-  async function hydrateFromInitial(initial, quill, locApi) {
+  function hydrateFromInitial(initial, quill, locApi) {
     // text inputs
     const assign = (id, v) => { if (v) el(id).value = v; };
     assign('url', initial.url);
@@ -179,13 +76,12 @@ import { loadGeoDict, countryLookup, prioritizedCountries, citiesByCountry } fro
       quill.root.innerHTML = initial.description;
     }
 
-    // locations
-    const locs = Array.isArray(initial.locations) ? initial.locations : [];
-    if (locs.length) {
-      // clear the default empty row
-      document.querySelectorAll('#locations .loc-row').forEach(n => n.remove());
-      for (const L of locs) locApi.addLocRow(L);
-    }
+    const details = new Map(
+      (initial.locationDetails || [])
+        .filter(item => item && typeof item === 'object')
+        .map(item => [window.locationSelectorKey(item), item])
+    );
+    locApi.setValue(initial.locationsV2 || [], details);
   }
 
   async function initJobForm(opts) {
@@ -234,17 +130,24 @@ import { loadGeoDict, countryLookup, prioritizedCountries, citiesByCountry } fro
       });
     }
 
-    // Geo dict bootstrap
-    const countriesList = document.createElement('datalist');
-    countriesList.id = 'countriesList';
-    document.body.appendChild(countriesList);
-    await loadGeoDict();
-    countriesList.innerHTML = prioritizedCountries().map(c => `<option value="${c.name}"></option>`).join('');
+    const locationNotice = el('locationNotice');
+    const locApi = new window.LocationPicker(el('locations'), {
+      onChange: updateLocationNotice,
+    });
 
-    const locHost = el('locations');
-    const locApi = attachLocationsEditor(locHost);
-    // at least one row
-    locApi.addLocRow();
+    function updateLocationNotice() {
+      const items = locApi.getItems();
+      let message = '';
+      if (items.some(item => item.stale)) {
+        message = ctx.initial?.locationLookupFailed
+          ? 'Location labels could not be loaded. Stored location IDs are kept.'
+          : 'Some stored locations are not in the current catalog. Their IDs are kept.';
+      } else if (mode === 'edit' && !items.length) {
+        message = 'No canonical location is stored for this job.';
+      }
+      locationNotice.textContent = message;
+      locationNotice.hidden = !message;
+    }
 
     // Nuggets
     document.getElementById('foundOnNuggets')?.addEventListener('click', (e) => {
@@ -365,17 +268,20 @@ import { loadGeoDict, countryLookup, prioritizedCountries, citiesByCountry } fro
       }
     });
 
-    // hydrate initial (edit) after Quill + geo ready
+    // Load edit values after the editors are ready.
     const initial = ctx.initial || {};
     if (mode === 'edit') {
       // hydrate even if id is missing, as long as we have *any* fields
-      const hasSomething = initial && (initial.id || initial.url || initial.title || initial.hiringCompanyName || (initial.locations||[]).length || initial.descriptionHtml);
+      const hasSomething = initial && (initial.id || initial.url || initial.title || initial.hiringCompanyName || (initial.locationsV2||[]).length || initial.descriptionHtml);
       if (hasSomething) {
-        await hydrateFromInitial(initial, quill, locApi);
+        hydrateFromInitial(initial, quill, locApi);
       }
     }
 
+    updateLocationNotice();
+
     function setSubmitting(on) {
+      locApi.setDisabled(on);
       if (on) {
         btnSubmit.setAttribute('disabled','true');
         btnSubmit.textContent = (mode === 'edit') ? 'Saving…' : 'Creating…';
@@ -429,10 +335,7 @@ import { loadGeoDict, countryLookup, prioritizedCountries, citiesByCountry } fro
         atsVendor: atsVendorInput.value.trim() || undefined,
         remoteType: normRemote(document.querySelector('input[name="remoteType"]:checked')?.value || 'Unknown'),
         description,
-        locations: (function(){
-          const L = locApi.readLocations();
-          return L.length ? L : undefined;
-        })()
+        locationsV2: locApi.getValue()
       };
       if (!disableAts) {
         body.provider = providerInput.value.trim() || undefined;
@@ -463,45 +366,6 @@ import { loadGeoDict, countryLookup, prioritizedCountries, citiesByCountry } fro
         setSubmitting(false);
       }
     }
-
-    // -- Activate "+ More countries" / "+ More cities" (keep defaults elsewhere) --
-    const btnAddCountry = el('btnAddCountry');
-    const btnAddCity = el('btnAddCity');
-    function enableBtn(b) {
-      if (!b) return;
-      b.removeAttribute('disabled');
-      b.classList.remove('disabled');
-      // override global disabled-by-default safely, only for these two
-      b.style.pointerEvents = 'auto';
-      b.style.cursor = 'pointer';
-      b.style.opacity = '';
-    }
-    enableBtn(btnAddCountry);
-    enableBtn(btnAddCity);
-
-    if (btnAddCountry) {
-      btnAddCountry.addEventListener('click', (e) => {
-        e.preventDefault();
-        const row = locApi.addLocRow();
-        row.querySelector('.country')?.focus();
-      });
-    }
-    if (btnAddCity) {
-      btnAddCity.addEventListener('click', (e) => {
-        e.preventDefault();
-        // Prefer last valid country so user can add multiple cities in same country.
-        const rows = [...locHost.querySelectorAll('.loc-row')];
-        let init = {};
-        for (let i = rows.length - 1; i >= 0; i--) {
-          const cn = rows[i].querySelector('.country')?.value?.trim() || '';
-          const cm = countryLookup(cn);
-          if (cm) { init = { countryName: cm.name, countryCode: cm.code }; break; }
-        }
-        const row = locApi.addLocRow(init);
-        row.querySelector('.city')?.focus();
-      });
-    }    
-
 
     document.getElementById('btnSubmit').addEventListener('click', (e) => {
       e.preventDefault();

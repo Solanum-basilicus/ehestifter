@@ -78,6 +78,15 @@ def register(app: func.FunctionApp):
             if not is_valid:
                 return func.HttpResponse(error, status_code=400)
 
+            catalog = None
+            canonical_v2 = []
+            if "locationsV2" in data:
+                catalog = load_locations_v2_catalog()
+                try:
+                    canonical_v2 = canonicalize_locations_v2(catalog, data["locationsV2"])
+                except ValueError as exc:
+                    return func.HttpResponse(str(exc), status_code=400)
+
             conn = get_connection()
             cur = conn.cursor()
             actor_type, actor_id = detect_actor(req)
@@ -140,8 +149,6 @@ def register(app: func.FunctionApp):
             locs_v2_changed_flag = False
             new_locs_v2 = []
             if "locationsV2" in data:
-                catalog = load_locations_v2_catalog()
-                canonical_v2 = canonicalize_locations_v2(catalog, data["locationsV2"])
                 new_locs_v2 = [
                     {
                         "kind": row["kind"],
