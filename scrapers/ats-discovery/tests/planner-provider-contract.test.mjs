@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { buildTargetPlan } from '../src/targets/planner.mjs';
+import greenhouse from '../src/providers/greenhouse.mjs';
 import icims from '../src/providers/icims.mjs';
 
 function policy() {
@@ -84,6 +85,29 @@ test('provider tenant failure becomes a planning rejection, not a malformed targ
   assert.equal(result.runtimeTargets.length, 0);
   assert.equal(result.planningRejections.length, 1);
   assert.match(result.planningRejections[0].details.error, /could not derive a tenant/);
+});
+
+test('planner gets Greenhouse tenant from the board API for a corporate careers URL', () => {
+  const result = buildTargetPlan({
+    portalConfig: {
+      tracked_companies: [{
+        name: 'Workato',
+        provider: 'greenhouse',
+        careers_url: 'https://www.workato.com/careers',
+        api: 'https://boards-api.greenhouse.io/v1/boards/workato/jobs',
+      }],
+    },
+    companyOverrides: { schema_version: 1, priority: { ashby: [] }, disabled: { ashby: [] } },
+    discoveryPolicy: policy(),
+    tenantState: state(),
+    providers: new Map([['greenhouse', greenhouse]]),
+    mode: 'preflight',
+    generatedAt: new Date('2026-10-06T00:00:00Z'),
+  });
+
+  assert.equal(result.runtimeTargets.length, 1);
+  assert.equal(result.runtimeTargets[0].tenant, 'workato');
+  assert.equal(result.planningRejections.length, 0);
 });
 
 test('planner annotates SuccessFactors RMK and CSB health partitions independently', () => {

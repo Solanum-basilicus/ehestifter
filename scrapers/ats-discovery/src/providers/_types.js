@@ -22,7 +22,9 @@
  *                                detail enrichment and diagnostics; Jobs owns
  *                                the canonical persisted identity.
  * @property {string} title    Required, non-empty after trim.
- * @property {string} url      Required, absolute public job URL — used as the dedup key.
+ * @property {string} url      Required, absolute public job URL. It is the default Jobs
+ *                             identity-preflight input when the provider does not supply
+ *                             an explicit provider identity.
  * @property {string} [applyUrl] Optional absolute application URL when it differs from `url`.
  * @property {string} company  May be empty when the source can't expose it
  *                             at the list-page level; populated downstream.

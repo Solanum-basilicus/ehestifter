@@ -1656,6 +1656,9 @@ BambooHR catalog identity is the short tenant slug. The iCIMS Common Crawl
 source contains short identifiers that its upstream scraper maps to
 `careers-<slug>.icims.com`; ATS Discovery stores the full host because iCIMS
 job IDs are tenant-local and the provider contract uses the full portal host.
+Greenhouse catalog identity is the board tenant slug. Greenhouse job identity
+uses that tenant with the provider-native job ID, including when the public job
+URL is hosted on a corporate site.
 Paylocity catalog identity is the board UUID. The upstream Paylocity job-count
 field is not part of the Ehestifter catalog contract.
 
@@ -1763,7 +1766,7 @@ timeout, response-bound, and parser/schema failures remain errors. Canaries do
 not count unavailable samples as parser failures; an all-unavailable sample set
 is inconclusive rather than degraded.
 
-Personio normally supplies descriptions in its XML list feed. If that feed omits a description for a new job, ATS Discovery can fetch the same-origin public `/job/{id}` page after validating the provider-native ID. Greenhouse list acquisition also preserves its native job ID for detail lookup. This does not change the persisted Greenhouse canonical-identity contract; identity migration remains separate work.
+Personio normally supplies descriptions in its XML list feed. If that feed omits a description for a new job, ATS Discovery can fetch the same-origin public `/job/{id}` page after validating the provider-native ID. Greenhouse list acquisition preserves its native job ID for detail lookup and canonical identity. Greenhouse preflight uses explicit `greenhouse / <board-tenant> / <native-job-id>` identity and does not perform a legacy URL-identity lookup.
 
 Paylocity detail enrichment first uses `JobPosting` JSON-LD from the validated public detail URL. Some Paylocity pages omit JSON-LD but server-render the complete job content. For those pages, the same response can be parsed through a strict HTML fallback that requires one Description section and a same-origin `/Recruiting/Jobs/Apply/{native-id}` link for the expected job. The fallback makes no second provider request and does not change Paylocity canonical identity.
 
@@ -1773,6 +1776,7 @@ Jobs remains authoritative for canonical identity and persistence:
 
 ```text
 GET /jobs/exists?url=<origin-url>
+GET /jobs/exists?provider=<provider>&providerTenant=<tenant>&externalId=<id>
 POST /jobs
 ```
 
@@ -2033,7 +2037,9 @@ Users discovery input:
 - CV text and blob paths do not cross the boundary.
 
 Jobs identity and persistence:
-- `GET /jobs/exists?url=<origin-url>` is authoritative for canonical identity preflight;
+- `GET /jobs/exists` is authoritative for canonical identity preflight; ATS
+  Discovery sends either `url=<origin-url>` or the complete explicit
+  `provider`, `providerTenant`, and `externalId` identity;
 - `POST /jobs` creates/reconciles the shared job;
 - ATS imports send native `locationsV2` geography and independent `workTimeConstraintsV2` constraints, and do not send legacy `locations`;
 - provider/raw location observations stay in ATS normalization and run artifacts even when their internal field is named `locations`;

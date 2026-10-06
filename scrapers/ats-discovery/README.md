@@ -548,7 +548,9 @@ Use this first after adding a company or changing filters/provider policy.
 
 What it adds on top of the provider scan:
 
-- calls Jobs `/jobs/exists` for canonical identity and duplicate status;
+- calls Jobs `/jobs/exists` for canonical identity and duplicate status, using
+  URL identity by default or explicit provider identity when the adapter marks
+  it as authoritative; Greenhouse uses its board tenant and native job ID;
 - normalizes listing geography and ranks bounded missing-detail work so likely
   geography matches run first, unknown geography runs next, and apparent
   mismatches run last;
