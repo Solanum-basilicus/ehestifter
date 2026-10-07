@@ -102,6 +102,12 @@ HTML response only after it finds one Description section and an apply link for
 the expected native job ID. The fallback does not make an additional request.
 Jobs remains the authority for canonical job identity and persistence.
 
+Lever list acquisition uses the public Postings API `skip`/`limit` pagination
+instead of increasing the shared JSON response-size ceiling. Pages for one
+tenant are fetched sequentially and respect the configured Lever minimum request
+interval. Health-only targets stop after the first page; explicit probes can also bound
+pages through the existing `maxPages` context.
+
 SuccessFactors has independent health partitions:
 
 ```text
@@ -484,10 +490,10 @@ make the run degraded. A rate-limit provider breaker uses
 `execution.breaker.cooldown_minutes` key is accepted so old local policy files
 still load, but it no longer controls persisted provider cooldown state.
 
-BambooHR keeps redirect following disabled. If a tenant careers API redirects
-away from the expected tenant API origin, that observation is durable
-tenant-local evidence instead of a provider-wide network failure. This prevents
-a set of moved or retired customer tenants from opening the BambooHR provider
+BambooHR, Paylocity, and Personio keep redirect following disabled. If a tenant
+listing endpoint redirects away from its expected provider origin/feed, that
+observation is durable tenant-local evidence instead of a provider-wide network
+failure. This prevents moved or retired customer tenants from opening a provider
 circuit. The scanner still does not follow the redirect.
 
 Network and timeout provider results retain bounded, sanitized cause diagnostics.
@@ -551,25 +557,30 @@ What it adds on top of the provider scan:
 - calls Jobs `/jobs/exists` for canonical identity and duplicate status, using
   URL identity by default or explicit provider identity when the adapter marks
   it as authoritative; Greenhouse uses its board tenant and native job ID;
-- normalizes listing geography and ranks bounded missing-detail work so likely
-  geography matches run first, unknown geography runs next, and apparent
-  mismatches run last;
-- fetches bounded missing details for Jobs-missing candidates when configured;
+- normalizes listing geography before Jobs preflight; a resolved, single-branch
+  On-Site/Hybrid mismatch with no unresolved evidence can be rejected before
+  detail, while Remote, multi-location, conflicting, and unknown cases continue;
+- ranks remaining bounded missing-detail work so likely geography matches run
+  first, unknown geography runs next, and apparent mismatches run last;
+- fetches bounded missing details for new candidates and for existing Jobs when
+  listing geography is still unknown or mismatched and detail can clarify it;
 - canonicalizes provider and description-derived locations against the Web Core
   geography snapshot;
 - evaluates final location eligibility after detail enrichment;
 - writes preflight/detail/location artifacts.
 
-The preliminary geography pass is an ordering hint only. It does not remove a
-candidate or matched user. Final location eligibility still runs after detail
-acquisition, so description evidence can recover a candidate whose listing
-location was missing, incomplete, or misleading.
+The preliminary geography pass rejects only a narrow deterministic case:
+non-Remote, one canonical location branch, no unresolved/conflicting evidence,
+and every matched user fails that branch. All other candidates reach final
+location eligibility after detail acquisition, so description evidence can
+recover Remote, multi-location, unknown, or otherwise incomplete listings.
 
 It does **not** create jobs and does not request compatibility.
 
 `detail-results.json` separates an unavailable posting from acquisition or
-parser failure. An unavailable result is a safe listing/detail race: it remains
-visible for diagnosis but does not count as a detail parser error.
+parser failure. Workday and BambooHR stale-detail 404/410 responses are
+unavailable observations. An unavailable result is a safe listing/detail race:
+it remains visible for diagnosis but does not count as a detail parser error.
 
 `detail-telemetry.json` records provider-level detail attempts and outcomes,
 including HTTP 429 observations and retries. This is separate from listing
@@ -579,9 +590,16 @@ remains healthy.
 Description evidence is secondary. It may refine `Germany` to a confidently
 resolved city such as `Garching`, clarify an unqualified `Remote` scope, or mark
 a provider/description conflict. It never silently erases the provider
-observation. Only decisive incompatible evidence blocks import; unresolved,
-unsupported, and inconclusive conflicts are retained in artifacts and propagate
-to Jobs.
+observation. Canonical location resolution uses the committed Locations v2
+catalog: syntax and country/admin context win first; an otherwise ambiguous
+standalone city can resolve only when one populated-place candidate dominates
+by the configured conservative population rule. Country names can use a unique,
+close catalog-name match for common spelling/name drift, while two-letter
+country/admin code collisions such as `CA` and `DE` remain unresolved without
+context. EU and EEA scopes expand to their country members rather than all of
+geographic Europe. No new hand-maintained famous-city alias list is required. Only decisive incompatible
+evidence blocks import; unresolved, unsupported, and inconclusive conflicts are
+retained in artifacts and propagate to Jobs.
 
 High-confidence candidate geography in a description is extracted independently
 of the active user's geography filter. Examples include an explicit candidate
@@ -847,13 +865,21 @@ the buffers at stage boundaries. This gives a failed container useful evidence
 without keeping the complete rejection corpus in process memory. A successful
 atomic run publication removes the partial directory.
 
-`rejected.json` remains a complete diagnostic artifact, not a sampled log. Its
-candidate shape omits large descriptions and catalog payloads, but keeps the
-identity, title, raw location, provenance, and rejection details needed for
-later analysis. The final writer replays the incremental rejection journal and
+`rejected.json` remains a complete diagnostic artifact, not a sampled log.
+Routine title/age/duplicate rejections use a compact record with provider,
+tenant, provider-native ID, URL, title, and posting date. Geography rejections
+retain the fuller normalized-location/provenance diagnostics needed to inspect
+false negatives. Large descriptions and catalog payloads are not duplicated in
+either shape. The final writer replays the incremental rejection journal and
 writes normal JSON without first rebuilding the full rejection array in memory.
 `user-match-results.json` stores the exact `no_user_match` count and points to
 `rejected.json` instead of duplicating one entry per rejected URL.
+
+`summary.json` includes additive `userGeography` counters for preliminary
+evaluation, candidates rejected before detail, final candidate decisions, and
+user-pair decisions. The older `locationEligible`/`locationUnclear` fields remain
+for compatibility with the legacy location-scope model and are not the primary
+multi-user discovery metric.
 
 A normal run can emit:
 

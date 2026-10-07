@@ -12,6 +12,7 @@ import { htmlToPlainText } from '../text/html.mjs';
 // Handles both explicit `api:` URLs and auto-detection from `careers_url`.
 
 const ALLOWED_LEVER_HOSTS = new Set(['api.lever.co', 'api.eu.lever.co']);
+const LEVER_PAGE_SIZE = 100;
 
 /** @param {unknown} value */
 function nonEmptyString(value) {
@@ -129,9 +130,41 @@ export default {
     const apiUrl = resolveApiUrl(entry);
     if (!apiUrl) throw new Error(`lever: cannot derive API URL for ${entry.name}`);
     assertLeverUrl(apiUrl);
-    const json = await ctx.fetchJson(apiUrl, { redirect: 'error' });
-    if (!Array.isArray(json)) return [];
-    return json.map(j => ({
+
+    const maxPages = entry?.healthOnly === true
+      ? 1
+      : Number.isInteger(ctx?.maxPages) && ctx.maxPages > 0
+        ? ctx.maxPages
+        : Number.POSITIVE_INFINITY;
+    const waitMs = Math.max(0, Number(ctx?.providerMinRequestIntervalMs) || 0);
+    const sleep = typeof ctx?.sleep === 'function'
+      ? ctx.sleep
+      : (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const postings = [];
+    const seen = new Set();
+
+    for (let page = 0; page < maxPages; page += 1) {
+      if (page > 0 && waitMs > 0) await sleep(waitMs);
+      const endpoint = new URL(apiUrl);
+      endpoint.searchParams.set('mode', 'json');
+      endpoint.searchParams.set('skip', String(page * LEVER_PAGE_SIZE));
+      endpoint.searchParams.set('limit', String(LEVER_PAGE_SIZE));
+      const json = await ctx.fetchJson(endpoint.href, { redirect: 'error' });
+      if (!Array.isArray(json)) {
+        if (page === 0) return [];
+        throw new Error('lever: paginated response is not an array');
+      }
+      for (const posting of json) {
+        const key = nonEmptyString(posting?.id) || nonEmptyString(posting?.hostedUrl);
+        if (key && seen.has(key)) continue;
+        if (key) seen.add(key);
+        postings.push(posting);
+      }
+      if (json.length < LEVER_PAGE_SIZE) break;
+    }
+
+    return postings.map(j => ({
+      id: j.id || undefined,
       title: j.text || '',
       url: j.hostedUrl || '',
       company: entry.name,

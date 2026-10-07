@@ -91,7 +91,7 @@ test('Lever fetch performs one list request and returns the complete description
   );
 
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, 'https://api.lever.co/v0/postings/360learning');
+  assert.equal(calls[0].url, 'https://api.lever.co/v0/postings/360learning?mode=json&skip=0&limit=100');
   assert.deepEqual(calls[0].options, { redirect: 'error' });
   assert.equal(jobs.length, 1);
   assert.match(jobs[0].description, /Within 1 month/);
@@ -103,4 +103,75 @@ test('Lever returns an empty description for malformed posting content', () => {
   assert.equal(composeLeverDescription(null), '');
   assert.equal(composeLeverDescription([]), '');
   assert.equal(composeLeverDescription({ lists: [null, 4, 'bad'] }), '');
+});
+
+test('Lever paginates large boards and waits between provider requests', async () => {
+  const calls = [];
+  const waits = [];
+  const firstPage = Array.from({ length: 100 }, (_, index) => ({
+    ...COMPLETE_POSTING,
+    id: `id-${index}`,
+    hostedUrl: `https://jobs.lever.co/acme/id-${index}`,
+  }));
+  const secondPage = [{
+    ...COMPLETE_POSTING,
+    id: 'id-100',
+    hostedUrl: 'https://jobs.lever.co/acme/id-100',
+  }];
+  const jobs = await lever.fetch(
+    { name: 'Acme', careers_url: 'https://jobs.lever.co/acme' },
+    {
+      providerMinRequestIntervalMs: 750,
+      async sleep(ms) { waits.push(ms); },
+      async fetchJson(url) {
+        calls.push(String(url));
+        return calls.length === 1 ? firstPage : secondPage;
+      },
+    },
+  );
+  assert.equal(calls.length, 2);
+  assert.match(calls[0], /skip=0&limit=100/);
+  assert.match(calls[1], /skip=100&limit=100/);
+  assert.deepEqual(waits, [750]);
+  assert.equal(jobs.length, 101);
+  assert.equal(jobs.at(-1).id, 'id-100');
+});
+
+test('Lever health-only targets stop after one page without a truncation error', async () => {
+  let calls = 0;
+  const jobs = await lever.fetch(
+    { name: 'Acme', careers_url: 'https://jobs.lever.co/acme', healthOnly: true },
+    {
+      async fetchJson() {
+        calls += 1;
+        return Array.from({ length: 100 }, (_, index) => ({
+          ...COMPLETE_POSTING,
+          id: `id-${index}`,
+          hostedUrl: `https://jobs.lever.co/acme/id-${index}`,
+        }));
+      },
+    },
+  );
+  assert.equal(calls, 1);
+  assert.equal(jobs.length, 100);
+});
+
+test('Lever maxPages still bounds explicit probes', async () => {
+  let calls = 0;
+  const jobs = await lever.fetch(
+    { name: 'Acme', careers_url: 'https://jobs.lever.co/acme' },
+    {
+      maxPages: 1,
+      async fetchJson() {
+        calls += 1;
+        return Array.from({ length: 100 }, (_, index) => ({
+          ...COMPLETE_POSTING,
+          id: `id-${index}`,
+          hostedUrl: `https://jobs.lever.co/acme/id-${index}`,
+        }));
+      },
+    },
+  );
+  assert.equal(calls, 1);
+  assert.equal(jobs.length, 100);
 });

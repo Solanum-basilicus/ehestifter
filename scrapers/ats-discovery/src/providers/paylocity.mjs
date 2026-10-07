@@ -172,6 +172,22 @@ export function parsePaylocityListing(payload, entry, boardId) {
   return jobs;
 }
 
+
+function paylocityTenantRedirectError(error) {
+  let current = error;
+  const seen = new Set();
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current);
+    if (/unexpected redirect/iu.test(String(current.message ?? ''))) {
+      const redirected = new Error('Paylocity tenant redirected from the expected recruiting origin', { cause: error });
+      redirected.code = 'PAYLOCITY_TENANT_REDIRECTED';
+      return redirected;
+    }
+    current = current.cause;
+  }
+  return null;
+}
+
 export default {
   id: 'paylocity',
   source: sourceMeta,
@@ -195,14 +211,19 @@ export default {
   async fetch(entry, ctx) {
     const board = resolvePaylocityBoard(entry);
     if (!board) throw new Error(`paylocity: cannot resolve board for ${entry.name}`);
-    const html = await ctx.fetchText(board.listingUrl, {
-      redirect: 'error',
-      headers: {
-        accept: 'text/html,application/xhtml+xml',
-        'user-agent': BROWSER_LIKE_USER_AGENT,
-        'accept-language': 'en-US,en;q=0.9',
-      },
-    });
+    let html;
+    try {
+      html = await ctx.fetchText(board.listingUrl, {
+        redirect: 'error',
+        headers: {
+          accept: 'text/html,application/xhtml+xml',
+          'user-agent': BROWSER_LIKE_USER_AGENT,
+          'accept-language': 'en-US,en;q=0.9',
+        },
+      });
+    } catch (error) {
+      throw paylocityTenantRedirectError(error) ?? error;
+    }
     return parsePaylocityListing(extractPaylocityPageData(html), entry, board.boardId);
   },
 };

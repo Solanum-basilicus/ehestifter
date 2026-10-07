@@ -73,6 +73,28 @@ async function writeOptionalJobsArtifact(
   );
 }
 
+
+const ROUTINE_REJECTION_REASONS = new Set([
+  'title_filter',
+  'no_user_match',
+  'posting_age_filter',
+  'duplicate_url_in_run',
+]);
+
+function compactRoutineRejectionCandidate(candidate) {
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+    return candidate ?? null;
+  }
+  return {
+    sourceProvider: candidate.sourceProvider ?? null,
+    sourceTenant: candidate.sourceTenant ?? null,
+    providerNativeId: candidate.provenance?.providerNativeId ?? null,
+    url: candidate.url ?? null,
+    title: candidate.title ?? null,
+    postedAtUtc: candidate.postedAtUtc ?? null,
+  };
+}
+
 export function rejectionCandidateForArtifact(candidate) {
   if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
     return candidate ?? null;
@@ -109,7 +131,9 @@ export function rejectionForArtifact(item) {
   }
   return {
     ...item,
-    candidate: rejectionCandidateForArtifact(item.candidate),
+    candidate: ROUTINE_REJECTION_REASONS.has(item.reason)
+      ? compactRoutineRejectionCandidate(item.candidate)
+      : rejectionCandidateForArtifact(item.candidate),
   };
 }
 

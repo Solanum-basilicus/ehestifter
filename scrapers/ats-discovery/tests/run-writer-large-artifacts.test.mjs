@@ -122,7 +122,8 @@ test('run writer streams compact rejection diagnostics without full descriptions
   assert.equal(artifact.items.length, 1);
   assert.equal(artifact.items[0].candidate.url, 'https://example.test/job/1');
   assert.equal(artifact.items[0].candidate.description, undefined);
-  assert.equal(artifact.items[0].candidate.provenance.catalog, undefined);
+  assert.equal(artifact.items[0].candidate.provenance, undefined);
+  assert.equal(artifact.items[0].candidate.providerNativeId, '1');
   assert.ok(artifactText.length < 5_000);
 });
 
@@ -158,4 +159,44 @@ test('run writer names the artifact that failed and removes staging data', async
 
   const runsPath = path.join(dataPath, 'runs');
   assert.deepEqual(await readdir(runsPath), []);
+});
+
+test('geography rejections keep diagnostic candidate fields while routine rejections stay compact', async (t) => {
+  const dataPath = await temporaryDirectory(t);
+  const common = {
+    schemaVersion: 1,
+    sourceMode: 'catalog',
+    sourceProvider: 'workday',
+    sourceTenant: 'example',
+    sourceCompany: 'Example',
+    url: 'https://example.test/job/1',
+    title: 'Product Manager',
+    hiringCompanyName: 'Example',
+    rawLocation: 'London',
+    remoteType: 'On-Site',
+    postedAtUtc: '2026-10-07T00:00:00.000Z',
+    description: 'large description',
+    descriptionStatus: 'provider-list',
+    provenance: { providerNativeId: '1', targetSequence: 7 },
+  };
+  const runPath = await writeRunArtifacts({
+    dataPath,
+    runId: 'run-shapes',
+    metadata: {},
+    targetPlan: {},
+    providerResults: [],
+    candidates: [],
+    rejected: [
+      { reason: 'no_user_match', candidate: common },
+      { reason: 'no_user_location_match', candidate: common, details: { geography: [{ allowed: false }] } },
+    ],
+    summary: {},
+  });
+  const artifact = JSON.parse(await readFile(path.join(runPath, 'rejected.json'), 'utf8'));
+  assert.equal(artifact.items[0].candidate.providerNativeId, '1');
+  assert.equal(artifact.items[0].candidate.rawLocation, undefined);
+  assert.equal(artifact.items[0].candidate.provenance, undefined);
+  assert.equal(artifact.items[1].candidate.rawLocation, 'London');
+  assert.equal(artifact.items[1].candidate.provenance.providerNativeId, '1');
+  assert.deepEqual(artifact.items[1].details, { geography: [{ allowed: false }] });
 });

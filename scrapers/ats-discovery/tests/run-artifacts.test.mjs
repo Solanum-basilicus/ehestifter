@@ -81,6 +81,18 @@ test('run summary reports scheduling, breaker, sweep, and state metrics', () => 
       candidates: [], rejected: [], providerIds: ['ashby'],
       breakerEvents: [{ provider: 'ashby' }],
       providerResults: [{ status: 'skipped', skipReason: 'provider_circuit_open', errorClass: null, jobsReturned: 0 }],
+      rejectionCounts: { no_user_location_match: 5 },
+      preliminaryDiscoveryEligibility: {
+        counts: { matched: 7, unknown: 2, mismatch: 3 },
+        rejectedBeforeDetail: 3,
+      },
+      finalDiscoveryEligibility: {
+        candidatesEvaluated: 9,
+        candidatesMatched: 6,
+        candidatesRejected: 3,
+        matchedUserPairs: 8,
+        rejectedUserPairs: 4,
+      },
     },
     evaluated: [],
     detailTelemetry: {
@@ -99,6 +111,16 @@ test('run summary reports scheduling, breaker, sweep, and state metrics', () => 
   assert.equal(summary.detailAttempts, 3);
   assert.equal(summary.detailRateLimitedResponses, 1);
   assert.equal(summary.detailProviderStats[0].provider, 'paylocity');
+  assert.deepEqual(summary.userGeography, {
+    preliminary: { matched: 7, unknown: 2, mismatch: 3 },
+    rejectedBeforeDetail: 3,
+    finalCandidatesEvaluated: 9,
+    finalCandidatesMatched: 6,
+    finalCandidatesRejected: 3,
+    finalMatchedUserPairs: 8,
+    finalRejectedUserPairs: 4,
+    totalRejectedCandidates: 5,
+  });
 });
 
 

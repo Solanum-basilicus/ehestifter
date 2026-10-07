@@ -11,17 +11,28 @@ const DEFAULT_PATH = path.join(
   'locations-v2.generated.json.gz',
 );
 
+const EU_COUNTRY_CODES = [
+  'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU',
+  'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE',
+];
+const EEA_COUNTRY_CODES = [...EU_COUNTRY_CODES, 'IS', 'LI', 'NO'];
+const countryClaims = (codes) => codes.map((code) => ['country', `iso3166:${code}`]);
+
 const BROAD_SCOPE_ALIASES = new Map([
   ['world', [['globalRegion', 'm49:001']]],
   ['worldwide', [['globalRegion', 'm49:001']]],
   ['global', [['globalRegion', 'm49:001']]],
   ['globally', [['globalRegion', 'm49:001']]],
   ['europe', [['globalRegion', 'm49:150']]],
-  ['eu', [['globalRegion', 'm49:150']]],
-  ['european union', [['globalRegion', 'm49:150']]],
-  ['eea', [['globalRegion', 'm49:150']]],
-  ['european economic area', [['globalRegion', 'm49:150']]],
+  ['eu', countryClaims(EU_COUNTRY_CODES)],
+  ['european union', countryClaims(EU_COUNTRY_CODES)],
+  ['eea', countryClaims(EEA_COUNTRY_CODES)],
+  ['european economic area', countryClaims(EEA_COUNTRY_CODES)],
   ['north america', [['globalRegion', 'm49:021']]],
+  ['africa', [['globalRegion', 'm49:002']]],
+  ['americas', [['globalRegion', 'm49:019']]],
+  ['latin america', [['globalRegion', 'm49:419']]],
+  ['latam', [['globalRegion', 'm49:419']]],
   ['dach', [
     ['country', 'iso3166:DE'],
     ['country', 'iso3166:AT'],
@@ -52,8 +63,43 @@ function aliases(item) {
   return [item.name, ...(Array.isArray(item.aliases) ? item.aliases : [])];
 }
 
+function cityLookupTerms(item) {
+  const terms = new Set(aliases(item).filter(Boolean));
+  for (const value of [...terms]) {
+    const withoutParenthetical = value.replace(/\s*\([^)]{1,40}\)\s*$/u, '').trim();
+    if (withoutParenthetical.length >= 4 && withoutParenthetical !== value) {
+      terms.add(withoutParenthetical);
+    }
+    const connector = value.match(/^(.{4,60}?)\s+(?:am|an\s+der|an\s+den|upon|on)\s+.{2,60}$/iu);
+    if (connector) terms.add(connector[1].trim());
+  }
+  return [...terms];
+}
+
 function uniqueById(items) {
   return [...new Map(items.map((item) => [item.id, item])).values()];
+}
+
+function editDistance(left, right, maximum) {
+  if (left === right) return 0;
+  if (Math.abs(left.length - right.length) > maximum) return maximum + 1;
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let row = 1; row <= left.length; row += 1) {
+    const current = [row];
+    let rowMinimum = row;
+    for (let column = 1; column <= right.length; column += 1) {
+      const value = Math.min(
+        current[column - 1] + 1,
+        previous[column] + 1,
+        previous[column - 1] + (left[row - 1] === right[column - 1] ? 0 : 1),
+      );
+      current.push(value);
+      rowMinimum = Math.min(rowMinimum, value);
+    }
+    if (rowMinimum > maximum) return maximum + 1;
+    previous = current;
+  }
+  return previous[right.length];
 }
 
 function dominantCity(items) {
@@ -65,7 +111,7 @@ function dominantCity(items) {
   ));
   const first = Number(ranked[0].population ?? 0);
   const second = Number(ranked[1].population ?? 0);
-  if (first >= 50_000 && first >= Math.max(5 * second, second + 40_000)) {
+  if (first >= 50_000 && first >= 2 * second && first - second >= 50_000) {
     return ranked[0];
   }
   return null;
@@ -125,7 +171,7 @@ export function createLocationsV2Catalog(data) {
     }
   }
   for (const item of data.cities ?? []) {
-    for (const term of aliases(item)) {
+    for (const term of cityLookupTerms(item)) {
       const termKey = lookupKey(term);
       pushIndex(cityByCountryName, `${item.countryCode}\u0000${termKey}`, item);
       pushIndex(cityByName, termKey, item);
@@ -143,6 +189,28 @@ export function createLocationsV2Catalog(data) {
 
   function resolveCountry(value) {
     return countryByName.get(lookupKey(value)) ?? null;
+  }
+
+  function resolveCountryApproximate(value) {
+    const key = lookupKey(value);
+    if (key.length < 5 || !/^[\p{L} ]+$/u.test(key)) return null;
+    const exact = countryByName.get(key);
+    if (exact) return exact;
+    const maximum = key.length >= 6 ? 2 : 1;
+    const matches = [];
+    for (const [candidateKey, country] of countryByName) {
+      if (candidateKey.length < 5 || !/^[\p{L} ]+$/u.test(candidateKey)) continue;
+      const distance = editDistance(key, candidateKey, maximum);
+      if (distance <= maximum) matches.push({ country, distance });
+    }
+    if (matches.length === 0) return null;
+    matches.sort((left, right) => left.distance - right.distance || left.country.countryCode.localeCompare(right.country.countryCode));
+    const bestDistance = matches[0].distance;
+    const best = uniqueById(matches.filter((item) => item.distance === bestDistance).map((item) => item.country));
+    if (best.length !== 1) return null;
+    const secondDistance = matches.find((item) => item.country.id !== best[0].id)?.distance ?? Number.POSITIVE_INFINITY;
+    if (secondDistance <= bestDistance + 1) return null;
+    return best[0];
   }
 
   function resolveAdminRegion(value, { countryCode = null, allowAmbiguous = false } = {}) {
@@ -213,7 +281,11 @@ export function createLocationsV2Catalog(data) {
 
   function canonicalFromLegacy(location) {
     if (!location || typeof location !== 'object') return null;
-    const country = resolveCountry(location.countryCode) ?? resolveCountry(location.countryName);
+    const country = resolveCountry(location.countryCode)
+      ?? resolveCountry(location.countryName)
+      ?? (!cleanText(location.cityName) && !cleanText(location.region)
+        ? resolveCountryApproximate(location.countryName)
+        : null);
     if (!country) return null;
     const regionText = cleanText(location.region);
     const adminRegion = regionText
@@ -255,6 +327,7 @@ export function createLocationsV2Catalog(data) {
     get,
     getById,
     resolveCountry,
+    resolveCountryApproximate,
     resolveAdminRegion,
     findAdminRegionMentions,
     resolveCity,

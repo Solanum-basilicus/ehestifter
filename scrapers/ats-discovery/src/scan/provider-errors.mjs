@@ -35,6 +35,8 @@ export function classifyProviderError(error) {
   if (codes.includes('WORKDAY_TENANT_INVALID')) return 'workday_tenant_invalid';
   if (codes.includes('WORKDAY_TENANT_RESTRICTED')) return 'workday_tenant_restricted';
   if (codes.includes('BAMBOOHR_TENANT_REDIRECTED')) return 'bamboohr_tenant_redirected';
+  if (codes.includes('PAYLOCITY_TENANT_REDIRECTED')) return 'paylocity_tenant_redirected';
+  if (codes.includes('PERSONIO_TENANT_REDIRECTED')) return 'personio_tenant_redirected';
   if (codes.includes('WORKDAY_REQUEST_REJECTED')) return 'provider_schema';
   if (codes.includes('ICIMS_WAF_CAPTCHA')) return 'waf_captcha';
   if (codes.includes('ICIMS_JIBE_QUERY_REJECTED')) return 'provider_schema';
@@ -165,6 +167,8 @@ export function isDurableProviderResult(result) {
     'workday_tenant_invalid',
     'workday_tenant_restricted',
     'bamboohr_tenant_redirected',
+    'paylocity_tenant_redirected',
+    'personio_tenant_redirected',
   ].includes(result?.errorClass)) return true;
   return result?.errorClass === 'http_4xx'
     && [404, 410].includes(result.httpStatus);

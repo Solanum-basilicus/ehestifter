@@ -81,3 +81,14 @@ test('Personio parser deduplicates repeated position ids', () => {
   assert.equal(jobs.length, 1);
   assert.equal(jobs[0].title, 'PM');
 });
+
+test('Personio blocked redirect is a durable tenant-local error', async () => {
+  const cause = new TypeError('fetch failed', { cause: new Error('unexpected redirect') });
+  await assert.rejects(
+    personio.fetch(
+      { name: 'Acme', careers_url: 'https://acme.jobs.personio.com' },
+      { async fetchText() { throw cause; } },
+    ),
+    (error) => error.code === 'PERSONIO_TENANT_REDIRECTED',
+  );
+});

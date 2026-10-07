@@ -316,3 +316,17 @@ test('bounded Workday canary pagination does not log a truncation warning', asyn
     console.error = originalError;
   }
 });
+
+test('provider redirect codes are durable tenant-local results', () => {
+  for (const [code, errorClass] of [
+    ['BAMBOOHR_TENANT_REDIRECTED', 'bamboohr_tenant_redirected'],
+    ['PAYLOCITY_TENANT_REDIRECTED', 'paylocity_tenant_redirected'],
+    ['PERSONIO_TENANT_REDIRECTED', 'personio_tenant_redirected'],
+  ]) {
+    const error = new Error('redirected');
+    error.code = code;
+    const result = { status: 'error', errorClass: classifyProviderError(error), httpStatus: null };
+    assert.equal(result.errorClass, errorClass);
+    assert.equal(isDurableProviderResult(result), true);
+  }
+});

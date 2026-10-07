@@ -94,6 +94,7 @@ function recommendation(observation, providerPolicy) {
     && successRatio >= config.healthySuccessRatio
     && observation.healthLatencyMs.p95 != null
     && observation.healthLatencyMs.p95 <= config.fastP95Ms
+    && observation.healthTransientErrors === 0
     && throughput.bindingConstraint === 'concurrency'
     && execution.concurrency < config.maximumSuggestedConcurrency
   ) {

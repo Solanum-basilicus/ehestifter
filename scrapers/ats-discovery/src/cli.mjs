@@ -19,7 +19,10 @@ import {
   loadRuntimeConfig,
   validateLiveCatalogTargetRequest,
 } from './config.mjs';
-import { enrichCandidateDetails } from './details/fetchers.mjs';
+import {
+  candidateNeedsDetail,
+  enrichCandidateDetails,
+} from './details/fetchers.mjs';
 import { buildDetailTelemetry } from './details/telemetry.mjs';
 import { createEnrichmentClient } from './ehestifter/enrichment-client.mjs';
 import { importCandidates } from './ehestifter/import-jobs.mjs';
@@ -32,6 +35,7 @@ import { geographyRejectionDetails } from './locations/rejection-diagnostics.mjs
 import {
   annotatePreliminaryDiscoveryEligibility,
   applyDiscoveryEligibility,
+  isDefinitePreliminaryGeographyMismatch,
 } from './locations/discovery-eligibility.mjs';
 import { loadProviders } from './providers/_registry.mjs';
 import { makeHttpCtx } from './providers/_http.mjs';
@@ -447,17 +451,40 @@ async function runScan(args) {
         preliminaryLocations,
         discoveryMatcher.users,
       );
-      scanResult.candidates = preliminaryEligibility.candidates;
+      const definiteMismatches = preliminaryEligibility.candidates.filter(
+        isDefinitePreliminaryGeographyMismatch,
+      );
+      const definiteMismatchSet = new Set(definiteMismatches);
+      scanResult.candidates = preliminaryEligibility.candidates.filter(
+        (candidate) => !definiteMismatchSet.has(candidate),
+      );
+      if (definiteMismatches.length > 0) {
+        const preliminaryRejections = definiteMismatches.map((candidate) => ({
+          reason: 'no_user_location_match',
+          candidate,
+          details: geographyRejectionDetails(candidate, { phase: 'preliminary' }),
+        }));
+        scanResult.rejectedCount += preliminaryRejections.length;
+        scanResult.rejectionCounts.no_user_location_match = (
+          scanResult.rejectionCounts.no_user_location_match ?? 0
+        ) + preliminaryRejections.length;
+        runJournal.recordMany(
+          'rejected',
+          preliminaryRejections.map(rejectionForArtifact),
+        );
+      }
       scanResult.preliminaryDiscoveryEligibility = {
         counts: preliminaryEligibility.counts,
         warnings: preliminaryEligibility.warnings,
+        rejectedBeforeDetail: definiteMismatches.length,
       };
       runJournal.recordMany(
         'preliminary-locations',
-        scanResult.candidates.map(locationJournalRecord),
+        preliminaryEligibility.candidates.map(locationJournalRecord),
       );
       await runJournal.checkpoint('preliminary_location_complete', {
         counts: preliminaryEligibility.counts,
+        rejectedBeforeDetail: definiteMismatches.length,
       });
     }
 
@@ -492,14 +519,7 @@ async function runScan(args) {
       && config.scan.description.fetchMissing
     ) {
       failureStage = 'detail_enrichment';
-      const eligibleDetails = preflightResults.filter((candidate) => (
-        candidate.preflight?.status === 'ok'
-        && !candidate.preflight.exists
-        && (
-          typeof candidate.description !== 'string'
-          || candidate.description.trim() === ''
-        )
-      )).length;
+      const eligibleDetails = preflightResults.filter(candidateNeedsDetail).length;
       const detailTotal = Math.min(
         eligibleDetails,
         config.scan.description.maxFetchesPerRun,
@@ -548,6 +568,17 @@ async function runScan(args) {
           discoveryMatcher.users,
         );
         locationResults = eligibilityResult.candidates;
+        const finalGeography = [
+          ...eligibilityResult.candidates,
+          ...eligibilityResult.rejected,
+        ].flatMap((candidate) => candidate.userMatch?.geography ?? []);
+        scanResult.finalDiscoveryEligibility = {
+          candidatesEvaluated: eligibilityResult.candidates.length + eligibilityResult.rejected.length,
+          candidatesMatched: eligibilityResult.candidates.length,
+          candidatesRejected: eligibilityResult.rejected.length,
+          matchedUserPairs: finalGeography.filter((item) => item.allowed === true).length,
+          rejectedUserPairs: finalGeography.filter((item) => item.allowed === false).length,
+        };
         const geographyRejections = eligibilityResult.rejected.map((candidate) => ({
           reason: 'no_user_location_match',
           candidate,

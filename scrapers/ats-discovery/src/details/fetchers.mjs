@@ -238,11 +238,22 @@ async function fetchBambooHRDetails(candidate, context) {
     throw new Error('BambooHR detail URL must match the source tenant and job id');
   }
   const endpoint = new URL(`/careers/${encodeURIComponent(externalId)}/detail`, source.origin);
-  const json = await fetchJsonWithTimeout({
-    fetchImpl: context.fetchImpl,
-    url: endpoint,
-    timeoutMs: context.timeoutMs,
-  });
+  let json;
+  try {
+    json = await fetchJsonWithTimeout({
+      fetchImpl: context.fetchImpl,
+      url: endpoint,
+      timeoutMs: context.timeoutMs,
+    });
+  } catch (error) {
+    if ([404, 410].includes(error?.status)) {
+      throw new DetailUnavailableError(
+        `BambooHR detail endpoint returned ${error.status}`,
+        { responseStatus: error.status },
+      );
+    }
+    throw error;
+  }
   const job = json?.result?.jobOpening;
   if (!job || typeof job !== 'object') {
     throw new Error('BambooHR detail endpoint omitted result.jobOpening');
@@ -1067,6 +1078,16 @@ async function fetchDetails(candidate, context) {
   }
 }
 
+export function candidateNeedsDetail(candidate) {
+  if (candidate?.preflight?.status !== 'ok') return false;
+  const geographyNeedsDetail = ['unknown', 'mismatch'].includes(
+    candidate.preliminaryGeography?.status,
+  );
+  if (candidate.preflight.exists === true) return geographyNeedsDetail;
+  if (candidate.preflight.exists !== false) return false;
+  return typeof candidate.description !== 'string' || candidate.description.trim() === '';
+}
+
 export async function enrichCandidateDetails(
   candidates,
   {
@@ -1094,6 +1115,10 @@ export async function enrichCandidateDetails(
     if (candidate.preflight?.status !== 'ok') {
       return { ...candidate, detail: { status: 'skipped_preflight_error' } };
     }
+    if (candidateNeedsDetail(candidate)) {
+      eligibleIndices.push(index);
+      return candidate;
+    }
     if (candidate.preflight.exists) {
       return { ...candidate, detail: { status: 'skipped_existing' } };
     }
@@ -1107,8 +1132,7 @@ export async function enrichCandidateDetails(
         },
       };
     }
-    eligibleIndices.push(index);
-    return candidate;
+    return { ...candidate, detail: { status: 'skipped_existing' } };
   });
 
   const geographyPriority = { matched: 0, unknown: 1, mismatch: 2 };

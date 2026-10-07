@@ -3,10 +3,13 @@ const MAX_LOCATION_CLAIMS = 25;
 const MAX_UNRESOLVED = 10;
 const MAX_RAW_LENGTH = 160;
 
-export function geographyRejectionDetails(candidate) {
-  const geography = candidate?.userMatch?.geography ?? [];
+export function geographyRejectionDetails(candidate, { phase = 'final' } = {}) {
+  const geography = candidate?.userMatch?.geography
+    ?? candidate?.userMatch?.preliminaryGeography
+    ?? [];
   const locationsV2 = candidate?.locationsV2 ?? [];
   return {
+    phase,
     matchedUserCountBeforeLocation: geography.length,
     matchedUserIdsBeforeLocation: geography
       .slice(0, MAX_USER_DIAGNOSTICS)

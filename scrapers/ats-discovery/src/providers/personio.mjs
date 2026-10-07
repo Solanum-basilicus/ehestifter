@@ -161,6 +161,22 @@ export function parsePersonioXml(xml, companyName, host) {
   return jobs;
 }
 
+
+function personioTenantRedirectError(error) {
+  let current = error;
+  const seen = new Set();
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current);
+    if (/unexpected redirect/iu.test(String(current.message ?? ''))) {
+      const redirected = new Error('Personio tenant redirected from the expected XML feed', { cause: error });
+      redirected.code = 'PERSONIO_TENANT_REDIRECTED';
+      return redirected;
+    }
+    current = current.cause;
+  }
+  return null;
+}
+
 export default {
   id: 'personio',
   source: sourceMeta,
@@ -185,10 +201,15 @@ export default {
   async fetch(entry, ctx) {
     const host = resolveHost(entry);
     if (!host) throw new Error(`personio: cannot resolve feed for ${entry.name}`);
-    const xml = await ctx.fetchText(`https://${host}/xml`, {
-      redirect: 'error',
-      headers: { accept: 'application/xml,text/xml' },
-    });
+    let xml;
+    try {
+      xml = await ctx.fetchText(`https://${host}/xml`, {
+        redirect: 'error',
+        headers: { accept: 'application/xml,text/xml' },
+      });
+    } catch (error) {
+      throw personioTenantRedirectError(error) ?? error;
+    }
     return parsePersonioXml(xml, entry.name, host);
   },
 };

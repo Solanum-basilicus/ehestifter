@@ -222,3 +222,17 @@ test('healthy interval-bound provider does not get a concurrency increase recomm
   assert.equal(ashby.recommendation.suggestedConcurrency, 1);
   assert.match(ashby.recommendation.rationale, /request interval already limits throughput/);
 });
+
+test('a fast sample with transient health failures does not recommend higher concurrency', () => {
+  const observations = buildRateObservations({
+    providerResults: Array.from({ length: 8 }, (_, sequence) => result({
+      sequence,
+      durationMs: 1000,
+      ...(sequence === 0 ? { status: 'error', errorClass: 'network' } : {}),
+    })),
+    policy: policy({ concurrency: 3, interval: 150 }),
+  });
+  const recommendation = observations.providers[0].recommendation;
+  assert.equal(recommendation.action, 'hold');
+  assert.equal(recommendation.suggestedConcurrency, 3);
+});

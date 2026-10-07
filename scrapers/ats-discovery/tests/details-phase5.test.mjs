@@ -829,3 +829,87 @@ test('Personio detail rejects a URL outside the source board without fetching', 
   assert.equal(result.detail.provider, 'personio');
   assert.match(result.detail.error, /provider-native job id/);
 });
+
+test('existing job still fetches detail when preliminary geography is incomplete', async () => {
+  const source = candidate({
+    preflight: { status: 'ok', exists: true, jobId: 'existing-42' },
+    preliminaryGeography: { status: 'unknown' },
+  });
+  let calls = 0;
+  const [result] = await enrichCandidateDetails([source], {
+    concurrency: 1,
+    maxFetches: 1,
+    timeoutMs: 1000,
+    async fetchImpl() {
+      calls += 1;
+      return response({
+        applyUrl: 'https://jobs.smartrecruiters.com/Acme/42/apply',
+        location: { country: 'Germany', city: 'Berlin', remote: true },
+        jobAd: { sections: { jobDescription: { text: '<p>Existing job detail.</p>' } } },
+      });
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.detail.status, 'ok');
+  assert.match(result.description, /Existing job detail/);
+});
+
+test('existing job can fetch detail for incomplete geography even when list description exists', async () => {
+  const source = candidate({
+    description: 'List description is already present.',
+    descriptionStatus: 'provider-list',
+    preflight: { status: 'ok', exists: true, jobId: 'existing-42' },
+    preliminaryGeography: { status: 'unknown' },
+  });
+  let calls = 0;
+  const [result] = await enrichCandidateDetails([source], {
+    concurrency: 1,
+    maxFetches: 1,
+    timeoutMs: 1000,
+    async fetchImpl() {
+      calls += 1;
+      return response({
+        applyUrl: 'https://jobs.smartrecruiters.com/Acme/42/apply',
+        location: { country: 'Germany', city: 'Berlin', remote: true },
+        jobAd: { sections: { jobDescription: { text: '<p>Detailed provider description.</p>' } } },
+      });
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.detail.status, 'ok');
+  assert.equal(result.locations[0]?.cityName, 'Berlin');
+  assert.equal(result.locations[0]?.countryName, 'Germany');
+});
+
+test('existing job skips detail when preliminary geography already matches', async () => {
+  const source = candidate({
+    preflight: { status: 'ok', exists: true, jobId: 'existing-42' },
+    preliminaryGeography: { status: 'matched' },
+  });
+  let calls = 0;
+  const [result] = await enrichCandidateDetails([source], {
+    concurrency: 1,
+    maxFetches: 1,
+    timeoutMs: 1000,
+    async fetchImpl() { calls += 1; return response({}); },
+  });
+  assert.equal(calls, 0);
+  assert.equal(result.detail.status, 'skipped_existing');
+});
+
+test('BambooHR stale detail 404 is unavailable instead of an error', async () => {
+  const source = candidate({
+    sourceProvider: 'bamboohr',
+    sourceTenant: 'acme',
+    url: 'https://acme.bamboohr.com/careers/35',
+    provenance: { providerNativeId: '35', sourceOrigin: 'https://acme.bamboohr.com' },
+  });
+  const [result] = await enrichCandidateDetails([source], {
+    concurrency: 1,
+    maxFetches: 1,
+    timeoutMs: 1000,
+    async fetchImpl() { return response('gone', { status: 404 }); },
+  });
+  assert.equal(result.detail.status, 'unavailable');
+  assert.equal(result.detail.responseStatus, 404);
+});

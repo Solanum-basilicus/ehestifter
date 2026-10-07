@@ -6,6 +6,7 @@ import {
   annotatePreliminaryDiscoveryEligibility,
   applyDiscoveryEligibility,
   evaluateDiscoveryEligibility,
+  isDefinitePreliminaryGeographyMismatch,
 } from '../src/locations/discovery-eligibility.mjs';
 import { getDefaultLocationsV2Catalog } from '../src/locations/locations-v2-catalog.mjs';
 
@@ -144,6 +145,23 @@ test('broad named scopes use Locations v2 identities', () => {
     'm49:150', 'm49:002', 'm49:145',
   ]));
   assert.deepEqual(worldwide.locationsV2, [{ kind: 'globalRegion', locationId: 'm49:001' }]);
+});
+
+test('EU and EEA scopes do not broaden to all of geographic Europe', () => {
+  const [eu, eea] = normalizeCandidateLocations([
+    candidate({ rawLocation: 'EU Remote' }),
+    candidate({ rawLocation: 'EEA Remote' }),
+  ]);
+  const euIds = new Set(eu.locationsV2.map((item) => item.locationId));
+  const eeaIds = new Set(eea.locationsV2.map((item) => item.locationId));
+  assert.equal(euIds.has('iso3166:DE'), true);
+  assert.equal(euIds.has('iso3166:GB'), false);
+  assert.equal(euIds.has('iso3166:CH'), false);
+  assert.equal(euIds.has('m49:150'), false);
+  assert.equal(eeaIds.has('iso3166:NO'), true);
+  assert.equal(eeaIds.has('iso3166:GB'), false);
+  assert.equal(eeaIds.has('iso3166:CH'), false);
+  assert.equal(eeaIds.has('m49:150'), false);
 });
 
 test('negative anywhere evidence does not create a global positive claim', () => {
@@ -454,4 +472,74 @@ test('preliminary discovery geography ranks matches, unknowns, and mismatches wi
   ]);
   assert.deepEqual(result.counts, { matched: 1, unknown: 1, mismatch: 1 });
   assert.deepEqual(result.candidates[2].matchedUserIds, [germanyUser.userId]);
+});
+
+test('population dominance resolves a standalone city only when one catalog candidate clearly dominates', () => {
+  const [hamburg, london, springfield] = normalizeCandidateLocations([
+    candidate({ rawLocation: 'Hamburg', remoteType: 'On-Site' }),
+    candidate({ rawLocation: 'London', remoteType: 'On-Site' }),
+    candidate({ rawLocation: 'Springfield', remoteType: 'On-Site' }),
+  ]);
+  assert.deepEqual(hamburg.locationsV2, [{ kind: 'city', locationId: 'geonames:2911298' }]);
+  assert.deepEqual(london.locationsV2, [{ kind: 'city', locationId: 'geonames:2643743' }]);
+  assert.deepEqual(springfield.locationsV2, []);
+  assert.ok(springfield.locationNormalization.unresolved.length > 0);
+});
+
+test('generic country names and two-letter codes resolve without a curated job-location alias list', () => {
+  const [turkeyName, turkey, texas, canada, germany] = normalizeCandidateLocations([
+    candidate({ rawLocation: 'Turkey, Remote', remoteType: 'Remote' }),
+    candidate({ rawLocation: 'TR', remoteType: 'On-Site' }),
+    candidate({ rawLocation: 'TX', remoteType: 'On-Site' }),
+    candidate({ rawLocation: 'CA', remoteType: 'On-Site' }),
+    candidate({ rawLocation: 'DE', remoteType: 'On-Site' }),
+  ]);
+  assert.deepEqual(turkeyName.locationsV2, [{ kind: 'country', locationId: 'iso3166:TR' }]);
+  assert.deepEqual(turkey.locationsV2, [{ kind: 'country', locationId: 'iso3166:TR' }]);
+  assert.deepEqual(texas.locationsV2, [{ kind: 'adminRegion', locationId: 'geonames:4736286' }]);
+  assert.deepEqual(canada.locationsV2, []);
+  assert.deepEqual(germany.locationsV2, []);
+});
+
+test('safe location suffix cleanup keeps geography and removes non-geographic qualifiers', () => {
+  const [london, paloAlto] = normalizeCandidateLocations([
+    candidate({ rawLocation: 'London, United Kingdom - Deliveroo', remoteType: 'On-Site' }),
+    candidate({ rawLocation: 'Palo Alto, California, United States (or nearby)', remoteType: 'On-Site' }),
+  ]);
+  assert.deepEqual(london.locationsV2, [{ kind: 'city', locationId: 'geonames:2643743' }]);
+  assert.deepEqual(paloAlto.locationsV2, [{ kind: 'city', locationId: 'geonames:5380748' }]);
+});
+
+test('explicit remote region scope is retained without a user location filter', () => {
+  const [europe, latam, africa] = normalizeCandidateLocations([
+    candidate({ rawLocation: 'Remote', description: 'Location: Remote from within Europe.' }),
+    candidate({ rawLocation: 'Remote', description: 'Location: LATAM 100% Remote.' }),
+    candidate({ rawLocation: 'Remote', description: 'Candidates must be located within Africa.' }),
+  ]);
+  assert.deepEqual(europe.locationsV2, [{ kind: 'globalRegion', locationId: 'm49:150' }]);
+  assert.deepEqual(latam.locationsV2, [{ kind: 'globalRegion', locationId: 'm49:419' }]);
+  assert.deepEqual(africa.locationsV2, [{ kind: 'globalRegion', locationId: 'm49:002' }]);
+  assert.deepEqual(europe.locationNormalization.unresolved, []);
+});
+
+test('definite preliminary rejection is limited to resolved non-remote single-branch mismatches', () => {
+  const base = {
+    remoteType: 'On-Site',
+    locationsV2: [{ kind: 'city', locationId: 'geonames:6167865' }],
+    locationNormalization: { consistency: 'consistent', unresolved: [] },
+    preliminaryGeography: { status: 'mismatch' },
+    userMatch: {
+      preliminaryGeography: [{ userId: 'u1', allowed: false, reason: 'no_matching_location_branch' }],
+    },
+  };
+  assert.equal(isDefinitePreliminaryGeographyMismatch(base), true);
+  assert.equal(isDefinitePreliminaryGeographyMismatch({ ...base, remoteType: 'Remote' }), false);
+  assert.equal(isDefinitePreliminaryGeographyMismatch({
+    ...base,
+    locationsV2: [...base.locationsV2, { kind: 'country', locationId: 'iso3166:CA' }],
+  }), false);
+  assert.equal(isDefinitePreliminaryGeographyMismatch({
+    ...base,
+    locationNormalization: { consistency: 'consistent', unresolved: [{ raw: 'unknown' }] },
+  }), false);
 });

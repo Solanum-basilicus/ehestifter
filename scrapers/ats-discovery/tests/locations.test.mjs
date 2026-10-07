@@ -185,7 +185,7 @@ test('provider structured locations are canonicalized instead of trusted verbati
 });
 
 
-test('provider structured location keeps explicit city when dictionary does not know it', () => {
+test('provider structured location can use catalog resolution when the legacy dictionary does not know the city', () => {
   const [result] = normalizeCandidateLocations([
     candidate({
       remoteType: 'Remote',
@@ -204,9 +204,10 @@ test('provider structured location keeps explicit city when dictionary does not 
     cityName: 'Blair',
     region: 'Nebraska',
   }]);
-  assert.ok(result.locationNormalization.unresolved.some(
-    (item) => item.reason === 'city_unresolved_for_country',
-  ));
+  assert.deepEqual(result.locationsV2, [
+    { kind: 'city', locationId: 'geonames:5064236' },
+  ]);
+  assert.equal(result.locationNormalization.unresolved.length, 0);
 });
 
 

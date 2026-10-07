@@ -91,3 +91,14 @@ test('Paylocity fetch reads one public listing page with browser headers', async
   assert.match(calls[0].options.headers['user-agent'], /Mozilla/);
   assert.equal(jobs.length, 1);
 });
+
+test('Paylocity blocked redirect is a durable tenant-local error', async () => {
+  const cause = new TypeError('fetch failed', { cause: new Error('unexpected redirect') });
+  await assert.rejects(
+    paylocity.fetch(
+      { name: 'Acme', careers_url: LISTING },
+      { async fetchText() { throw cause; } },
+    ),
+    (error) => error.code === 'PAYLOCITY_TENANT_REDIRECTED',
+  );
+});

@@ -699,6 +699,17 @@ export function buildRunSummary({
         || item.status === 'error_request',
     ),
 
+    userGeography: {
+      preliminary: scanResult.preliminaryDiscoveryEligibility?.counts ?? null,
+      rejectedBeforeDetail: scanResult.preliminaryDiscoveryEligibility?.rejectedBeforeDetail ?? 0,
+      finalCandidatesEvaluated: scanResult.finalDiscoveryEligibility?.candidatesEvaluated ?? 0,
+      finalCandidatesMatched: scanResult.finalDiscoveryEligibility?.candidatesMatched ?? 0,
+      finalCandidatesRejected: scanResult.finalDiscoveryEligibility?.candidatesRejected ?? 0,
+      finalMatchedUserPairs: scanResult.finalDiscoveryEligibility?.matchedUserPairs ?? 0,
+      finalRejectedUserPairs: scanResult.finalDiscoveryEligibility?.rejectedUserPairs ?? 0,
+      totalRejectedCandidates: rejectionCount(scanResult, 'no_user_location_match'),
+    },
+
     locationProviderStructured: count(
       evaluated,
       (job) => job.locationNormalization?.status === 'provider_structured',

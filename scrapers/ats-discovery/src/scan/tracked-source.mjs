@@ -1,4 +1,5 @@
 import { makeHttpCtx } from '../providers/_http.mjs';
+import { getProviderPolicy } from '../policy/discovery-policy.mjs';
 import {
   buildContentFilter,
   buildLocationFilter,
@@ -323,6 +324,10 @@ export async function runTrackedScan({
       const httpContext = {
         ...httpContextFactory(),
         sinceMs,
+        providerMinRequestIntervalMs: getProviderPolicy(
+          policy,
+          target._provider.id,
+        ).execution.minRequestIntervalMs,
         reportProviderTelemetry(value) {
           if (!value || typeof value !== 'object' || Array.isArray(value)) return;
           telemetry = { ...telemetry, ...value };

@@ -151,6 +151,19 @@ export function annotatePreliminaryDiscoveryEligibility(
   return { candidates: output, warnings, counts };
 }
 
+export function isDefinitePreliminaryGeographyMismatch(candidate) {
+  if (candidate?.preliminaryGeography?.status !== 'mismatch') return false;
+  const arrangement = arrangementKey(candidate?.remoteType);
+  if (!['onSite', 'hybrid'].includes(arrangement)) return false;
+  if (candidate?.locationNormalization?.consistency === 'conflicting') return false;
+  if ((candidate?.locationsV2 ?? []).length !== 1) return false;
+  if ((candidate?.locationNormalization?.unresolved ?? []).length !== 0) return false;
+  const geography = candidate?.userMatch?.preliminaryGeography ?? [];
+  return geography.length > 0 && geography.every((item) => (
+    item.allowed === false && item.reason === 'no_matching_location_branch'
+  ));
+}
+
 export function applyDiscoveryEligibility(
   candidates,
   discoveryUsers,
