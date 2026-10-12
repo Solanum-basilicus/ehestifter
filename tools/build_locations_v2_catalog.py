@@ -17,6 +17,7 @@ import json
 import re
 import sqlite3
 import sys
+import tempfile
 import zipfile
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -659,8 +660,90 @@ def _write_search_index(path: Path, catalog: dict) -> None:
         conn.close()
 
 
+def _read_catalog_for_index(catalog_path: Path, manifest_path: Path) -> dict:
+    """Read the committed catalog and check its manifest before index generation."""
+    with manifest_path.open(encoding="utf-8") as source:
+        manifest = json.load(source)
+    with gzip.open(catalog_path, "rt", encoding="utf-8") as source:
+        catalog = json.load(source)
+
+    if (
+        manifest.get("schemaVersion") != SCHEMA_VERSION
+        or manifest.get("buildVersion") != BUILD_VERSION
+    ):
+        raise ValueError("Locations v2 manifest has an unsupported schema or build version")
+    if catalog.get("schemaVersion") != SCHEMA_VERSION:
+        raise ValueError("Locations v2 catalog has an unsupported schema version")
+    version = manifest.get("catalogVersion")
+    if (
+        not isinstance(version, str)
+        or not version
+        or catalog.get("catalogVersion") != version
+    ):
+        raise ValueError("Locations v2 catalogVersion does not match the manifest")
+    if catalog.get("referenceYear") != manifest.get("referenceYear"):
+        raise ValueError("Locations v2 referenceYear does not match the manifest")
+    counts = manifest.get("counts")
+    if not isinstance(counts, dict):
+        raise ValueError("Locations v2 manifest has no counts")
+    for key in ("regions", "countries", "adminRegions", "cities"):
+        items = catalog.get(key)
+        if not isinstance(items, list) or len(items) != counts.get(key):
+            raise ValueError(f"Locations v2 {key} count does not match the manifest")
+    return catalog
+
+
+def _verify_search_index(path: Path, catalog: dict) -> None:
+    """Check the complete generated index before it can be deployed."""
+    # Read without immutable=1 here. SQLite must inspect the current file.
+    with sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True) as conn:
+        result = conn.execute("PRAGMA integrity_check").fetchone()
+        if result is None or result[0] != "ok":
+            raise ValueError(f"Locations v2 search index failed integrity_check: {result}")
+        version = conn.execute(
+            "SELECT value FROM metadata WHERE key = 'catalogVersion'"
+        ).fetchone()
+        if version is None or version[0] != catalog["catalogVersion"]:
+            raise ValueError(
+                "Locations v2 search index catalogVersion does not match the catalog"
+            )
+        expected_count = sum(
+            len(catalog[key]) for key in ("regions", "countries", "adminRegions", "cities")
+        )
+        actual_count = conn.execute("SELECT COUNT(*) FROM locations").fetchone()[0]
+        if actual_count != expected_count:
+            raise ValueError(
+                "Locations v2 search index location count does not match the catalog"
+            )
+        if conn.execute("SELECT COUNT(*) FROM names").fetchone()[0] < expected_count:
+            raise ValueError("Locations v2 search index is missing search names")
+
+
+def _build_index_from_catalog(
+    catalog_path: Path, manifest_path: Path, index_path: Path
+) -> None:
+    catalog = _read_catalog_for_index(catalog_path, manifest_path)
+    # The temporary file prevents an interrupted build from replacing a good index.
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        prefix=f".{index_path.name}.", suffix=".tmp", dir=index_path.parent, delete=False
+    ) as temporary:
+        temporary_path = Path(temporary.name)
+    try:
+        _write_search_index(temporary_path, catalog)
+        _verify_search_index(temporary_path, catalog)
+        temporary_path.replace(index_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build the Ehestifter Locations v2 catalog")
+    parser.add_argument(
+        "--index-only",
+        action="store_true",
+        help="Build SQLite from the existing catalog and manifest. Do not download sources.",
+    )
     parser.add_argument("--cities500", help="Local GeoNames cities500.zip. Download when omitted.")
     parser.add_argument("--admin1", help="Local GeoNames admin1CodesASCII.txt. Download when omitted.")
     parser.add_argument("--time-zones", help="Local GeoNames timeZones.txt. Download when omitted.")
@@ -671,6 +754,13 @@ def main() -> int:
     parser.add_argument("--manifest-out", default=str(MANIFEST_DEFAULT))
     parser.add_argument("--search-index-out", default=str(SEARCH_INDEX_DEFAULT))
     args = parser.parse_args()
+
+    if args.index_only:
+        _build_index_from_catalog(
+            Path(args.out), Path(args.manifest_out), Path(args.search_index_out)
+        )
+        print(f"Wrote and checked {args.search_index_out}")
+        return 0
 
     if args.reference_year < 2000 or args.reference_year > 2200:
         parser.error("--reference-year must be between 2000 and 2200")
@@ -705,6 +795,7 @@ def main() -> int:
     _write_gzip_json(out_path, catalog)
     search_index_path = Path(args.search_index_out)
     _write_search_index(search_index_path, catalog)
+    _verify_search_index(search_index_path, catalog)
 
     manifest = {
         "schemaVersion": SCHEMA_VERSION,

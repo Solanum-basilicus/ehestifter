@@ -513,8 +513,20 @@ test('generic two-letter codes resolve only when country and admin meanings are 
   assert.deepEqual(germany.locationsV2, []);
 });
 
-test('location fallback does not turn similar text or opaque codes into unrelated geography', () => {
-  const values = ['Lisboa', 'Mailand', 'Makati', 'Bordon', 'Norwalk', '00', 'P6', 'APAC', 'VIC', 'Bade'];
+test('location fallback resolves unique alternate city names in the catalog', () => {
+  const expected = [
+    ['Lisboa', 'geonames:2267057'],
+    ['Mailand', 'geonames:3173435'],
+    ['Makati', 'geonames:1703417'],
+  ];
+  for (const [rawLocation, locationId] of expected) {
+    const [result] = normalizeCandidateLocations([candidate({ rawLocation, remoteType: 'On-Site' })]);
+    assert.deepEqual(result.locationsV2, [{ kind: 'city', locationId }], rawLocation);
+  }
+});
+
+test('location fallback does not turn ambiguous text or opaque codes into unrelated geography', () => {
+  const values = ['Bordon', 'Norwalk', '00', 'P6', 'APAC', 'VIC', 'Bade'];
   const normalized = normalizeCandidateLocations(values.map((rawLocation) => (
     candidate({ rawLocation, remoteType: 'On-Site' })
   )));

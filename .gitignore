@@ -181,3 +181,5 @@ scrapers/ats-discovery/data/runs/*
 scrapers/ats-discovery/data/catalogs/*
 scrapers/ats-discovery/data/state/*
 scrapers/ats-discovery/config/scheduler.local.json
+# Built during the Jobs deployment; do not commit the SQLite search index.
+/backend/jobs/reference/locations-v2.search.sqlite3

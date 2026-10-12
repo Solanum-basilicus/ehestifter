@@ -6,6 +6,9 @@ on:
       - main
     paths:
       - 'backend/jobs/**'
+      - 'tools/build_locations_v2_catalog.py'
+      - 'tools/tests/test_build_locations_v2_catalog.py'
+      - '.github/workflows/deploy_jobs_with_oryx.yml'
   workflow_dispatch:
 
 env:
@@ -23,6 +26,19 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Set up Python for the reference index
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Build and validate the Jobs location index
+        run: python tools/build_locations_v2_catalog.py --index-only
+
+      - name: Run location index tests (no production calls)
+        run: |
+          python -m pip install pytest
+          python -m pytest -q tools/tests/test_build_locations_v2_catalog.py backend/jobs/tests_unit/test_locations_search_index.py
 
       - name: Login to Azure
         uses: azure/login@v2

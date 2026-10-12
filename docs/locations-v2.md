@@ -60,7 +60,7 @@ The builder keeps duplicate place names. It does not collapse same-name cities b
 
 Population is reference metadata. Jobs migration does not use population to guess an ambiguous location. ATS Discovery can use strong population dominance only as a tentative standalone-city inference; that inference cannot by itself cause early geography rejection.
 
-The generated catalog is gzip-compressed reference data. Runtime services must not call GeoNames or UN M49.
+The generated catalog is gzip-compressed reference data. Runtime services must not call GeoNames or UN M49. The compressed catalog and its version manifest stay in Git. The Jobs SQLite selector index does not stay in Git. Build it from the committed catalog before local Jobs tests with `python tools/build_locations_v2_catalog.py --index-only` (run from the repository root). The Jobs GitHub Actions workflow runs the same command and includes the checked SQLite file in the deployed package. Functions do not build the index at startup. See `backend/jobs/reference/README.md` for deployment and recovery steps.
 
 ## Hierarchy
 

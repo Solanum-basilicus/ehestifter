@@ -7,15 +7,16 @@ if str(JOBS_ROOT) not in sys.path:
 
 from helpers.locations_search_index import (
     DEFAULT_INDEX_PATH,
+    _expected_catalog_version,
     LocationsSearchIndex,
     load_locations_search_index,
 )
 
 
-def test_packaged_search_index_matches_catalog_manifest():
+def test_generated_search_index_matches_catalog_manifest():
     index = load_locations_search_index()
 
-    assert index.catalog_version == "1de6612eef2c100cf32d"
+    assert index.catalog_version == _expected_catalog_version()
     assert DEFAULT_INDEX_PATH.is_file()
 
 
@@ -40,7 +41,7 @@ def test_search_index_accepts_exact_country_code():
 
 
 def test_search_index_lookup_returns_missing_separately():
-    index = LocationsSearchIndex(DEFAULT_INDEX_PATH, "1de6612eef2c100cf32d")
+    index = LocationsSearchIndex(DEFAULT_INDEX_PATH, _expected_catalog_version())
 
     items, missing = index.lookup(
         [

@@ -135,3 +135,96 @@ def test_search_index_contains_country_region_relationships(tmp_path):
         conn.close()
 
     assert rows == [("m49:001", 0), ("m49:150", 1), ("m49:155", 0)]
+
+
+def _write_index_only_fixture(tmp_path):
+    import json
+
+    from tools.build_locations_v2_catalog import _write_gzip_json
+
+    catalog = build_catalog(_cities_zip(), ADMIN1, TIMEZONES, M49, LEGACY, 2026)
+    catalog["catalogVersion"] = "test-version"
+    manifest = {
+        "schemaVersion": 2,
+        "buildVersion": 2,
+        "catalogVersion": "test-version",
+        "referenceYear": 2026,
+        "counts": {
+            key: len(catalog[key])
+            for key in ("regions", "countries", "adminRegions", "cities")
+        },
+    }
+    catalog_path = tmp_path / "catalog.json.gz"
+    manifest_path = tmp_path / "catalog.manifest.json"
+    index_path = tmp_path / "index.sqlite3"
+    _write_gzip_json(catalog_path, catalog)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    return catalog_path, manifest_path, index_path, manifest
+
+
+def test_index_only_build_uses_existing_catalog_without_source_downloads(tmp_path, monkeypatch):
+    import sys
+
+    from tools import build_locations_v2_catalog as builder
+
+    catalog_path, manifest_path, index_path, manifest = _write_index_only_fixture(tmp_path)
+
+    def fail_source_download(*_args):
+        raise AssertionError("Index-only build must not read upstream sources")
+
+    monkeypatch.setattr(builder, "_source_bytes", fail_source_download)
+    monkeypatch.setattr(sys, "argv", [
+        "build_locations_v2_catalog.py", "--index-only",
+        "--out", str(catalog_path),
+        "--manifest-out", str(manifest_path),
+        "--search-index-out", str(index_path),
+    ])
+
+    assert builder.main() == 0
+    with sqlite3.connect(index_path) as conn:
+        assert conn.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+        assert conn.execute(
+            "SELECT value FROM metadata WHERE key = 'catalogVersion'"
+        ).fetchone() == ("test-version",)
+        assert conn.execute("SELECT COUNT(*) FROM locations").fetchone()[0] == sum(manifest["counts"].values())
+
+
+def test_index_only_rejects_manifest_version_and_count_mismatches(tmp_path):
+    import json
+
+    import pytest
+
+    from tools.build_locations_v2_catalog import _build_index_from_catalog
+
+    catalog_path, manifest_path, index_path, manifest = _write_index_only_fixture(tmp_path)
+    manifest["catalogVersion"] = "wrong-version"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="catalogVersion"):
+        _build_index_from_catalog(catalog_path, manifest_path, index_path)
+    assert not index_path.exists()
+
+    manifest["catalogVersion"] = "test-version"
+    manifest["counts"]["cities"] += 1
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="cities count"):
+        _build_index_from_catalog(catalog_path, manifest_path, index_path)
+    assert not index_path.exists()
+
+
+def test_index_only_preserves_previous_index_when_build_fails(tmp_path, monkeypatch):
+    import pytest
+
+    from tools import build_locations_v2_catalog as builder
+
+    catalog_path, manifest_path, index_path, _ = _write_index_only_fixture(tmp_path)
+    index_path.write_bytes(b"previous-valid-index")
+
+    def fail_index_write(path, catalog):
+        path.write_bytes(b"incomplete-index")
+        raise RuntimeError("test interrupted build")
+
+    monkeypatch.setattr(builder, "_write_search_index", fail_index_write)
+    with pytest.raises(RuntimeError, match="interrupted build"):
+        builder._build_index_from_catalog(catalog_path, manifest_path, index_path)
+    assert index_path.read_bytes() == b"previous-valid-index"
+    assert sorted(tmp_path.glob(".index.sqlite3.*.tmp")) == []
