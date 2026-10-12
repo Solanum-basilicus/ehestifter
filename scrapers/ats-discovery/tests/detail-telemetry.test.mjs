@@ -33,6 +33,11 @@ test('detail telemetry reports retries and rate limits by provider and phase', (
     attempts: 5,
     rateLimitedResponses: 1,
     errors: 1,
+    unsupported: 0,
+    skippedLimit: 0,
+    skippedExisting: 0,
+    unavailable: 0,
+    alreadyPresent: 0,
   });
   assert.deepEqual(
     telemetry.providers.find((item) => item.provider === 'paylocity'),

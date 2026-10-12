@@ -801,6 +801,9 @@ function markedElementHtml(source, markerRe) {
 
 function successFactorsDescriptionHtml(html) {
   const source = String(html ?? '');
+  const microdata = markedElementHtml(source, /\bitemprop=["']description["']/i);
+  if (microdata) return microdata;
+
   const marker = /(?:class|id)=["'][^"']*(?:jobdescription|job-description|job_description|jobcontent|job-content)[^"']*["']/i;
   const marked = markedElementHtml(source, marker);
   if (marked) return marked;

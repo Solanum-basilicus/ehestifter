@@ -1,19 +1,19 @@
 {
   "schemaVersion": 2,
-  "buildVersion": 1,
-  "catalogVersion": "1de6612eef2c100cf32d",
+  "buildVersion": 2,
+  "catalogVersion": "177ba6bcc06be6876767",
   "referenceYear": 2026,
   "tzdata": "system-2026c",
   "counts": {
     "regions": 30,
     "countries": 248,
     "adminRegions": 3854,
-    "cities": 235678
+    "cities": 235880
   },
   "sources": {
     "geonamesCities500": {
       "source": "https://download.geonames.org/export/dump/cities500.zip",
-      "sha256": "af489027298fff094bc86f7a2451ee4cb825e202206febd70e3e3cb98741c042"
+      "sha256": "0254566d8cda847ffea03f61e959e72713b77f1de641883fe024a703283463c4"
     },
     "geonamesAdmin1": {
       "source": "https://download.geonames.org/export/dump/admin1CodesASCII.txt",

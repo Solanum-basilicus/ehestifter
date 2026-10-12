@@ -1715,7 +1715,7 @@ Provider execution is ready-driven across health partitions. A partition that is
 
 Maintenance cohorts (`recovery`, `dead_reprobe`, and `long_empty`) contain tenants that are expected to include stale or inaccessible endpoints. Their non-rate-limit results remain tenant diagnostics but do not contribute to provider-wide breaker ratios, degraded health ratios, or rate-tuning samples. HTTP 429 remains a provider-wide signal in every cohort. Durable tenant-local failures remain excluded from provider-wide health. BambooHR, Paylocity, and Personio redirects from the expected tenant listing origin/feed are durable tenant-local evidence and are not followed. An already active persisted provider cooldown is a run notice, not a new degradation by itself. If every configured canary in that health partition is healthy, ATS Discovery clears the persisted cooldown for the next run only; targets skipped while the current plan was built are not injected back into that run. Rate-limit provider breakers use the configured rate-limit cooldown; other provider breakers use the shorter transient-failure cooldown. A circuit opened during the current run, a degraded canary, or another current provider-health anomaly still degrades the run.
 
-Provider-supported date constraints are used where useful. Otherwise posting age is filtered locally. Lever list acquisition uses bounded public `skip`/`limit` pagination instead of increasing the shared response-size ceiling; pages for one tenant are sequential and respect the configured provider interval. Health-only Lever targets stop after the first page. Request pacing, concurrency, pagination, detail limits, rate observations, and live catalog target caps remain explicit configuration; autonomous rate tuning is not implemented. Rate recommendations compare the request-interval throughput limit with the concurrency/latency throughput limit before suggesting more concurrency, and a sample with health-significant transient failures does not receive an increase recommendation.
+Provider-supported date constraints are used where useful. Otherwise posting age is filtered locally. Lever list acquisition uses bounded public `skip`/`limit` pagination instead of increasing the shared response-size ceiling; pages for one tenant are sequential and respect the configured provider interval. A failed page is retried once after that interval. If a later page still fails, already acquired pages remain available to candidate processing while the tenant result stays a provider health error with `listing_partial`, completed-page, failed-page, and retained-job telemetry. Health-only Lever targets stop after the first page. Request pacing, concurrency, pagination, detail limits, rate observations, and live catalog target caps remain explicit configuration; autonomous rate tuning is not implemented. Rate recommendations compare the request-interval throughput limit with the concurrency/latency throughput limit before suggesting more concurrency, and a sample with health-significant transient failures does not receive an increase recommendation.
 
 Missing-detail acquisition has separate scheduler state from listing acquisition. It uses the configured provider concurrency and minimum request interval as pacing limits, honors bounded HTTP 429 retry/backoff for that provider, and can run another ready provider while one detail provider waits. Detail throttling does not open or mutate the listing breaker. Per-provider detail attempts, rate limits, retries, and outcomes are emitted as run telemetry.
 
@@ -1769,9 +1769,13 @@ provider structured locations establish multiple countries. Otherwise the
 committed Locations v2 catalog can resolve a standalone populated place only
 when one same-name candidate is strongly population-dominant (at least 2x the
 runner-up, at least 50,000 population, and at least 50,000 population gap).
-Country/admin syntax and context take precedence; country-name drift can use a
-unique close catalog-name match, while colliding bare two-letter codes remain
-unresolved. EU and EEA scopes expand to their country members rather than all
+Such a population-only result is tentative and cannot alone cause preliminary
+rejection. Country/admin syntax and context take precedence. Fuzzy country-name
+matching is not used. Catalog builds retain bounded GeoNames alternate names for
+cities and ISO alpha-3 country codes so common local-language names and codes can
+resolve from reference data. Colliding bare codes remain unresolved without
+context, and opaque digit-bearing standalone admin codes are not promoted to job
+geography. EU and EEA scopes expand to their country members rather than all
 of geographic Europe. This is data-driven and does not add a curated list of
 high-confidence cities. High-confidence French candidate declarations such as
 `basé à <city>` and `basée à <city>` are also recognized.
@@ -1789,6 +1793,16 @@ not count unavailable samples as parser failures; an all-unavailable sample set
 is inconclusive rather than degraded.
 
 Personio normally supplies descriptions in its XML list feed. If that feed omits a description for a new job, ATS Discovery can fetch the same-origin public `/job/{id}` page after validating the provider-native ID. Greenhouse list acquisition preserves its native job ID for detail lookup and canonical identity. Greenhouse preflight uses explicit `greenhouse / <board-tenant> / <native-job-id>` identity and does not perform a legacy URL-identity lookup.
+
+Ashby public board listings already contain description text, provider-native ID,
+and apply URL. ATS Discovery preserves those fields during list acquisition, so
+normal Ashby candidates enter the shared detail stage as `already_present`
+instead of making a second board request only for description text.
+
+SuccessFactors detail enrichment keeps structured JobPosting data first and then
+uses bounded same-response HTML. The HTML fallback recognizes schema.org
+`itemprop="description"` microdata before provider-specific class/id and heading
+patterns, while unavailable-page detection remains separate from parser failure.
 
 Paylocity detail enrichment first uses `JobPosting` JSON-LD from the validated public detail URL. Some Paylocity pages omit JSON-LD but server-render the complete job content. For those pages, the same response can be parsed through a strict HTML fallback that requires one Description section and a same-origin `/Recruiting/Jobs/Apply/{native-id}` link for the expected job. The fallback makes no second provider request and does not change Paylocity canonical identity.
 
@@ -1858,7 +1872,7 @@ data/state/scheduler-state.json logical scheduler slots and outcomes
 data/backups/                  bounded operational backups
 ```
 
-Representative run artifacts include target plans, provider and canary results, candidates/rejections, user matches, Jobs preflight, detail results and provider-level detail telemetry, location/import results, tenant-state changes, rate observations, summary, and scheduler metadata. `rejected.json` remains complete, but routine title/age/duplicate events use compact identity records while geography rejections retain bounded normalized-location and per-user rejection diagnostics so false negatives can be audited without duplicating full candidate bodies. Summary adds explicit `userGeography` preliminary/final candidate and user-pair counters; older location-scope counters remain compatibility fields. Network/timeout provider results retain bounded sanitized nested-cause diagnostics so generic transport failures can be classified. A required-input abort also publishes `failure.json` with a bounded sanitized cause chain; it does not publish provider-health observations or mutate tenant/provider state.
+Representative run artifacts include target plans, provider and canary results, candidates/rejections, user matches, Jobs preflight, detail results and provider-level detail telemetry, location/import results, tenant-state changes, rate observations, summary, and scheduler metadata. Whole-phase detail totals are distinct from final-candidate counters for errors, limit skips, and unsupported providers; compatibility aliases retain the older final-candidate meaning. Final location normalization also reports catalog-resolved and partially-resolved states instead of leaving successfully resolved jobs under `unparsed_*`. `rejected.json` remains complete, but routine title/age/duplicate events use compact identity records while geography rejections retain bounded normalized-location and per-user rejection diagnostics so false negatives can be audited without duplicating full candidate bodies. Summary adds explicit `userGeography` preliminary/final candidate and user-pair counters; older location-scope counters remain compatibility fields. Network/timeout provider results retain bounded sanitized nested-cause diagnostics so generic transport failures can be classified. A required-input abort also publishes `failure.json` with a bounded sanitized cause chain; it does not publish provider-health observations or mutate tenant/provider state.
 
 Artifacts and logs must not contain service keys, provider cookies/CSRF tokens, CV content, or full user profiles. Operator visibility comes from run summaries, provider/variant warnings, canary outcomes, `ats-ops status`, systemd unit state, and journal output.
 

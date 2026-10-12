@@ -28,7 +28,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 SCHEMA_VERSION = 2
-BUILD_VERSION = 1
+BUILD_VERSION = 2
 GEONAMES_CITIES500_URL = "https://download.geonames.org/export/dump/cities500.zip"
 GEONAMES_ADMIN1_URL = "https://download.geonames.org/export/dump/admin1CodesASCII.txt"
 GEONAMES_TIMEZONES_URL = "https://download.geonames.org/export/dump/timeZones.txt"
@@ -168,6 +168,7 @@ def _parse_m49(data: bytes) -> tuple[list[dict], dict[str, dict]]:
             "kind": "country",
             "name": _clean_text(row.get("Country or Area", "")),
             "countryCode": code,
+            "alpha3Code": _clean_text(row.get("ISO-alpha3 Code", "")).upper() or None,
             "m49Code": _clean_text(row.get("M49 Code", "")),
             "parentId": parent_id,
             "aliases": [],
@@ -245,8 +246,23 @@ def _parse_cities(data: bytes, countries: dict[str, dict], admin1_by_code: dict[
             if not name:
                 continue
             aliases = []
-            if _lookup_key(ascii_name) not in {_lookup_key(name), ""}:
-                aliases.append(ascii_name)
+            seen_aliases = {_lookup_key(name)}
+            for candidate in [ascii_name, *row[3].split(",")]:
+                alias = _clean_text(candidate)
+                key = _lookup_key(alias)
+                if (
+                    not key
+                    or key in seen_aliases
+                    or len(alias) < 3
+                    or len(alias) > 100
+                    or re.fullmatch(r"[\W_\d]+", alias, flags=re.UNICODE)
+                    or alias.startswith(("http://", "https://"))
+                ):
+                    continue
+                aliases.append(alias)
+                seen_aliases.add(key)
+                if len(aliases) >= 32:
+                    break
             admin_key = f"{country_code}.{_clean_text(row[10])}"
             admin = admin1_by_code.get(admin_key)
             parent_id = admin["id"] if admin else f"iso3166:{country_code}"

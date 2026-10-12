@@ -570,6 +570,38 @@ test('run summary separates unavailable details and their safe import skips', ()
   assert.equal(summary.importSkipped, 1);
 });
 
+test('run summary separates whole detail phase limit and unsupported totals from final candidates', () => {
+  const evaluated = [{
+    sourceMode: 'catalog',
+    sourceProvider: 'lever',
+    description: 'ready',
+    preflight: { status: 'ok', exists: false },
+    detail: { status: 'ok' },
+  }];
+  const summary = buildRunSummary({
+    runId: 'detail-phase-totals',
+    mode: 'preflight',
+    startedAt: new Date('2026-10-12T00:00:00Z'),
+    finishedAt: new Date('2026-10-12T00:00:01Z'),
+    targetPlan: {
+      targets: [],
+      limits: { liveCatalogRequested: false, catalogTargetsRequested: 0 },
+      counts: { priority: 0, canary: 0, normal: 0, disabled: 0, disabledRemoved: 0, planningRejected: 0, canaryPlanningRejected: 0, catalogEligible: 0, skippedNotDue: 0, skippedProviderCooldown: 0, skippedNormalBudget: 0, skippedTotal: 0 },
+      catalogs: {}, catalogSweeps: {}, healthPartitions: {}, sweep: {},
+    },
+    scanResult: { candidates: evaluated, rejected: [], providerIds: ['lever'], breakerEvents: [], providerResults: [] },
+    evaluated,
+    detailTelemetry: { totals: { attempts: 3, rateLimitedResponses: 0, errors: 0, skippedLimit: 2, unsupported: 4 } },
+  });
+
+  assert.equal(summary.detailFetchLimitedTotal, 2);
+  assert.equal(summary.finalCandidateDetailFetchLimited, 0);
+  assert.equal(summary.detailFetchLimited, 0);
+  assert.equal(summary.detailUnsupportedTotal, 4);
+  assert.equal(summary.finalCandidateDetailUnsupported, 0);
+  assert.equal(summary.detailUnsupported, 0);
+});
+
 test('provider health summary exposes error class and HTTP status breakdowns', () => {
   const summary = buildRunSummary({
     runId: 'provider-errors', mode: 'offline',

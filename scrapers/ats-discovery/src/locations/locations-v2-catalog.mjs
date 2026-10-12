@@ -80,31 +80,15 @@ function uniqueById(items) {
   return [...new Map(items.map((item) => [item.id, item])).values()];
 }
 
-function editDistance(left, right, maximum) {
-  if (left === right) return 0;
-  if (Math.abs(left.length - right.length) > maximum) return maximum + 1;
-  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
-  for (let row = 1; row <= left.length; row += 1) {
-    const current = [row];
-    let rowMinimum = row;
-    for (let column = 1; column <= right.length; column += 1) {
-      const value = Math.min(
-        current[column - 1] + 1,
-        previous[column] + 1,
-        previous[column - 1] + (left[row - 1] === right[column - 1] ? 0 : 1),
-      );
-      current.push(value);
-      rowMinimum = Math.min(rowMinimum, value);
-    }
-    if (rowMinimum > maximum) return maximum + 1;
-    previous = current;
-  }
-  return previous[right.length];
-}
-
-function dominantCity(items) {
+function dominantCityResolution(items) {
   const unique = uniqueById(items);
-  if (unique.length <= 1) return unique[0] ?? null;
+  if (unique.length === 0) return null;
+  if (unique.length === 1) {
+    const population = Number(unique[0].population ?? 0);
+    return population >= 50_000
+      ? { item: unique[0], method: 'exact_unique_city', confidence: 'high' }
+      : null;
+  }
   const ranked = [...unique].sort((left, right) => (
     Number(right.population ?? 0) - Number(left.population ?? 0)
     || left.id.localeCompare(right.id)
@@ -112,7 +96,7 @@ function dominantCity(items) {
   const first = Number(ranked[0].population ?? 0);
   const second = Number(ranked[1].population ?? 0);
   if (first >= 50_000 && first >= 2 * second && first - second >= 50_000) {
-    return ranked[0];
+    return { item: ranked[0], method: 'population_dominant_city', confidence: 'tentative' };
   }
   return null;
 }
@@ -139,6 +123,9 @@ export function createLocationsV2Catalog(data) {
   const byIdentity = new Map(all.map((item) => [keyFor(item.kind, item.id), item]));
   const byId = new Map(all.map((item) => [item.id, item]));
   const countryByCode = new Map((data.countries ?? []).map((item) => [item.countryCode, item]));
+  const countryByAlpha3 = new Map((data.countries ?? [])
+    .filter((item) => typeof item.alpha3Code === 'string' && item.alpha3Code.length === 3)
+    .map((item) => [item.alpha3Code.toUpperCase(), item]));
   const countryByName = new Map();
   const adminByCountryName = new Map();
   const adminByName = new Map();
@@ -149,6 +136,7 @@ export function createLocationsV2Catalog(data) {
   for (const item of data.countries ?? []) {
     for (const alias of aliases(item)) countryByName.set(lookupKey(alias), item);
     countryByName.set(lookupKey(item.countryCode), item);
+    if (item.alpha3Code) countryByName.set(lookupKey(item.alpha3Code), item);
   }
   const countryAliases = new Map([
     ['deutschland', 'DE'], ['germany', 'DE'], ['usa', 'US'], ['u s a', 'US'],
@@ -191,26 +179,9 @@ export function createLocationsV2Catalog(data) {
     return countryByName.get(lookupKey(value)) ?? null;
   }
 
-  function resolveCountryApproximate(value) {
-    const key = lookupKey(value);
-    if (key.length < 5 || !/^[\p{L} ]+$/u.test(key)) return null;
-    const exact = countryByName.get(key);
-    if (exact) return exact;
-    const maximum = key.length >= 6 ? 2 : 1;
-    const matches = [];
-    for (const [candidateKey, country] of countryByName) {
-      if (candidateKey.length < 5 || !/^[\p{L} ]+$/u.test(candidateKey)) continue;
-      const distance = editDistance(key, candidateKey, maximum);
-      if (distance <= maximum) matches.push({ country, distance });
-    }
-    if (matches.length === 0) return null;
-    matches.sort((left, right) => left.distance - right.distance || left.country.countryCode.localeCompare(right.country.countryCode));
-    const bestDistance = matches[0].distance;
-    const best = uniqueById(matches.filter((item) => item.distance === bestDistance).map((item) => item.country));
-    if (best.length !== 1) return null;
-    const secondDistance = matches.find((item) => item.country.id !== best[0].id)?.distance ?? Number.POSITIVE_INFINITY;
-    if (secondDistance <= bestDistance + 1) return null;
-    return best[0];
+  function resolveCountryCode(value) {
+    const code = cleanText(value).toUpperCase();
+    return countryByCode.get(code) ?? countryByAlpha3.get(code) ?? null;
   }
 
   function resolveAdminRegion(value, { countryCode = null, allowAmbiguous = false } = {}) {
@@ -261,12 +232,49 @@ export function createLocationsV2Catalog(data) {
       ? candidates.filter((item) => item.admin1Id === adminId)
       : candidates;
     if (filtered.length === 1) return filtered[0];
-    return dominantCity(filtered);
+    return dominantCityResolution(filtered)?.item ?? null;
+  }
+
+  function resolveCityGlobalResolution(value) {
+    const raw = cleanText(value);
+    const candidates = uniqueById(cityByName.get(lookupKey(raw)) ?? []);
+    if (!raw || /\d/u.test(raw)) return null;
+    if (/^[A-Z]{3,6}$/u.test(raw)) return null;
+    return dominantCityResolution(candidates);
   }
 
   function resolveCityGlobal(value) {
-    const candidates = uniqueById(cityByName.get(lookupKey(value)) ?? []);
-    return dominantCity(candidates);
+    return resolveCityGlobalResolution(value)?.item ?? null;
+  }
+
+  function resolveStandalone(value) {
+    const raw = cleanText(value);
+    const key = lookupKey(raw);
+    if (!raw || !key || /\d/u.test(raw)) return null;
+    const country = resolveCountry(raw);
+    const admins = uniqueById(adminByName.get(key) ?? []);
+    const cities = uniqueById(cityByName.get(key) ?? []);
+    const codeLike = /^[A-Z]{2,6}$/u.test(raw);
+
+    if (country) {
+      if (admins.some((item) => item.countryCode !== country.countryCode)) return null;
+      return { item: country, method: codeLike ? 'country_code' : 'exact_country', confidence: 'high' };
+    }
+
+    if (admins.length === 1) {
+      const admin = admins[0];
+      const nestedCities = cities.filter((item) => item.admin1Id === admin.id);
+      if (nestedCities.length > 0) {
+        const city = dominantCityResolution(nestedCities);
+        if (city) return { ...city, method: 'exact_city_admin_hierarchy', confidence: 'high' };
+      }
+      if (!codeLike || raw.length === 2 || raw.length === 3) {
+        return { item: admin, method: codeLike ? 'admin_code' : 'exact_admin_region', confidence: 'high' };
+      }
+    }
+
+    if (codeLike) return null;
+    return dominantCityResolution(cities);
   }
 
   function facts(item) {
@@ -281,11 +289,8 @@ export function createLocationsV2Catalog(data) {
 
   function canonicalFromLegacy(location) {
     if (!location || typeof location !== 'object') return null;
-    const country = resolveCountry(location.countryCode)
-      ?? resolveCountry(location.countryName)
-      ?? (!cleanText(location.cityName) && !cleanText(location.region)
-        ? resolveCountryApproximate(location.countryName)
-        : null);
+    const country = resolveCountryCode(location.countryCode)
+      ?? resolveCountry(location.countryName);
     if (!country) return null;
     const regionText = cleanText(location.region);
     const adminRegion = regionText
@@ -327,11 +332,13 @@ export function createLocationsV2Catalog(data) {
     get,
     getById,
     resolveCountry,
-    resolveCountryApproximate,
+    resolveCountryCode,
     resolveAdminRegion,
     findAdminRegionMentions,
     resolveCity,
     resolveCityGlobal,
+    resolveCityGlobalResolution,
+    resolveStandalone,
     facts,
     selectorValid,
     canonicalFromLegacy,

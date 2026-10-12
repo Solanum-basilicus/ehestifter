@@ -31,7 +31,7 @@ The legacy pseudo-country `EU` maps to `m49:150` (`Europe`) during v1 backfill. 
 
 ## Reference data
 
-The catalog builder is `tools/build_locations_v2_catalog.py`.
+The catalog builder is `tools/build_locations_v2_catalog.py`. It keeps ISO alpha-3 country codes and a bounded set of GeoNames alternate names for each city. Runtime matching uses exact canonical/alternate names and hierarchy first; it does not use fuzzy country-name matching. Population dominance is a tentative standalone-city tie-breaker, not sufficient evidence for an early discovery rejection.
 
 Primary sources:
 
@@ -47,7 +47,7 @@ The generated catalog keeps these useful fields for cities:
 
 - GeoNames ID;
 - canonical name;
-- a safe ASCII alias when it differs from the canonical name;
+- a bounded set of GeoNames alternate names, including the ASCII name when useful;
 - country;
 - first-level administrative region when known;
 - population;
@@ -58,7 +58,7 @@ The generated catalog keeps these useful fields for cities:
 
 The builder keeps duplicate place names. It does not collapse same-name cities by population.
 
-Population is presentation metadata. A future global autocomplete can use it to rank comparable prefix matches. Population must not resolve an ambiguous migration automatically.
+Population is reference metadata. Jobs migration does not use population to guess an ambiguous location. ATS Discovery can use strong population dominance only as a tentative standalone-city inference; that inference cannot by itself cause early geography rejection.
 
 The generated catalog is gzip-compressed reference data. Runtime services must not call GeoNames or UN M49.
 

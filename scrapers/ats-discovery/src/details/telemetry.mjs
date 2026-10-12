@@ -69,6 +69,11 @@ export function buildDetailTelemetry({ candidateResults = [], canaryResults = []
       attempts: providers.reduce((sum, item) => sum + item.attempts, 0),
       rateLimitedResponses: providers.reduce((sum, item) => sum + item.rateLimitedResponses, 0),
       errors: providers.reduce((sum, item) => sum + item.errors, 0),
+      unsupported: providers.reduce((sum, item) => sum + item.unsupported, 0),
+      skippedLimit: providers.reduce((sum, item) => sum + item.skippedLimit, 0),
+      skippedExisting: providers.reduce((sum, item) => sum + item.skippedExisting, 0),
+      unavailable: providers.reduce((sum, item) => sum + item.unavailable, 0),
+      alreadyPresent: providers.reduce((sum, item) => sum + item.alreadyPresent, 0),
     },
     providers,
     phases: {

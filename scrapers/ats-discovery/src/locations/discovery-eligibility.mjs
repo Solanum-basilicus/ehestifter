@@ -158,6 +158,9 @@ export function isDefinitePreliminaryGeographyMismatch(candidate) {
   if (candidate?.locationNormalization?.consistency === 'conflicting') return false;
   if ((candidate?.locationsV2 ?? []).length !== 1) return false;
   if ((candidate?.locationNormalization?.unresolved ?? []).length !== 0) return false;
+  if ((candidate?.locationNormalization?.observations ?? []).some((item) => (
+    item?.kind === 'catalog_resolution' && item?.confidence === 'tentative'
+  ))) return false;
   const geography = candidate?.userMatch?.preliminaryGeography ?? [];
   return geography.length > 0 && geography.every((item) => (
     item.allowed === false && item.reason === 'no_matching_location_branch'

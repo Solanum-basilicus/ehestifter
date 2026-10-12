@@ -98,6 +98,7 @@ function workArrangementFromDescriptionPolicy(value) {
 
 function stripArrangementWords(value) {
   return cleanText(value)
+    .replace(/\(\s*(?:(?:UTC|GMT|[ECMP][SD]T)(?:\s*(?:,|\/|and|or)\s*)?)+\s*\)/gu, ' ')
     .replace(/\b(?:fully\s+remote|remote[- ]first|remote|distributed|hybrid|on[- ]?site|onsite|home\s*office)\b/giu, ' ')
     .replace(/[()[\]]/gu, ' ')
     .replace(/\s+/gu, ' ')
@@ -141,10 +142,8 @@ function bareCountryToken(dictionary, value) {
   const country = dictionary.resolveCountry(value);
   if (!country) return null;
   const raw = cleanText(value);
-  if (/^[A-Z]{2}$/u.test(raw)) {
-    const usRegion = resolveAdministrativeRegion(raw, { countryCode: 'US' });
-    if (usRegion && country.countryCode !== 'US') return null;
-  }
+  const collidingRegion = resolveAdministrativeRegion(raw, { allowAmbiguous: true });
+  if (collidingRegion && collidingRegion.countryCode !== country.countryCode) return null;
   return country;
 }
 
@@ -229,7 +228,13 @@ function parseCityRegionPair(parts, dictionary, source, raw) {
 }
 
 function parseRegionEvidence(value, dictionary, source, raw) {
-  const exact = resolveAdministrativeRegion(value);
+  const cleaned = cleanText(value);
+  // Bare numeric or opaque alphanumeric administrative codes are not useful
+  // job geography without a country-qualified context. Provider placeholders
+  // such as "00" and "P6" must stay unresolved instead of becoming a
+  // same-code subdivision from an unrelated country.
+  if (/\d/u.test(cleaned)) return null;
+  const exact = resolveAdministrativeRegion(cleaned);
   const mentions = exact
     ? [exact]
     : findAdministrativeRegionMentions(value);
@@ -603,6 +608,14 @@ function parseSegment(segment, dictionary, source) {
       }],
       locations: [location], unresolved, arrangement: arrangement ?? 'Remote',
     };
+  }
+
+  const namedCountry = dictionary.resolveCountry(cleaned);
+  const namedRegion = resolveAdministrativeRegion(cleaned, { allowAmbiguous: true });
+  if (namedCountry && namedRegion && namedRegion.countryCode !== namedCountry.countryCode) {
+    unresolved.push({ source, raw, reason: 'ambiguous_country_admin_name' });
+    observations.push({ source, raw, kind: 'unknown', status: 'unresolved' });
+    return { observations, locations, unresolved, arrangement };
   }
 
   const exactCountry = bareCountryToken(dictionary, cleaned);
@@ -1823,18 +1836,35 @@ function catalogItemToLegacy(item, catalog, dictionary) {
 
 function catalogLocationFallback(value, catalog, dictionary) {
   const raw = stripSafeLocationSuffix(stripLocalityQualifier(value), dictionary);
-  if (!raw || /[,;|/]/u.test(raw) || isNonCity(raw)) return null;
+  if (!raw || /[;|/]/u.test(raw) || isNonCity(raw)) return null;
+  const parts = raw.includes(',')
+    ? raw.split(/\s*,\s*/u).map(cleanText).filter(Boolean)
+    : [raw];
+  if (parts.length === 0 || parts.length > 4) return null;
 
-  const country = catalog.resolveCountry(raw) ?? catalog.resolveCountryApproximate(raw);
-  const admin = catalog.resolveAdminRegion(raw);
-  const usCodeAdmin = /^[A-Z]{2}$/u.test(raw)
-    ? catalog.resolveAdminRegion(raw, { countryCode: 'US' })
-    : null;
-  const city = catalog.resolveCityGlobal(raw);
-  const candidates = [country, admin, usCodeAdmin, city].filter(Boolean);
-  const unique = new Map(candidates.map((item) => [`${item.kind}\u0000${item.id}`, item]));
-  if (unique.size !== 1) return null;
-  return catalogItemToLegacy([...unique.values()][0], catalog, dictionary);
+  const resolutions = [];
+  for (const part of parts) {
+    if (isNonCity(part)) continue;
+    const resolution = catalog.resolveStandalone(part);
+    if (!resolution?.item) continue;
+    const location = catalogItemToLegacy(resolution.item, catalog, dictionary);
+    if (!location) continue;
+    resolutions.push({
+      raw: part,
+      location,
+      resolutionMethod: resolution.method,
+      confidence: resolution.confidence,
+    });
+  }
+  if (resolutions.length === 0) return null;
+  const countryCodes = new Set(
+    resolutions.map((item) => item.location.countryCode).filter(Boolean),
+  );
+  if (countryCodes.size > 1) return null;
+  return {
+    resolutions,
+    complete: resolutions.length === parts.length,
+  };
 }
 
 function claimCountryCode(catalog, item) {
@@ -2014,16 +2044,20 @@ export function normalizeCandidateLocations(
           : candidate.rawLocation;
         if (lookupKey(stripLocalityQualifier(sourceRaw)) !== lookupKey(item.raw)) continue;
       }
-      const location = catalogLocationFallback(item.raw, v2Catalog, dictionary);
-      if (!location) continue;
-      catalogFallbackResolvedRaws.add(lookupKey(item.raw));
-      catalogFallbackObservations.push({
-        source: item.source ?? 'raw_location',
-        raw: item.raw,
-        kind: 'catalog_resolution',
-        status: 'resolved',
-        location,
-      });
+      const fallback = catalogLocationFallback(item.raw, v2Catalog, dictionary);
+      if (!fallback) continue;
+      if (fallback.complete) catalogFallbackResolvedRaws.add(lookupKey(item.raw));
+      for (const resolution of fallback.resolutions) {
+        catalogFallbackObservations.push({
+          source: item.source ?? 'raw_location',
+          raw: resolution.raw,
+          kind: 'catalog_resolution',
+          status: 'resolved',
+          location: resolution.location,
+          resolutionMethod: resolution.resolutionMethod,
+          confidence: resolution.confidence,
+        });
+      }
     }
     const providerScope = providerScopeEvidence(
       candidate,
@@ -2170,8 +2204,10 @@ export function normalizeCandidateLocations(
         ));
         if (broadResolved) return false;
         const fallback = catalogLocationFallback(item.raw, v2Catalog, dictionary);
-        const canonical = fallback ? v2Catalog.canonicalFromLegacy(fallback) : null;
-        if (canonical && locationClaimKeys.has(`${canonical.kind}\u0000${canonical.id}`)) {
+        if (fallback?.complete && fallback.resolutions.every((resolution) => {
+          const canonical = v2Catalog.canonicalFromLegacy(resolution.location);
+          return canonical && locationClaimKeys.has(`${canonical.kind}\u0000${canonical.id}`);
+        })) {
           return false;
         }
       } else if (item.raw && typeof item.raw === 'object') {
@@ -2182,6 +2218,13 @@ export function normalizeCandidateLocations(
       }
       return true;
     });
+    const primaryWasUnparsed = /^unparsed_/u.test(primary.status ?? '');
+    let finalNormalizationStatus = primary.status;
+    if (locationsV2.length > 0 && primaryWasUnparsed) {
+      if (unresolvedEvidence.length > 0) finalNormalizationStatus = 'partially_resolved';
+      else if (catalogFallbackObservations.length > 0) finalNormalizationStatus = 'catalog_resolved';
+      else finalNormalizationStatus = 'secondary_evidence_resolved';
+    }
 
     return {
       ...candidate,
@@ -2191,7 +2234,7 @@ export function normalizeCandidateLocations(
       workTimeConstraintsV2,
       locationNormalization: {
         schemaVersion: 2,
-        status: primary.status,
+        status: finalNormalizationStatus,
         consistency: reconciled.consistency,
         rawLocation: cleanText(candidate.rawLocation) || null,
         detailRawLocation: cleanText(candidate.detailRawLocation) || null,

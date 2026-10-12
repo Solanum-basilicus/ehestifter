@@ -30,7 +30,7 @@ function buildSnapshot(source) {
       'id', 'kind', 'name', 'parentId', 'ancestors', 'utcOffsets',
     ])),
     countries: source.countries.map((item) => compactItem(item, [
-      'id', 'kind', 'name', 'countryCode', 'm49Code', 'parentId', 'ancestors', 'aliases', 'utcOffsets',
+      'id', 'kind', 'name', 'countryCode', 'alpha3Code', 'm49Code', 'parentId', 'ancestors', 'aliases', 'utcOffsets',
     ])),
     adminRegions: source.adminRegions.map((item) => compactItem(item, [
       'id', 'kind', 'name', 'countryCode', 'admin1Code', 'parentId', 'ancestors', 'aliases', 'utcOffsets',

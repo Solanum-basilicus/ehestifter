@@ -353,3 +353,28 @@ test('durable BambooHR tenant redirects do not open the provider circuit', async
     true,
   );
 });
+
+test('provider execution retains partial jobs while reporting a listing error', async () => {
+  const error = new Error('later page failed');
+  error.partialJobs = [{ title: 'Retained job', url: 'https://example.com/job/1' }];
+  error.providerTelemetry = {
+    listingOutcome: 'listing_partial',
+    pagesCompleted: 1,
+    failedPage: 2,
+    jobsRetained: 1,
+  };
+  const result = await executeProviderTargets({
+    targets: [target(0)],
+    policy: policy({ concurrency: 1 }),
+    globalConcurrency: 1,
+    fetchTarget: async () => { throw error; },
+  });
+
+  assert.equal(result.batches[0].providerResult.status, 'error');
+  assert.equal(result.batches[0].providerResult.jobsReturned, 1);
+  assert.equal(result.batches[0].providerResult.listingOutcome, 'listing_partial');
+  assert.equal(result.batches[0].providerResult.pagesCompleted, 1);
+  assert.equal(result.batches[0].providerResult.failedPage, 2);
+  assert.equal(result.batches[0].providerResult.jobsRetained, 1);
+  assert.deepEqual(result.batches[0].jobs, error.partialJobs);
+});

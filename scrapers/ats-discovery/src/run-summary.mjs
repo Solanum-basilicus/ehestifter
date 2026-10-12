@@ -608,14 +608,25 @@ export function buildRunSummary({
       evaluated,
       (job) => job.detail?.status === 'skipped_existing',
     ),
+    // Compatibility aliases for the final evaluated candidate set.
     detailFetchLimited: count(
       evaluated,
       (job) => job.detail?.status === 'skipped_limit',
     ),
+    finalCandidateDetailFetchLimited: count(
+      evaluated,
+      (job) => job.detail?.status === 'skipped_limit',
+    ),
+    detailFetchLimitedTotal: detailTelemetry?.totals?.skippedLimit ?? 0,
     detailUnsupported: count(
       evaluated,
       (job) => job.detail?.status === 'unsupported_provider',
     ),
+    finalCandidateDetailUnsupported: count(
+      evaluated,
+      (job) => job.detail?.status === 'unsupported_provider',
+    ),
+    detailUnsupportedTotal: detailTelemetry?.totals?.unsupported ?? 0,
     detailUnavailable: count(
       evaluated,
       (job) => job.detail?.status === 'unavailable',
@@ -721,7 +732,21 @@ export function buildRunSummary({
         'normalized_country',
         'normalized_country_scope',
         'normalized_multiple',
+        'catalog_resolved',
+        'secondary_evidence_resolved',
       ].includes(job.locationNormalization?.status),
+    ),
+    locationCatalogResolved: count(
+      evaluated,
+      (job) => job.locationNormalization?.status === 'catalog_resolved',
+    ),
+    locationPartiallyResolved: count(
+      evaluated,
+      (job) => job.locationNormalization?.status === 'partially_resolved',
+    ),
+    locationSecondaryEvidenceResolved: count(
+      evaluated,
+      (job) => job.locationNormalization?.status === 'secondary_evidence_resolved',
     ),
     locationEligible: count(
       evaluated,

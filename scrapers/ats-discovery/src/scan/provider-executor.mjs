@@ -43,6 +43,15 @@ function cleanTelemetry(value) {
     explicitTotal: Number.isInteger(value.explicitTotal) && value.explicitTotal >= 0
       ? value.explicitTotal
       : null,
+    pagesCompleted: Number.isInteger(value.pagesCompleted) && value.pagesCompleted >= 0
+      ? value.pagesCompleted
+      : null,
+    failedPage: Number.isInteger(value.failedPage) && value.failedPage > 0
+      ? value.failedPage
+      : null,
+    jobsRetained: Number.isInteger(value.jobsRetained) && value.jobsRetained >= 0
+      ? value.jobsRetained
+      : null,
   };
 }
 function normalizedFetchValue(value) {
@@ -183,6 +192,9 @@ class ProviderGuard {
             acquisitionMode: anomalyTelemetry.acquisitionMode,
             listingOutcome: anomalyTelemetry.listingOutcome,
             explicitTotal: anomalyTelemetry.explicitTotal,
+            pagesCompleted: anomalyTelemetry.pagesCompleted,
+            failedPage: anomalyTelemetry.failedPage,
+            jobsRetained: anomalyTelemetry.jobsRetained,
           },
         };
       } else result = {
@@ -205,14 +217,18 @@ class ProviderGuard {
           acquisitionMode: telemetry.acquisitionMode,
           listingOutcome: telemetry.listingOutcome ?? inferredOutcome,
           explicitTotal: telemetry.explicitTotal,
+          pagesCompleted: telemetry.pagesCompleted,
+          failedPage: telemetry.failedPage,
+          jobsRetained: telemetry.jobsRetained,
         },
       };
     } catch (error) {
       const telemetry = cleanTelemetry(error?.providerTelemetry);
       const errorClass = classifyProviderError(error);
+      const partialJobs = Array.isArray(error?.partialJobs) ? error.partialJobs : [];
       result = {
         target,
-        jobs: [],
+        jobs: partialJobs,
         error,
         providerResult: {
           ...baseProviderResult(target),
@@ -224,7 +240,7 @@ class ProviderGuard {
             ? providerNetworkDiagnostic(error)
             : null,
           httpStatus: providerHttpStatus(error),
-          jobsReturned: 0,
+          jobsReturned: partialJobs.length,
           candidatesMatched: 0,
           candidatesRetained: 0,
           candidatesDroppedByCap: 0,
@@ -232,6 +248,9 @@ class ProviderGuard {
           acquisitionMode: telemetry.acquisitionMode,
           listingOutcome: telemetry.listingOutcome ?? 'listing_error',
           explicitTotal: telemetry.explicitTotal,
+          pagesCompleted: telemetry.pagesCompleted,
+          failedPage: telemetry.failedPage,
+          jobsRetained: telemetry.jobsRetained,
         },
       };
     }

@@ -77,6 +77,12 @@ public `/job/{id}` page. The page URL must match the configured Personio source
 origin and provider-native job ID. The scanner first uses JobPosting JSON-LD and
 then uses bounded server-rendered `<main>` HTML as a fallback.
 
+Ashby's public job-board API already carries `descriptionPlain` and
+`descriptionHtml`. ATS Discovery keeps that list description, native job ID, and
+apply URL on the candidate. Normal Ashby candidates therefore do not need a
+second board request only to obtain description text; the existing detail
+fetcher remains available for older/incomplete candidate records and diagnostics.
+
 iCIMS has two acquisition modes. Classic `*.icims.com` portals keep the full
 portal host as the provider tenant because numeric job IDs are tenant-local. If
 AWS WAF returns its Human Verification CAPTCHA page, ATS Discovery reports
@@ -105,7 +111,10 @@ Jobs remains the authority for canonical job identity and persistence.
 Lever list acquisition uses the public Postings API `skip`/`limit` pagination
 instead of increasing the shared JSON response-size ceiling. Pages for one
 tenant are fetched sequentially and respect the configured Lever minimum request
-interval. Health-only targets stop after the first page; explicit probes can also bound
+interval. A failed page is retried once after the same interval. If a later page
+still fails, ATS Discovery keeps jobs from completed pages, reports the tenant as
+a provider error with `listing_partial` telemetry, and records the failed page.
+Health-only targets stop after the first page; explicit probes can also bound
 pages through the existing `maxPages` context.
 
 SuccessFactors has independent health partitions:
@@ -136,6 +145,12 @@ timeouts, and transport failures remain `detail.status = "error"`. The same
 explicit unavailable status is used for the recognized SuccessFactors withdrawn
 page. Provider canaries exclude unavailable samples from parser-error counts and
 report detail as inconclusive when every sampled posting disappeared.
+
+SuccessFactors detail enrichment keeps JSON-LD first, then accepts bounded
+server-rendered HTML. The HTML fallback recognizes schema.org microdata
+`itemprop="description"` before the existing SuccessFactors class/id and heading
+patterns. This covers RMK pages that expose the complete description without
+JSON-LD.
 
 ## Shared multi-user scan
 
@@ -591,15 +606,19 @@ Description evidence is secondary. It may refine `Germany` to a confidently
 resolved city such as `Garching`, clarify an unqualified `Remote` scope, or mark
 a provider/description conflict. It never silently erases the provider
 observation. Canonical location resolution uses the committed Locations v2
-catalog: syntax and country/admin context win first; an otherwise ambiguous
-standalone city can resolve only when one populated-place candidate dominates
-by the configured conservative population rule. Country names can use a unique,
-close catalog-name match for common spelling/name drift, while two-letter
-country/admin code collisions such as `CA` and `DE` remain unresolved without
-context. EU and EEA scopes expand to their country members rather than all of
-geographic Europe. No new hand-maintained famous-city alias list is required. Only decisive incompatible
-evidence blocks import; unresolved, unsupported, and inconclusive conflicts are
-retained in artifacts and propagate to Jobs.
+catalog: exact canonical/alternate names plus country/admin hierarchy and syntax
+win first. Fuzzy country-name matching is not used. A standalone city can resolve
+by population dominance only after the input is already a location candidate;
+that result is marked tentative and cannot by itself trigger preliminary
+geography rejection. ISO alpha-2/alpha-3 and subdivision codes are resolved from
+the catalog, while collisions such as `CA` and `DE` remain unresolved without
+context. Opaque digit-bearing standalone administrative codes stay unresolved.
+GeoNames alternate names are imported during Locations v2 reference-data builds,
+so local-language names can be learned from source data instead of a new
+hand-maintained famous-city alias list. EU and EEA scopes expand to their country
+members rather than all of geographic Europe. Only decisive incompatible evidence
+blocks import; unresolved, unsupported, and inconclusive conflicts are retained
+in artifacts and propagate to Jobs.
 
 High-confidence candidate geography in a description is extracted independently
 of the active user's geography filter. Examples include an explicit candidate
@@ -923,6 +942,11 @@ failures. `providerErrors` remains as a compatibility alias for the total.
 Likewise, `detailErrorsTotal` reports all detail-stage errors while
 `finalCandidateDetailErrors` reports errors that remain in the final evaluated
 candidate set; `detailErrors` remains the compatibility alias for the latter.
+The same split is available for limit and unsupported outcomes through
+`detailFetchLimitedTotal` / `finalCandidateDetailFetchLimited` and
+`detailUnsupportedTotal` / `finalCandidateDetailUnsupported`. Location summaries
+also distinguish `catalog_resolved` and `partially_resolved` final normalization
+states from unresolved input syntax.
 
 Historical runs are retained as evidence. Product renames must not rewrite existing run artifacts or historical job provenance.
 

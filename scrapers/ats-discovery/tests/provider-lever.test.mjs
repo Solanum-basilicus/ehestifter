@@ -175,3 +175,71 @@ test('Lever maxPages still bounds explicit probes', async () => {
   assert.equal(calls, 1);
   assert.equal(jobs.length, 100);
 });
+
+test('Lever retries one failed page after the provider interval', async () => {
+  const firstPage = Array.from({ length: 100 }, (_, index) => ({
+    ...COMPLETE_POSTING,
+    id: `id-${index}`,
+    hostedUrl: `https://jobs.lever.co/acme/id-${index}`,
+  }));
+  const waits = [];
+  const calls = [];
+  let secondPageAttempts = 0;
+  const jobs = await lever.fetch(
+    { name: 'Acme', careers_url: 'https://jobs.lever.co/acme' },
+    {
+      providerMinRequestIntervalMs: 700,
+      async sleep(ms) { waits.push(ms); },
+      async fetchJson(url) {
+        calls.push(String(url));
+        if (calls.length === 1) return firstPage;
+        secondPageAttempts += 1;
+        if (secondPageAttempts === 1) throw new Error('temporary timeout');
+        return [{
+          ...COMPLETE_POSTING,
+          id: 'id-100',
+          hostedUrl: 'https://jobs.lever.co/acme/id-100',
+        }];
+      },
+    },
+  );
+
+  assert.equal(secondPageAttempts, 2);
+  assert.equal(jobs.length, 101);
+  assert.deepEqual(waits, [700, 700]);
+});
+
+test('Lever preserves completed pages when a later page fails twice', async () => {
+  const firstPage = Array.from({ length: 100 }, (_, index) => ({
+    ...COMPLETE_POSTING,
+    id: `id-${index}`,
+    hostedUrl: `https://jobs.lever.co/acme/id-${index}`,
+  }));
+  let calls = 0;
+  await assert.rejects(
+    lever.fetch(
+      { name: 'Acme', careers_url: 'https://jobs.lever.co/acme' },
+      {
+        providerMinRequestIntervalMs: 1,
+        async sleep() {},
+        async fetchJson() {
+          calls += 1;
+          if (calls === 1) return firstPage;
+          throw new Error('page timeout');
+        },
+      },
+    ),
+    (error) => {
+      assert.equal(error.message, 'page timeout');
+      assert.equal(error.partialJobs.length, 100);
+      assert.deepEqual(error.providerTelemetry, {
+        listingOutcome: 'listing_partial',
+        pagesCompleted: 1,
+        failedPage: 2,
+        jobsRetained: 100,
+      });
+      return true;
+    },
+  );
+  assert.equal(calls, 3);
+});

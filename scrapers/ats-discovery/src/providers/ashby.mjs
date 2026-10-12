@@ -15,6 +15,8 @@
 // Ashby a longer timeout plus a backoff+jitter retry (the backoff spaces
 // requests out to dodge rate-limiting).
 // See .planning/codebase/ashby-scan-abort-diagnosis.md.
+
+import { htmlToPlainText } from '../text/html.mjs';
 const ASHBY_TIMEOUT_MS = 30_000;
 const ASHBY_RETRIES = 2;
 
@@ -175,14 +177,23 @@ export default {
       try {
         const json = /** @type {any} */ (await ctx.fetchJson(apiUrl, { timeoutMs: ASHBY_TIMEOUT_MS, redirect: 'error' }));
         const jobs = Array.isArray(json?.jobs) ? json.jobs : [];
-        return jobs.map(/** @param {any} j */ (j) => ({
-          title: j.title || '',
-          url: j.jobUrl || '',
-          company: entry.name,
-          location: formatLocation(j),
-          salary: parseCompensation(j),
-          postedAt: toEpochMs(j.publishedAt),
-        }));
+        return jobs.map(/** @param {any} j */ (j) => {
+          const plainDescription = typeof j.descriptionPlain === 'string'
+            ? j.descriptionPlain.trim()
+            : '';
+          return {
+            id: j.id || undefined,
+            title: j.title || '',
+            url: j.jobUrl || '',
+            applyUrl: j.applyUrl || '',
+            company: entry.name,
+            location: formatLocation(j),
+            description: plainDescription || htmlToPlainText(j.descriptionHtml),
+            salary: parseCompensation(j),
+            postedAt: toEpochMs(j.publishedAt),
+            acquisitionMode: 'ashby-list-api',
+          };
+        });
       } catch (e) {
         lastErr = e;
       }

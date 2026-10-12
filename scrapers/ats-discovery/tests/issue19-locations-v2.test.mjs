@@ -8,7 +8,7 @@ import {
   evaluateDiscoveryEligibility,
   isDefinitePreliminaryGeographyMismatch,
 } from '../src/locations/discovery-eligibility.mjs';
-import { getDefaultLocationsV2Catalog } from '../src/locations/locations-v2-catalog.mjs';
+import { createLocationsV2Catalog, getDefaultLocationsV2Catalog } from '../src/locations/locations-v2-catalog.mjs';
 
 const catalog = getDefaultLocationsV2Catalog();
 
@@ -486,19 +486,107 @@ test('population dominance resolves a standalone city only when one catalog cand
   assert.ok(springfield.locationNormalization.unresolved.length > 0);
 });
 
-test('generic country names and two-letter codes resolve without a curated job-location alias list', () => {
-  const [turkeyName, turkey, texas, canada, germany] = normalizeCandidateLocations([
-    candidate({ rawLocation: 'Turkey, Remote', remoteType: 'Remote' }),
+test('population-only location inference cannot trigger early geography rejection', () => {
+  const germanyUser = user({
+    includeLocations: [{ kind: 'country', locationId: 'iso3166:DE' }],
+    excludeLocations: [],
+    allowUnknownLocation: false,
+  });
+  const [london] = annotatePreliminaryDiscoveryEligibility(
+    normalizeCandidateLocations([candidate({ rawLocation: 'London', remoteType: 'On-Site' })]),
+    [germanyUser],
+  ).candidates;
+  assert.equal(london.preliminaryGeography.status, 'mismatch');
+  assert.equal(isDefinitePreliminaryGeographyMismatch(london), false);
+});
+
+test('generic two-letter codes resolve only when country and admin meanings are unambiguous', () => {
+  const [turkey, texas, canada, germany] = normalizeCandidateLocations([
     candidate({ rawLocation: 'TR', remoteType: 'On-Site' }),
     candidate({ rawLocation: 'TX', remoteType: 'On-Site' }),
     candidate({ rawLocation: 'CA', remoteType: 'On-Site' }),
     candidate({ rawLocation: 'DE', remoteType: 'On-Site' }),
   ]);
-  assert.deepEqual(turkeyName.locationsV2, [{ kind: 'country', locationId: 'iso3166:TR' }]);
   assert.deepEqual(turkey.locationsV2, [{ kind: 'country', locationId: 'iso3166:TR' }]);
   assert.deepEqual(texas.locationsV2, [{ kind: 'adminRegion', locationId: 'geonames:4736286' }]);
   assert.deepEqual(canada.locationsV2, []);
   assert.deepEqual(germany.locationsV2, []);
+});
+
+test('location fallback does not turn similar text or opaque codes into unrelated geography', () => {
+  const values = ['Lisboa', 'Mailand', 'Makati', 'Bordon', 'Norwalk', '00', 'P6', 'APAC', 'VIC', 'Bade'];
+  const normalized = normalizeCandidateLocations(values.map((rawLocation) => (
+    candidate({ rawLocation, remoteType: 'On-Site' })
+  )));
+  for (const item of normalized) assert.deepEqual(item.locationsV2, [], item.rawLocation);
+});
+
+test('country and foreign admin exact-name collisions stay unresolved without context', () => {
+  const [georgia] = normalizeCandidateLocations([
+    candidate({ rawLocation: 'Georgia', remoteType: 'On-Site' }),
+  ]);
+  assert.deepEqual(georgia.locationsV2, []);
+  assert.ok(georgia.locationNormalization.unresolved.length > 0);
+});
+
+test('standalone admin names beat same-name cities but population-only city choices stay tentative', () => {
+  const [england, ontario, london] = normalizeCandidateLocations([
+    candidate({ rawLocation: 'England', remoteType: 'On-Site' }),
+    candidate({ rawLocation: 'Ontario', remoteType: 'On-Site' }),
+    candidate({ rawLocation: 'London', remoteType: 'On-Site' }),
+  ]);
+  assert.deepEqual(england.locationsV2, [{ kind: 'adminRegion', locationId: 'geonames:6269131' }]);
+  assert.deepEqual(ontario.locationsV2, [{ kind: 'adminRegion', locationId: 'geonames:6093943' }]);
+  assert.equal(
+    london.locationNormalization.observations.find((item) => item.kind === 'catalog_resolution')?.confidence,
+    'tentative',
+  );
+});
+
+test('catalog resolves alpha-3 country codes and data-supplied city alternate names', () => {
+  const synthetic = createLocationsV2Catalog({
+    schemaVersion: 1,
+    sourceSchemaVersion: 2,
+    catalogVersion: 'test',
+    referenceYear: 2026,
+    regions: [],
+    countries: [{
+      id: 'iso3166:PT', kind: 'country', name: 'Portugal', countryCode: 'PT', alpha3Code: 'PRT',
+      aliases: [], ancestors: [],
+    }],
+    adminRegions: [],
+    cities: [{
+      id: 'geonames:2267057', kind: 'city', name: 'Lisbon', countryCode: 'PT',
+      aliases: ['Lisboa'], population: 517802, ancestors: ['iso3166:PT'],
+    }],
+  });
+  assert.equal(synthetic.resolveCountryCode('PRT')?.id, 'iso3166:PT');
+  assert.deepEqual(synthetic.resolveStandalone('Lisboa'), {
+    item: synthetic.get('city', 'geonames:2267057'),
+    method: 'exact_unique_city',
+    confidence: 'high',
+  });
+});
+
+test('partially resolvable comma geography keeps the city and unresolved evidence', () => {
+  const [result] = normalizeCandidateLocations([
+    candidate({ rawLocation: 'Istanbul, Turkey, On-Site', remoteType: 'On-Site' }),
+  ]);
+  assert.deepEqual(result.locationsV2, [{ kind: 'city', locationId: 'geonames:745044' }]);
+  assert.equal(result.locationNormalization.status, 'partially_resolved');
+  assert.ok(result.locationNormalization.unresolved.length > 0);
+  assert.equal(
+    result.locationNormalization.observations.find((item) => item.kind === 'catalog_resolution')?.confidence,
+    'high',
+  );
+});
+
+test('work-time parenthetical does not prevent an explicit country from resolving', () => {
+  const [result] = normalizeCandidateLocations([
+    candidate({ rawLocation: 'USA (EST and CST) - Remote', remoteType: 'Remote' }),
+  ]);
+  assert.deepEqual(result.locationsV2, [{ kind: 'country', locationId: 'iso3166:US' }]);
+  assert.deepEqual(result.locationNormalization.unresolved, []);
 });
 
 test('safe location suffix cleanup keeps geography and removes non-geographic qualifiers', () => {

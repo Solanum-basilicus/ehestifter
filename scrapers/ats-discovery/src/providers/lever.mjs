@@ -113,6 +113,19 @@ function resolveApiUrl(entry) {
   return `https://api.${host[1]}/v0/postings/${slug}`;
 }
 
+
+function normalizedLeverJob(j, entry) {
+  return {
+    id: j.id || undefined,
+    title: j.text || '',
+    url: j.hostedUrl || '',
+    company: entry.name,
+    location: j.categories?.location || '',
+    description: composeLeverDescription(j),
+    postedAt: typeof j.createdAt === 'number' ? j.createdAt : undefined,
+  };
+}
+
 /** @type {Provider} */
 export default {
   id: 'lever',
@@ -142,6 +155,32 @@ export default {
       : (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     const postings = [];
     const seen = new Set();
+    let pagesCompleted = 0;
+
+    const fetchPage = async (endpoint, page) => {
+      let lastError = null;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        if (attempt > 0 && waitMs > 0) await sleep(waitMs);
+        try {
+          const json = await ctx.fetchJson(endpoint.href, { redirect: 'error' });
+          if (!Array.isArray(json)) throw new Error('lever: paginated response is not an array');
+          return json;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      if (postings.length > 0) {
+        lastError.partialJobs = postings.map((posting) => normalizedLeverJob(posting, entry));
+        lastError.providerTelemetry = {
+          ...(lastError.providerTelemetry ?? {}),
+          listingOutcome: 'listing_partial',
+          pagesCompleted,
+          failedPage: page + 1,
+          jobsRetained: postings.length,
+        };
+      }
+      throw lastError;
+    };
 
     for (let page = 0; page < maxPages; page += 1) {
       if (page > 0 && waitMs > 0) await sleep(waitMs);
@@ -149,30 +188,23 @@ export default {
       endpoint.searchParams.set('mode', 'json');
       endpoint.searchParams.set('skip', String(page * LEVER_PAGE_SIZE));
       endpoint.searchParams.set('limit', String(LEVER_PAGE_SIZE));
-      const json = await ctx.fetchJson(endpoint.href, { redirect: 'error' });
-      if (!Array.isArray(json)) {
-        if (page === 0) return [];
-        throw new Error('lever: paginated response is not an array');
-      }
+      const json = await fetchPage(endpoint, page);
       for (const posting of json) {
         const key = nonEmptyString(posting?.id) || nonEmptyString(posting?.hostedUrl);
         if (key && seen.has(key)) continue;
         if (key) seen.add(key);
         postings.push(posting);
       }
+      pagesCompleted += 1;
       if (json.length < LEVER_PAGE_SIZE) break;
     }
 
-    return postings.map(j => ({
-      id: j.id || undefined,
-      title: j.text || '',
-      url: j.hostedUrl || '',
-      company: entry.name,
-      location: j.categories?.location || '',
-      // The list payload contains every rendered description segment, so no
-      // per-job request is required for complete Lever content.
-      description: composeLeverDescription(j),
-      postedAt: typeof j.createdAt === 'number' ? j.createdAt : undefined,
-    }));
+    ctx?.reportProviderTelemetry?.({
+      pagesCompleted,
+      failedPage: null,
+      jobsRetained: postings.length,
+    });
+
+    return postings.map((posting) => normalizedLeverJob(posting, entry));
   },
 };

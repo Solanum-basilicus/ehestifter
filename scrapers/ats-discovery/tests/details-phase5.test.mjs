@@ -295,6 +295,36 @@ test('SuccessFactors RMK detail falls back to server-rendered job description HT
   );
 });
 
+test('SuccessFactors detail reads schema.org microdata description HTML', async () => {
+  const source = candidate({
+    sourceProvider: 'successfactors',
+    sourceTenant: 'jobs.arburg.com',
+    url: 'https://jobs.arburg.com/job/Lossburg-Produktmanager-BW/1441011733/',
+    provenance: {
+      providerNativeId: '1441011733',
+      sourceOrigin: 'https://jobs.arburg.com',
+    },
+  });
+  const html = `
+    <main itemscope itemtype="https://schema.org/JobPosting">
+      <h1 itemprop="title">Produktmanager</h1>
+      <div itemprop="description">
+        <p>Sie verantworten die Produktstrategie.</p>
+        <ul><li>Analysieren Sie Marktanforderungen.</li></ul>
+      </div>
+    </main>`;
+  const [result] = await enrichCandidateDetails([source], {
+    concurrency: 1,
+    maxFetches: 1,
+    timeoutMs: 1000,
+    async fetchImpl() { return response(html); },
+  });
+  assert.equal(result.detail.status, 'ok');
+  assert.equal(result.descriptionStatus, 'successfactors-html-detail');
+  assert.match(result.description, /Produktstrategie/);
+  assert.match(result.description, /Marktanforderungen/);
+});
+
 test('SuccessFactors HTML detail keeps LOCATION evidence for GEO normalization', async () => {
   const source = candidate({
     sourceProvider: 'successfactors',

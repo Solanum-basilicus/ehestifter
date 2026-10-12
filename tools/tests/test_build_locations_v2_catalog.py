@@ -14,11 +14,12 @@ TIMEZONES = """CountryCode\tTimeZoneId\tGMT offset 1. Jan 2026\tDST offset 1. Ju
 LEGACY = b'{"countries":[{"name":"Germany","code":"DE"},{"name":"Spain","code":"ES"},{"name":"United States","code":"US"},{"name":"European Union","code":"EU"}],"cities":{}}'
 
 
-def _city_row(geoname_id, name, ascii_name, lat, lon, cc, admin1, population, timezone_id):
+def _city_row(geoname_id, name, ascii_name, lat, lon, cc, admin1, population, timezone_id, alternate_names=""):
     row = [""] * 19
     row[0] = str(geoname_id)
     row[1] = name
     row[2] = ascii_name
+    row[3] = alternate_names
     row[4] = str(lat)
     row[5] = str(lon)
     row[6] = "P"
@@ -34,7 +35,7 @@ def _city_row(geoname_id, name, ascii_name, lat, lon, cc, admin1, population, ti
 def _cities_zip():
     lines = [
         _city_row(1, "Hallbergmoos", "Hallbergmoos", 48.3, 11.7, "DE", "02", 11000, "Europe/Berlin"),
-        _city_row(2, "Madrid", "Madrid", 40.4, -3.7, "ES", "29", 3200000, "Europe/Madrid"),
+        _city_row(2, "Madrid", "Madrid", 40.4, -3.7, "ES", "29", 3200000, "Europe/Madrid", "Madryt,Madrid"),
         _city_row(3, "Madras", "Madras", 44.6, -121.1, "US", "OR", 7000, "America/Los_Angeles"),
         _city_row(4, "Springfield", "Springfield", 44.0, -123.0, "US", "OR", 62000, "America/Los_Angeles"),
         _city_row(5, "Springfield", "Springfield", 39.8, -89.6, "US", "IL", 114000, "America/Chicago"),
@@ -60,6 +61,7 @@ def test_catalog_keeps_small_places_population_and_duplicate_names():
     assert cities["geonames:1"]["name"] == "Hallbergmoos"
     assert "OR" in admins["geonames:5744337"]["aliases"]
     assert cities["geonames:2"]["population"] == 3200000
+    assert cities["geonames:2"]["aliases"] == ["Madryt"]
     assert cities["geonames:3"]["population"] == 7000
     assert [item["name"] for item in catalog["cities"]].count("Springfield") == 2
 
@@ -78,6 +80,7 @@ def test_catalog_adds_hierarchy_and_year_offsets():
     hallbergmoos = next(item for item in catalog["cities"] if item["name"] == "Hallbergmoos")
 
     assert countries["DE"]["ancestors"] == ["m49:155", "m49:150", "m49:001"]
+    assert countries["DE"]["alpha3Code"] == "DEU"
     assert hallbergmoos["ancestors"] == [
         "geonames:2951839",
         "iso3166:DE",

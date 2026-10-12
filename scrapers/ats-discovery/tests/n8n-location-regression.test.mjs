@@ -109,7 +109,7 @@ test('n8n multi-country location keeps unique listed-country cities, Bosnia, and
   ));
 });
 
-test('standalone city still does not acquire a guessed country', () => {
+test('standalone city can resolve through the canonical Locations v2 catalog', () => {
   const [result] = normalizeCandidateLocations([{
     title: 'Product Manager',
     rawLocation: 'Hamburg',
@@ -119,8 +119,15 @@ test('standalone city still does not acquire a guessed country', () => {
     preflight: { status: 'ok', exists: false },
   }], { dictionary: dictionaryWithCities, locationScopeFilter });
 
+  // The legacy dictionary remains conservative, but the canonical v2 catalog
+  // can resolve Hamburg through its city/admin hierarchy without a fuzzy guess.
   assert.deepEqual(result.locations, []);
-  assert.equal(result.locationNormalization.status, 'unparsed_single_value');
+  assert.deepEqual(result.locationsV2, [{ kind: 'city', locationId: 'geonames:2911298' }]);
+  assert.equal(result.locationNormalization.status, 'catalog_resolved');
+  assert.equal(
+    result.locationNormalization.observations.find((item) => item.kind === 'catalog_resolution')?.confidence,
+    'high',
+  );
 });
 
 test('explicit provider work arrangement outranks a conflicting title cue', () => {

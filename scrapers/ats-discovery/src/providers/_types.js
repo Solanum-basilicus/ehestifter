@@ -121,6 +121,11 @@
  *                              paginating providers (avature, workday) to throttle between page
  *                              requests. May be absent — providers fall back to a native
  *                              `setTimeout`-based delay.
+ * @property {number} [providerMinRequestIntervalMs] Current provider request-start interval.
+ *                              A provider that performs several HTTP requests for one tenant uses
+ *                              it to pace internal page requests and bounded retries.
+ * @property {(value: object) => void} [reportProviderTelemetry] Adds bounded acquisition telemetry
+ *                              such as page counts or partial-listing evidence to the provider result.
  */
 
 /**
