@@ -13,7 +13,13 @@ def test_jobs_update_fields_and_locations(base_url, system_headers, shared_state
             {"countryName":"Germany","countryCode":"DE","cityName":"Berlin"},
             {"countryName":"Spain","countryCode":"ES","cityName":"Madrid"},
             {"countryName":"United Kingdom","countryCode":"GB","cityName":"London"},
-        ]
+        ],
+        # The active search model can be v1 or v2. Supply both formats.
+        "locationsV2": [
+            {"kind": "city", "locationId": "geonames:2950159"},  # Berlin
+            {"kind": "city", "locationId": "geonames:3117735"},  # Madrid
+            {"kind": "city", "locationId": "geonames:2643743"},  # London
+        ],
     }
     r = requests.put(url, headers=system_headers, json=payload)
     print("Response text:", r.text, " with status ", r.status_code, end=" ")
@@ -30,3 +36,9 @@ def test_jobs_update_fields_and_locations(base_url, system_headers, shared_state
     locs = job.get("locations") or []
     cities = {(l.get("countryCode"), l.get("cityName")) for l in locs}
     assert ("DE","Berlin") in cities and ("ES","Madrid") in cities and ("GB","London") in cities
+    v2_locations = {(loc.get("kind"), loc.get("locationId")) for loc in job.get("locationsV2", [])}
+    assert v2_locations == {
+        ("city", "geonames:2950159"),
+        ("city", "geonames:3117735"),
+        ("city", "geonames:2643743"),
+    }, f"Unexpected v2 locations: {job.get('locationsV2')}"

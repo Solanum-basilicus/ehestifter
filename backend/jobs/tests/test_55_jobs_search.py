@@ -40,5 +40,10 @@ def test_jobs_search_by_location_city(base_url, user_headers, shared_state):
     r = requests.get(url, headers=user_headers)
     print("\Response text:", r.text, " with status ", r.status_code, end=" ")
     assert r.status_code == 200, r.text
-    ids = _find_ids(r.json())
-    assert job_id in ids, "Job not found by Location search (city=Berlin)"
+    payload = r.json()
+    ids = _find_ids(payload)
+    assert job_id in ids, (
+        "Job not found by Location search (city=Berlin). "
+        f"Active model: {payload.get('activeLocationModel')}; "
+        f"matches: {payload.get('total')}"
+    )
