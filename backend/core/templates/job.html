@@ -2,14 +2,10 @@
 
 {% block head_extra %}
 <style>
-  .line-clamp-2 { line-clamp: 2; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
-  .truncate-1 { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
   .card { border:1px solid #e5e7eb; border-radius:12px; background:#fff; }
   .muted { color:#6b7280; }
-  .badge { display:inline-block; padding:2px 8px; border-radius:999px; border:1px solid #e5e7eb; font-size:12px; }
   .btn { padding:6px 10px; border-radius:8px; border:1px solid #e5e7eb; background:#f9fafb; cursor:pointer; opacity:1; }
   .btn.primary { background:#eef2ff; border-color:#c7d2fe; }
-  .btn.ghost { background:transparent; }
   .btn.danger { background:#fee2e2; border-color:#fecaca; }
   /* True disabled: looks disabled and cannot be clicked */
   .btn:disabled,
@@ -23,8 +19,22 @@
   .modal { width:min(520px,92vw); background:#fff; border-radius:12px; border:1px solid #e5e7eb; box-shadow:0 10px 30px rgba(0,0,0,.1); } 
   /* Alpine cloak to prevent FOUC and click races on first render */
   [x-cloak] { display:none !important; }
-  /* two-column layout for status + actions block */
-  .row-actions { display:grid; grid-template-columns: 1fr; gap:12px; } @media (min-width: 900px){ .row-actions { grid-template-columns: 1fr 280px; } }
+  /* Reserve the action column only when the user can edit this job. */
+  .row-actions { display:grid; grid-template-columns:minmax(0, 1fr); gap:12px; }
+  @media (min-width: 900px) {
+    .row-actions.with-job-actions { grid-template-columns:minmax(0, 1fr) 280px; }
+  }
+  .job-title { margin:0; font-size:20px; font-weight:600; line-height:1.35; overflow-wrap:anywhere; }
+  .job-meta { display:flex; flex-wrap:wrap; align-items:baseline; column-gap:14px; row-gap:4px; margin-top:6px; font-size:13px; line-height:1.5; }
+  .job-meta-item { min-width:0; max-width:100%; overflow-wrap:anywhere; }
+  .job-company { color:#4b5563; font-weight:500; }
+  .job-meta-note { color:#6b7280; }
+  .job-meta-source { color:#6b7280; font-size:12px; }
+  /* Keep both destinations together if they are different. */
+  .job-meta-links { display:inline-flex; white-space:nowrap; align-items:baseline; gap:0; }
+  .job-meta-links a { white-space:nowrap; }
+  .job-meta-links .external-mark { margin-left:4px; font-size:12px; color:#6b7280; }
+  .status-card { container-type:inline-size; }
   .btn[aria-disabled="false"] { cursor:pointer; opacity:1; }
   /*
    * Keep the current status visually dominant.
@@ -61,11 +71,16 @@
     align-items:center;
     flex-wrap:wrap;
     gap:8px;
+    row-gap:6px;
     margin-left:4px;
     padding-left:10px;
     border-left:1px solid #e5e7eb;
     font-size:12px;
     font-weight:400;
+  }
+
+  @container (max-width: 560px) {
+    .status-change-actions { flex-basis:100%; margin-left:0; padding-left:0; border-left:0; }
   }
 
   .status-change-label {
@@ -139,13 +154,11 @@
   .prose img { max-width:100%; height:auto; border-radius:8px; }
   .prose pre { max-width:100%; overflow-x:auto; white-space:pre-wrap; }
   .prose table { display:block; max-width:100%; overflow-x:auto; }
-  .right-rail { width:320px; }
-  .sticky-top { position:sticky; top:0; z-index:10; backdrop-filter:saturate(180%) blur(6px); background:rgba(255,255,255,.85); }
+  .right-rail { width:100%; max-width:320px; }
   .grid { display:grid; gap:16px; }
   @media (min-width: 1024px) { .grid-main { grid-template-columns: 1fr 320px; } }
   .flex { display:flex; gap:8px; align-items:center; }
   .flex-between { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
-  .sep-vert { width:1px; height:16px; background:#e5e7eb; margin:0 6px; }
   .placeholder-img { width:100%; height:128px; border-radius:8px; background:#f3f4f6; color:#6b7280;
     display:flex; align-items:center; justify-content:center; font-size:12px; }
   /* History */
@@ -172,7 +185,7 @@
     position: fixed;
     inset: 0;
     background: rgba(0,0,0,.35);
-    z-index: 1200;              /* higher than sticky-top (10) */
+    z-index: 1200;
     display: none;
     align-items: center;
     justify-content: center;
@@ -201,74 +214,43 @@
 
 {% block content %}
 <div x-data="jobDetailPage('{{ job_id }}')" x-init="init()" class="mx-auto" style="max-width:1100px; padding:16px;">
-  <!-- Sticky meta card -->
-  <div class="card sticky-top" style="padding:12px 16px;">
-    <div class="flex-between">
-      <div style="min-width:0;">
-        <div class="flex" style="gap:6px; align-items:center;">
-          <h1 class="line-clamp-2" :title="meta.title" style="font-size:20px; font-weight:600; margin:0;">
-            <span x-text="meta.title"></span>
-          </h1>
-          <button class="btn ghost" @click="copy(meta.title)" aria-label="Copy job title" aria-disabled="false">📋</button>
-        </div>
+  <!-- Job metadata follows the page scroll. Items wrap to fit tiled windows. -->
+  <div class="card" style="padding:12px 16px;">
+    <h1 class="job-title" x-text="meta.title"></h1>
+    <div class="job-meta">
+      <span class="job-meta-item job-company" x-cloak x-show="companyLine()" x-text="companyLine()"></span>
 
-        <div class="flex muted" style="flex-wrap:wrap; font-size:14px;">
-          <div class="truncate-1" style="max-width:36ch;" :title="companyLine()">
-            <span x-text="companyLine()"></span>
-          </div>
-          <button class="btn ghost" @click="copy(companyLine())" aria-label="Copy company" aria-disabled="false">📋</button>
+      <div id="job-location-wrap" class="job-meta-item job-meta-note" style="display:none;">
+        <div id="job-location-summary"></div>
+      </div>
 
-          <div id="job-location-wrap" class="flex" style="display:none;">
-            <div class="sep-vert"></div>
-            <div id="job-location-summary"></div>
-          </div>
+      <span class="job-meta-item job-meta-note" x-cloak x-show="meta.firstSeenUtc || meta.lastSeenUtc">
+        <span x-text="seenPrefix()"></span> <span x-text="relativeSeen()"></span><template x-if="(meta.repostCount || 0) > 0"><span> · bumped <span x-text="meta.repostCount"></span> times</span></template>
+      </span>
 
-          <template x-if="meta.applyUrl">
-            <div class="flex">
-              <div class="sep-vert"></div>
-              <a class="muted" :href="meta.applyUrl" target="_blank" rel="noopener noreferrer">Apply now 🔗</a>
-            </div>
-          </template>
-
-          <!-- Found on -->
-          <template x-if="meta.foundOn">
-            <div class="flex">
-              <div class="sep-vert"></div>
-              <span class="badge" x-text="'found on ' + meta.foundOn"></span>
-            </div>
-          </template>
-
-          <!-- ATS vendor -->
-          <template x-if="atsLine()">
-            <div class="flex">
-              <div class="sep-vert"></div>
-              <span class="badge" x-text="atsLine()"></span>
-            </div>
-          </template>
-
+      <template x-if="meta.url || meta.applyUrl">
+        <span class="job-meta-item job-meta-links">
           <template x-if="meta.url">
-            <div class="flex">
-              <div class="sep-vert"></div>
-              <a :href="meta.url" target="_blank" rel="noopener noreferrer">open original 🔗</a>
-            </div>
+            <a :href="meta.url" target="_blank" rel="noopener noreferrer">Open original</a>
           </template>
-        </div>
+          <template x-if="!meta.url && meta.applyUrl">
+            <a :href="meta.applyUrl" target="_blank" rel="noopener noreferrer">Apply now</a>
+          </template>
+          <template x-if="hasSeparateApplyUrl() && meta.url">
+            <span>&nbsp;(<a :href="meta.applyUrl" target="_blank" rel="noopener noreferrer">Apply now</a>)</span>
+          </template>
+          <span class="external-mark" aria-hidden="true">↗</span>
+        </span>
+      </template>
 
-      </div>
-
-      <div style="text-align:right;">
-        <div class="muted" style="font-size:11px; text-transform:uppercase; letter-spacing:.04em;" x-text="seenPrefix()"></div>
-        <div style="font-size:14px;" x-text="relativeSeen()"></div>
-        <template x-if="(meta.repostCount||0) > 0">
-          <div class="muted" style="font-size:12px;">bumped <span x-text="meta.repostCount"></span> times</div>
-        </template>
-      </div>
+      <span class="job-meta-item job-meta-source" x-cloak x-show="meta.foundOn" x-text="'via ' + meta.foundOn"></span>
+      <span class="job-meta-item job-meta-source" x-cloak x-show="atsLine()" x-text="atsLine()"></span>
     </div>
   </div>
 
   <!-- App controls -->
-  <div class="row-actions">
-    <div class="card private-block"
+  <div class="row-actions" :class="{ 'with-job-actions': canEdit }">
+    <div class="card private-block status-card"
         style="padding:12px 16px; margin-top:12px;"
         x-data="jobStatusComponent({ jobId: '{{ job_id }}' })"
         x-init="init()">
@@ -351,7 +333,7 @@
                 @change="selected = $event.target.value"
                 :disabled="pending"
                 :aria-disabled="pending ? 'true' : 'false'"
-                style="min-width:260px;">
+                style="min-width:260px; max-width:100%;">
           <template x-for="opt in statusOptions" :key="opt">
             <option :value="opt" x-text="opt"></option>
           </template>
@@ -361,7 +343,7 @@
     </div>
 
     <!-- RIGHT COLUMN: job actions block (separate from private status area) -->
-    <div class="card" style="padding:12px 16px; margin-top:12px;">
+    <div class="card" x-cloak x-show="canEdit" style="padding:12px 16px; margin-top:12px;">
       <div class="flex" style="gap:8px; align-items:center; flex-wrap:wrap;">
         <button class="btn"
                 :disabled="!canEdit"
@@ -783,8 +765,9 @@
         let repostCount = Number.parseInt(this.get(p, ["RepostCount","repostCount"]) || 0, 10);
         if (!Number.isFinite(repostCount)) repostCount = 0;
 
-        const url  = this.get(p, ["Url","OriginalUrl"]) || "";
-        const applyUrl = this.get(p, ["ApplyUrl","ApplyLink"]) || "";
+        // Ignore surrounding whitespace, but preserve query parameters and fragments.
+        const url = String(this.get(p, ["Url","OriginalUrl"]) || "").trim();
+        const applyUrl = String(this.get(p, ["ApplyUrl","ApplyLink"]) || "").trim();
 
         const activeLocationModel = p.activeLocationModel === 'v2' ? 'v2' : 'v1';
         const locsV2 = Array.isArray(p.locationsV2) ? p.locationsV2.map(it => ({
@@ -887,6 +870,10 @@
         return this.meta.atsVendor ? `ATS: ${this.meta.atsVendor}` : "";
       },
 
+      hasSeparateApplyUrl(){
+        return !!this.meta.applyUrl && this.meta.applyUrl !== this.meta.url;
+      },
+
       seenPrefix(){ return (this.meta.repostCount||0) === 0 ? 'First seen' : 'Last seen'; },
       relativeSeen(){ return this.relativeFromLocal((this.meta.repostCount||0)===0 ? this.meta.firstSeenUtc : this.meta.lastSeenUtc); },
 
@@ -939,10 +926,8 @@
           this.history.loaded = true;
         }
       },
-      copy(text){ navigator.clipboard?.writeText(text).catch(()=>{}); }
-
-      // --- Debug tooltip for Delete button: shows expected/actual IDs and computed flag
-      ,deleteDebugTitle(){
+      // Debug tooltip for Delete button: show the IDs used by the permission check.
+      deleteDebugTitle(){
         const expected = this.createdByUserId ? String(this.createdByUserId) : "(none)";
         const got = this._currentUidCache ? String(this._currentUidCache) : "(none)";
         const flag = this.canEdit ? "true" : "false";
