@@ -1063,12 +1063,12 @@
       setBusy(true, 'Validating and saving…');
       setError('');
       try {
-        const document = buildDocument();
-        validateBeforeSave(document);
+        const preferencesDocument = buildDocument();
+        validateBeforeSave(preferencesDocument);
         const payload = await requestJson('/ui/users/discovery-preferences', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(document),
+          body: JSON.stringify(preferencesDocument),
         });
         setDocument(payload, true);
         document.dispatchEvent(new CustomEvent('ehestifter:discovery-readiness-changed'));
