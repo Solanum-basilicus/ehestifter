@@ -596,11 +596,22 @@ async function fetchGreenhouseDetails(candidate, context) {
     + `/jobs/${encodeURIComponent(externalId)}`,
   );
   assertEndpointHost(endpoint, GREENHOUSE_HOST);
-  const payload = await fetchJsonWithTimeout({
-    fetchImpl: context.fetchImpl,
-    url: endpoint,
-    timeoutMs: context.timeoutMs,
-  });
+  let payload;
+  try {
+    payload = await fetchJsonWithTimeout({
+      fetchImpl: context.fetchImpl,
+      url: endpoint,
+      timeoutMs: context.timeoutMs,
+    });
+  } catch (error) {
+    if (candidate.provenance?.providerNativeId && [404, 410].includes(error?.status)) {
+      throw new DetailUnavailableError(
+        `Greenhouse detail endpoint returned ${error.status}`,
+        { responseStatus: error.status },
+      );
+    }
+    throw error;
+  }
   return {
     description: greenhouseHtmlToPlainText(payload.content),
     descriptionStatus: 'greenhouse-detail-api',

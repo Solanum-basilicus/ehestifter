@@ -101,6 +101,57 @@ test('Greenhouse details populate description without changing scanner provenanc
   assert.equal(result.detail.status, 'ok');
 });
 
+for (const { httpStatus, nativeId, detailStatus } of [
+  { httpStatus: 404, nativeId: '456', detailStatus: 'unavailable' },
+  { httpStatus: 410, nativeId: '456', detailStatus: 'unavailable' },
+  { httpStatus: 404, nativeId: null, detailStatus: 'error' },
+  { httpStatus: 410, nativeId: null, detailStatus: 'error' },
+  { httpStatus: 500, nativeId: '456', detailStatus: 'error' },
+]) {
+  const identityLabel = nativeId ? 'listing-native ID' : 'URL-derived ID';
+  test(`Greenhouse HTTP ${httpStatus} with ${identityLabel} gives ${detailStatus}`, async () => {
+    const publicUrl = 'https://careers.example.org/vacancy?gh_jid=999&gh_jid=888';
+    const candidate = {
+      url: publicUrl,
+      applyUrl: publicUrl,
+      description: '',
+      descriptionStatus: 'missing',
+      canonicalIdentity: {
+        provider: 'greenhouse',
+        providerTenant: 'example',
+        externalId: 'legacy-id',
+        identitySource: 'url',
+      },
+      provenance: nativeId ? { providerNativeId: nativeId } : {},
+      preflight: { status: 'ok', exists: false },
+    };
+    const calls = [];
+    const [result] = await enrichCandidateDetails([candidate], {
+      concurrency: 1,
+      maxFetches: 1,
+      timeoutMs: 1000,
+      fetchImpl: async (url) => {
+        calls.push(String(url));
+        return new Response('Job is not available', { status: httpStatus });
+      },
+    });
+
+    assert.deepEqual(calls, [
+      `https://boards-api.greenhouse.io/v1/boards/example/jobs/${nativeId || 'legacy-id'}`,
+    ]);
+    assert.equal(result.detail.status, detailStatus);
+    assert.equal(result.detail.provider, 'greenhouse');
+    assert.equal(result.detail.responseStatus, httpStatus);
+    assert.equal(result.detail.attempts, 1);
+    assert.equal(result.description, '');
+    assert.equal(result.descriptionStatus, 'missing');
+    assert.equal(result.url, candidate.url);
+    assert.deepEqual(result.canonicalIdentity, candidate.canonicalIdentity);
+    assert.deepEqual(result.provenance, candidate.provenance);
+  });
+}
+
+
 test('Ashby details reuse one board request and preserve structured primary location', async () => {
   const candidates = ['job-1', 'job-2'].map(
     (externalId) => ({
