@@ -375,7 +375,7 @@ def build_prompt(*, job: Dict[str, Any], cv_text: str) -> str:
 
     return f"""
 Evaluate the candidate CV against the job. If the job description has no usable
-requirements or tasks, return only {"status":"insufficient_job_description"}.
+requirements or tasks, return only {{"status":"insufficient_job_description"}}.
 Do not invent requirements to make a score possible.
 
 JOB_TITLE:

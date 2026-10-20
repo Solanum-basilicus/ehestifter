@@ -1,12 +1,14 @@
 """Tests for strict inference results and the single content retry."""
 from __future__ import annotations
 
+import json
 import unittest
 from types import SimpleNamespace
 
 from app.compatibility import (
     InsufficientJobDescription,
     InvalidCompatibilityResult,
+    build_prompt,
     calculate_final_score,
     check_job_description,
     validate_result,
@@ -26,6 +28,26 @@ def valid_result(score=0):
 
 
 class CompatibilityValidationTests(unittest.TestCase):
+    def test_build_prompt_includes_valid_output_structure(self):
+        prompt = build_prompt(
+            job={"title": "Developer", "description": "Build Python and Azure services."},
+            cv_text="Candidate knows Python and SQL.",
+        )
+        self.assertIn('{"status":"insufficient_job_description"}', prompt)
+        self.assertIn("Build Python and Azure services.", prompt)
+        self.assertIn("Candidate knows Python and SQL.", prompt)
+
+        header = "Return ONLY a single JSON object with exactly this structure:\n"
+        tail = "\n\nCritical interpretation rules:"
+        shape_json = prompt.split(header, 1)[1].split(tail, 1)[0]
+        shape = json.loads(shape_json)
+        self.assertEqual(set(shape), {
+            "Description", "Languages", "HardSkills", "Experience", "SoftSkills",
+        })
+        self.assertEqual(set(shape["Languages"]), {"Applicant", "Job"})
+        self.assertEqual(set(shape["Languages"]["Job"]), {"Mandatory", "Optional"})
+        self.assertEqual(shape["HardSkills"]["score"], "number 0.0-10.0")
+
     def test_a_real_zero_score_is_valid(self):
         validate_result(valid_result())
         self.assertEqual(calculate_final_score(

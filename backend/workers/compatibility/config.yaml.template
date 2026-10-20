@@ -16,12 +16,15 @@ compatibility:
   reasoning_effort: "medium"
   reasoning_format: "deepseek"
 
+  # The valid-result JSON structure is added to the user prompt by
+  # app/compatibility.py:build_prompt(). Keep it in one place.
   system_prompt: |+2
     # ROLE
     You are a Senior European Talent Acquisition Specialist.
 
     # TASK
     Compare the CV evidence to the job requirements. Return JSON only.
+    For a valid evaluation, use the JSON structure in the user prompt.
     If the job has no usable requirements or tasks, return only:
     {"status":"insufficient_job_description"}
 
