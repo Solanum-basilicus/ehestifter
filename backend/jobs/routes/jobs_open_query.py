@@ -5,6 +5,7 @@ import logging
 
 import azure.functions as func
 
+from helpers.compatibility_threshold import parse_min_compatibility_score
 from helpers.db import get_connection
 from helpers.history import DatetimeEncoder
 from helpers.ids import normalize_guid
@@ -14,7 +15,6 @@ from helpers.locations_v2 import load_locations_v2_catalog
 from helpers.locations_v2_store import fetch_locations_v2_map
 
 
-OPEN_MIN_COMPATIBILITY_SCORE = 5.0
 MAX_LIMIT = 100
 
 
@@ -27,7 +27,7 @@ def _parse_body(req: func.HttpRequest) -> dict:
         return {}
     if not isinstance(body, dict):
         raise ValueError("Body must be a JSON object")
-    unknown = set(body) - {"limit", "offset", "eligibility"}
+    unknown = set(body) - {"limit", "offset", "eligibility", "minCompatibilityScore"}
     if unknown:
         raise ValueError(f"Unsupported field: {sorted(unknown)[0]}")
     return body
@@ -52,6 +52,7 @@ def register(app: func.FunctionApp):
             try:
                 body = _parse_body(req)
                 limit, offset = _parse_page(body)
+                min_score = parse_min_compatibility_score(body.get("minCompatibilityScore"))
                 user_id_raw = (req.headers.get("x-user-id") or "").strip()
                 if not user_id_raw:
                     raise ValueError("Missing user id (X-User-Id header)")
@@ -102,7 +103,7 @@ def register(app: func.FunctionApp):
             query_params = [
                 user_id,
                 user_id,
-                OPEN_MIN_COMPATIBILITY_SCORE,
+                min_score,
                 user_id,
                 *eligibility_params,
             ]
@@ -179,6 +180,7 @@ def register(app: func.FunctionApp):
                 "total": total,
                 "activeLocationModel": location_model,
                 "locationEligibilityApplied": eligibility_applied,
+                "minCompatibilityScore": min_score,
                 "items": jobs,
             }
             return func.HttpResponse(

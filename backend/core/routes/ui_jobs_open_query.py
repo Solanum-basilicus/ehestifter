@@ -16,7 +16,7 @@ def create_blueprint(auth):
         if not isinstance(body, dict):
             return jsonify({"error": "bad_request", "message": "Body must be a JSON object"}), 400
 
-        unknown = set(body) - {"limit", "offset"}
+        unknown = set(body) - {"limit", "offset", "minCompatibilityScore"}
         if unknown:
             return jsonify({
                 "error": "bad_request",
@@ -31,7 +31,7 @@ def create_blueprint(auth):
 
         jobs_body = {
             key: body[key]
-            for key in ("limit", "offset")
+            for key in ("limit", "offset", "minCompatibilityScore")
             if key in body
         }
         jobs_body["eligibility"] = preferences.get("eligibility")

@@ -104,6 +104,13 @@
   const listEl = document.getElementById('jobs-list');
   const jobsStage = document.getElementById('jobs-stage');
   const statusEl = document.getElementById('jobs-status');
+  const scoreControl = document.getElementById('score-control');
+  const scoreSlider = document.getElementById('score-slider');
+  const scoreValue = document.getElementById('score-slider-value');
+  const scoreCompactValue = document.getElementById('score-compact-value');
+  const scoreCompactToggle = document.getElementById('score-compact-toggle');
+  const scoreApply = document.getElementById('score-apply');
+  const scoreError = document.getElementById('score-error');
   const errEl = document.getElementById('jobs-error');
   const dbgJobs = document.getElementById('dbg-jobs');
 
@@ -146,6 +153,11 @@
   let activeLocationModel = 'v1';
   let listLoadGeneration = 0;
   let openLoaderTimer = null;
+  let statusFadeTimer = null;
+  let appliedScore = window.ScoreThreshold.DEFAULT;
+  try { appliedScore = window.ScoreThreshold.read(window.localStorage); } catch (_) { /* Storage can be blocked. */ }
+  let draftScore = appliedScore;
+  let pendingScoreApply = null;
 
   let modes = [];
   let cities = [];
@@ -195,10 +207,70 @@
 
   function setActiveTab(cat) {
     tabs.forEach(b => {
-      if ((b.dataset.cat || '') === cat) b.classList.add('active');
-      else b.classList.remove('active');
+      const active = b.dataset.cat === cat;
+      b.classList.toggle('active', active);
+      b.setAttribute('aria-selected', String(active));
     });
+    scoreControl.hidden = cat !== 'open';
+    if (cat !== 'open') closeScoreEditor();
   }
+
+  function closeScoreEditor() {
+    scoreControl.classList.remove('is-open');
+    scoreCompactToggle.setAttribute('aria-expanded', 'false');
+  }
+
+  function showScoreError(message = '') {
+    scoreError.textContent = message;
+    scoreError.hidden = !message;
+  }
+
+  function renderScoreControl() {
+    scoreSlider.value = String(draftScore);
+    const text = draftScore.toFixed(1);
+    const color = scoreToHexColor(draftScore);
+    scoreValue.textContent = text;
+    const appliedText = appliedScore.toFixed(1);
+    scoreCompactValue.textContent = appliedText;
+    scoreValue.style.color = color;
+    scoreCompactValue.style.color = scoreToHexColor(appliedScore);
+    scoreCompactToggle.setAttribute('aria-label', `Edit minimum compatibility score, above ${appliedText}`);
+    scoreSlider.disabled = Boolean(pendingScoreApply);
+    scoreApply.disabled = Boolean(pendingScoreApply) || draftScore === appliedScore;
+    scoreApply.textContent = pendingScoreApply ? 'Applying…' : 'Apply';
+  }
+
+  scoreSlider.addEventListener('input', () => {
+    draftScore = Number(scoreSlider.value);
+    showScoreError();
+    renderScoreControl();
+  });
+
+  scoreCompactToggle.addEventListener('click', () => {
+    const open = scoreControl.classList.toggle('is-open');
+    scoreCompactToggle.setAttribute('aria-expanded', String(open));
+    if (open) scoreSlider.focus();
+  });
+  document.addEventListener('pointerdown', (event) => {
+    if (!scoreControl.contains(event.target)) closeScoreEditor();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && scoreControl.classList.contains('is-open')) {
+      closeScoreEditor();
+      scoreCompactToggle.focus();
+    }
+  });
+
+  scoreApply.addEventListener('click', () => {
+    if (pendingScoreApply || draftScore === appliedScore || currentCategory !== 'open') return;
+    const attempt = { value: draftScore };
+    pendingScoreApply = attempt;
+    showScoreError();
+    renderScoreControl();
+    attempt.previousPage = page;
+    page = 1;
+    loadPage(attempt);
+  });
 
   function stateFromUrl() {
     const sp = new URLSearchParams(location.search);
@@ -241,8 +313,12 @@
 
   function setStatus(text, { error = false, ephemeral = false } = {}) {
     if (!statusEl) return;
+    window.clearTimeout(statusFadeTimer);
     statusEl.classList.remove('fade');
     statusEl.textContent = text;
+    statusEl.title = text;
+    statusEl.classList.toggle('is-loading', text.startsWith('Loading'));
+    statusEl.classList.toggle('is-error', error);
 
     if (error) {
       statusEl.style.color = '#9b1c1c';
@@ -252,7 +328,7 @@
     statusEl.style.color = '#6b7280';
 
     if (ephemeral) {
-      setTimeout(() => statusEl.classList.add('fade'), 5000);
+      statusFadeTimer = window.setTimeout(() => statusEl.classList.add('fade'), 5000);
     }
   }
 
@@ -260,6 +336,7 @@
     listEl?.setAttribute('aria-busy', loading ? 'true' : 'false');
     if (loading) {
       errEl?.setAttribute('hidden', 'hidden');
+      errEl.style.display = 'none';
       setStatus(note || 'Loading…', { error: false, ephemeral: false });
     }
   }
@@ -297,8 +374,12 @@
     setLoading(false);
   }
 
-  function buildApiUrl() {
-    return `/ui/jobs?${paramsFromState().toString()}`;
+  function buildApiUrl(scoreForRequest) {
+    const params = paramsFromState();
+    if (currentCategory === 'open') {
+      params.set('minCompatibilityScore', scoreForRequest.toFixed(1));
+    }
+    return `/ui/jobs?${params.toString()}`;
   }
 
   function renderPagination() {
@@ -381,12 +462,12 @@
   }
 
   function renderEmptyGeneric() {
+    const openEmptyText = `No opportunities match a score above ${appliedScore.toFixed(1)}. Try a lower score or change the other filters.`;
     listEl.innerHTML = `
       <div class="card" style="padding:16px;">
         <h4 style="margin:0 0 6px 0;">Nothing matched</h4>
         <p class="muted" style="margin:0 0 10px 0;">
-          Try relaxing your search, clearing filters, or add the job manually if you know it.
-          Heads-up: finalized jobs only appear in <strong>All Jobs</strong>.
+          ${currentCategory === 'open' && total === 0 ? openEmptyText : 'Try another page, relax your search, or clear the filters. Finalized jobs only appear in All Jobs.'}
         </p>
         <div style="display:flex; gap:10px; flex-wrap:wrap;">
           <a class="button" href="#" id="cta-clear-filters">Clear filters</a>
@@ -673,14 +754,20 @@
     }
   }
 
-  async function loadPage() {
+  async function loadPage(scoreAttempt = null) {
+    if (pendingScoreApply && pendingScoreApply !== scoreAttempt) {
+      pendingScoreApply = null;
+      showScoreError('Apply stopped by another list request. Try again.');
+      renderScoreControl();
+    }
     const generation = ++listLoadGeneration;
     const loadCategory = currentCategory;
+    const requestedScore = scoreAttempt ? scoreAttempt.value : appliedScore;
     setLoading(true, `Loading page ${page}…`);
     prepareOpenLoader(generation, loadCategory);
 
     try {
-      const url = buildApiUrl();
+      const url = buildApiUrl(requestedScore);
       syncUrl();
 
       const data = await window.fetchWithRetry(url, 4);
@@ -688,6 +775,21 @@
 
       if (!data || data.error) {
         throw new Error((data && data.message) || 'Jobs service is warming up');
+      }
+
+      if (loadCategory === 'open') {
+        const confirmedScore = window.ScoreThreshold.validScore(data.minCompatibilityScore);
+        if (confirmedScore === null) throw new Error('Jobs did not confirm the score threshold');
+        if (scoreAttempt && pendingScoreApply === scoreAttempt) {
+          appliedScore = confirmedScore;
+          draftScore = confirmedScore;
+          pendingScoreApply = null;
+          try { window.ScoreThreshold.save(window.localStorage, confirmedScore); } catch (_) { /* Keep the applied score in memory. */ }
+          showScoreError();
+        } else {
+          appliedScore = confirmedScore;
+        }
+        renderScoreControl();
       }
 
       const items = Array.isArray(data.items) ? data.items : [];
@@ -729,10 +831,17 @@
     } catch (e) {
       if (generation !== listLoadGeneration) return;
       console.error('loadPage error', e);
+      if (scoreAttempt && pendingScoreApply === scoreAttempt) {
+        pendingScoreApply = null;
+        page = scoreAttempt.previousPage;
+        syncUrl();
+        showScoreError('Could not apply the score. Try again.');
+        renderScoreControl();
+      }
       errEl.removeAttribute('hidden');
       errEl.style.display = 'block';
       errEl.innerHTML = `
-        <span class="text-dim">Jobs unavailable - ${e.message || e}</span>
+        <span class="text-dim">Jobs unavailable - ${escapeHtml(e.message || e)}</span>
         <button id="retry-jobs" type="button" style="margin-left:.5rem">Retry</button>
       `;
       document.getElementById('retry-jobs').addEventListener('click', () => {
@@ -747,9 +856,8 @@
 
   tabs.forEach(btn => {
     btn.addEventListener('click', () => {
-      tabs.forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
       currentCategory = btn.dataset.cat || 'all';
+      setActiveTab(currentCategory);
       page = 1;
       loadPage();
     });
@@ -879,6 +987,7 @@
   });
 
   document.addEventListener('DOMContentLoaded', () => {
+    renderScoreControl();
     stateFromUrl();
     syncUrl();
     loadPage();

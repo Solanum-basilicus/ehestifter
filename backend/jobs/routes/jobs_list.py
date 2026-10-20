@@ -8,6 +8,7 @@ from helpers.history import DatetimeEncoder
 from helpers.ids import normalize_guid
 from helpers.domain_constants import FINAL_STATUSES
 from helpers.status_normalize import status_key, status_key_case_sql
+from helpers.compatibility_threshold import parse_min_compatibility_score
 from helpers.location_mode import active_location_model
 from helpers.locations_v2 import load_locations_v2_catalog
 from helpers.locations_v2_store import fetch_locations_v2_map
@@ -28,8 +29,6 @@ VALID_SORTS = {
     "location_az",
     # "compat_desc"  # future
 }
-
-OPEN_MIN_COMPATIBILITY_SCORE = 5.0
 
 
 def _parse_multi(req: func.HttpRequest, name: str) -> list[str]:
@@ -84,6 +83,13 @@ def register(app: func.FunctionApp):
             category = (req.params.get("category") or "my").strip().lower()
             if category not in VALID_CATEGORIES:
                 return func.HttpResponse("Invalid 'category'", status_code=400)
+
+            try:
+                min_score = parse_min_compatibility_score(
+                    req.params.get("minCompatibilityScore") if category == "open" else None
+                )
+            except ValueError as exc:
+                return func.HttpResponse(str(exc), status_code=400)
 
             q = (req.params.get("q") or "").strip()
             search_field = (req.params.get("search_field") or "title_company").strip().lower()
@@ -166,8 +172,8 @@ def register(app: func.FunctionApp):
                      AND cs.UserId = ?
                      AND cs.Score > ?
                 """)
-                params += [user_id, OPEN_MIN_COMPATIBILITY_SCORE]
-                params_count += [user_id, OPEN_MIN_COMPATIBILITY_SCORE]
+                params += [user_id, min_score]
+                params_count += [user_id, min_score]
 
             # Category constraints
             if category == "my":
@@ -486,6 +492,7 @@ def register(app: func.FunctionApp):
                     "total": total,
                     "sort": sort,
                     "activeLocationModel": location_model,
+                    **({"minCompatibilityScore": min_score} if category == "open" else {}),
                     "items": []
                 }
                 return func.HttpResponse(
@@ -539,6 +546,7 @@ def register(app: func.FunctionApp):
                 "total": total,
                 "sort": sort,
                 "activeLocationModel": location_model,
+                    **({"minCompatibilityScore": min_score} if category == "open" else {}),
                 "items": jobs
             }
             return func.HttpResponse(

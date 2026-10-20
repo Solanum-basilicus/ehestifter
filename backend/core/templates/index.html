@@ -3,19 +3,30 @@
 {% block head_extra %}
   {% include "jobs/_index_styles.html" %}
   <script src="{{ url_for('static', filename='js/location-display.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/score-threshold.js') }}"></script>
 {% endblock %}
 
 {% block content %}
   <div style="max-width:1100px; margin:0 auto; padding:16px;">
     <div class="catsbar">
-      <div class="catsbar-left">
-        <div class="tabs" role="tablist" aria-label="Categories">
-          <button class="tab active" data-cat="my" role="tab" aria-selected="true">My Jobs</button>
-          <button class="tab" data-cat="open" role="tab">Open Opportunities</button>
-          <button class="tab" data-cat="all" role="tab">All Jobs</button>
-        </div>
-        <span id="jobs-status" class="status-ephemeral">Loading…</span>
+      <div class="tabs" role="tablist" aria-label="Categories">
+        <button class="tab active" data-cat="my" role="tab" aria-selected="true">My Jobs</button>
+        <button class="tab" data-cat="all" role="tab" aria-selected="false">All Jobs</button>
+        <button class="tab" data-cat="open" role="tab" aria-selected="false"><span class="tab-open-full">Open Opportunities</span><span class="tab-open-short">Open</span></button>
       </div>
+      <div id="score-control" class="score-control" hidden>
+        <button id="score-compact-toggle" class="score-compact-toggle" type="button" aria-controls="score-editor" aria-expanded="false" aria-label="Edit minimum compatibility score">
+          <span aria-hidden="true">Score</span> <span id="score-compact-value" class="score-color-value">5.0</span>
+        </button>
+        <div id="score-editor" class="score-editor">
+          <label for="score-slider">Score above</label>
+          <input id="score-slider" type="range" min="0" max="9.5" step="0.5" value="5" aria-label="Minimum compatibility score (strictly above)" />
+          <output id="score-slider-value" for="score-slider" class="score-color-value">5.0</output>
+          <button id="score-apply" class="button score-apply" type="button" disabled>Apply</button>
+        </div>
+        <span id="score-error" class="score-error" role="alert" hidden></span>
+      </div>
+      <span id="jobs-status" class="status-ephemeral" role="status" aria-live="polite">Loading…</span>
     </div>
 
     <div class="list-controls" aria-label="List controls">
