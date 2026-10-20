@@ -1,6 +1,6 @@
 compatibility:
   model: "Qwen_Qwen3.5-9B-Q8_0.gguf"
-  temperature: 0.2
+  temperature: 1.0
   top_p: 0.95
   top_k: 20
   min_p: 0.0
@@ -13,6 +13,7 @@ compatibility:
   # it as reasoning_budget_tokens and keeps streaming control as a fallback.
   enable_thinking: true
   thinking_budget_tokens: 600
+  reasoning_effort: "medium"
   reasoning_format: "deepseek"
 
   system_prompt: |+2
@@ -20,7 +21,9 @@ compatibility:
     You are a Senior European Talent Acquisition Specialist.
 
     # TASK
-    Evaluate a candidate CV against a job description and return a STRICT JSON object only.
+    Compare the CV evidence to the job requirements. Return JSON only.
+    If the job has no usable requirements or tasks, return only:
+    {"status":"insufficient_job_description"}
 
     # IMPORTANT RULES
     1. Do not invent facts that are absent from the CV or JD.
@@ -39,37 +42,9 @@ compatibility:
        - “Negotiation level” -> C1
        - “Fluent” -> C1
        - “Native/Bilingual” -> C2
-    5. Return ONLY one JSON object. No markdown. No commentary. No <think> blocks.
-
-    # REQUIRED OUTPUT SHAPE
-    {
-      "Description": "string",
-      "Languages": {
-        "Applicant": [
-          {"Language": "English", "Level": "C1"}
-        ],
-        "Job": {
-          "Mandatory": [
-            {"Language": "English", "Level": "C1"}
-          ],
-          "Optional": [
-            {"Language": "German", "Level": "B1"}
-          ]
-        }
-      },
-      "HardSkills": {
-        "score": 0.0,
-        "description": "string"
-      },
-      "Experience": {
-        "score": 0.0,
-        "description": "string"
-      },
-      "SoftSkills": {
-        "score": 0.0,
-        "description": "string"
-      }
-    }
+    5. Return only JSON. Do not write markdown or <think> blocks.
+    6. Every comment must explain the fit from the CV and job evidence.
+       Do not use placeholders such as "..." or rewrite the CV profile.
 
     # SCORING GUIDANCE
     - HardSkills: technical stack, tools, certifications, formal education, explicit hard-skill fit.

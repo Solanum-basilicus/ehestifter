@@ -34,28 +34,6 @@ async function mapLimit(items, limit, worker, onProgress, onResult = null) {
   return results;
 }
 
-function latestDecision(latest, cvVersionId, config) {
-  if (!latest) return { request: true, reason: 'missing' };
-  const status = String(latest.status ?? '').toLowerCase();
-  if (['pending', 'queued', 'leased', 'running'].includes(status)) {
-    return { request: false, reason: 'active' };
-  }
-  if (status === 'succeeded') {
-    const latestCv = typeof latest.cvVersionId === 'string'
-      ? latest.cvVersionId.toLowerCase()
-      : null;
-    const currentCv = cvVersionId.toLowerCase();
-    if (latestCv === currentCv) {
-      return { request: false, reason: 'succeeded_current_cv' };
-    }
-    if (!latestCv && !config.refreshSucceededWithUnknownCvVersion) {
-      return { request: false, reason: 'succeeded_unknown_cv' };
-    }
-    return { request: true, reason: 'cv_changed' };
-  }
-  return { request: true, reason: status || 'unknown_status' };
-}
-
 export function buildCompatibilityPairs(importResults, discoveryUsers) {
   const userMap = new Map(discoveryUsers.map((user) => [user.userId, user]));
   const pairs = [];
@@ -93,52 +71,17 @@ export async function requestCompatibilityForMatches({
   const pairs = allPairs.slice(0, config.maxPairsPerRun);
   const omittedPairs = allPairs.length - pairs.length;
 
-  const checked = await mapLimit(
-    pairs,
-    config.concurrency,
-    async (pair) => {
-      try {
-        const latest = await client.getLatest(
-          pair.jobId,
-          pair.userId,
-          config.enricherType,
-        );
-        return {
-          ...pair,
-          latest,
-          decision: latestDecision(latest, pair.cvVersionId, config),
-          checkStatus: 'ok',
-        };
-      } catch (error) {
-        return {
-          ...pair,
-          latest: null,
-          decision: { request: false, reason: 'latest_check_error' },
-          checkStatus: 'error',
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-    },
-    null,
-  );
-
-  const requestable = checked.filter((item) => item.decision.request);
+  // Enrichment Core owns the decision to create, reuse, or suppress a run.
   const requestSet = new Set(
-    requestable.slice(0, config.maxRequestsPerRun).map(
-      (item) => `${item.jobId.toLowerCase()}:${item.userId.toLowerCase()}`,
+    pairs.slice(0, config.maxRequestsPerRun).map(
+      (pair) => `${pair.jobId.toLowerCase()}:${pair.userId.toLowerCase()}`,
     ),
   );
 
   const results = await mapLimit(
-    checked,
+    pairs,
     config.concurrency,
     async (item) => {
-      if (item.checkStatus === 'error') {
-        return { ...item, status: 'error_latest_check' };
-      }
-      if (!item.decision.request) {
-        return { ...item, status: `skipped_${item.decision.reason}` };
-      }
       const key = `${item.jobId.toLowerCase()}:${item.userId.toLowerCase()}`;
       if (!requestSet.has(key)) {
         return { ...item, status: 'skipped_request_limit' };
@@ -149,9 +92,11 @@ export async function requestCompatibilityForMatches({
           item.userId,
           config.enricherType,
         );
+        const decision = run?.decision ?? 'created';
         return {
           ...item,
-          status: 'requested',
+          status: decision === 'created' ? 'requested' : `skipped_${decision}`,
+          decisionReason: decision,
           requestedRun: {
             runId: run?.runId ?? null,
             status: run?.status ?? null,
@@ -177,14 +122,6 @@ export async function requestCompatibilityForMatches({
     evaluatedPairs: pairs.length,
     omittedPairs,
     requestLimit: config.maxRequestsPerRun,
-    results: results.map(({ latest, decision, checkStatus, ...item }) => ({
-      ...item,
-      latest: latest ? {
-        runId: latest.runId ?? null,
-        status: latest.status ?? null,
-        cvVersionId: latest.cvVersionId ?? null,
-      } : null,
-      decisionReason: decision.reason,
-    })),
+    results,
   };
 }

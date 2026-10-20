@@ -1090,7 +1090,8 @@
       run?.createdAt ?? run?.CreatedAt ??
       "";
 
-    return { score, summary, status, createdAt };
+    const errorMessage = run?.errorMessage ?? run?.ErrorMessage ?? "";
+    return { score, summary, status, createdAt, errorMessage };
   }
 
   function setEnabled(btn, enabled) {
@@ -1104,7 +1105,7 @@
   }
 
   function renderLatest(latest) {
-    const { score, summary, status } = extractRunFields(latest);
+    const { score, summary, status, errorMessage } = extractRunFields(latest);
 
     // Keep skeleton if no result/score
     const hexes = renderHexScore(score);          // "⬢⬢⬢⬡⬡..."
@@ -1119,7 +1120,9 @@
       elScoreLine.innerHTML = `<span style="color:${color}">${hexes}</span> ${escapeHtml(scoreText)}`;
     }
 
-    elSummary.textContent = summary ? summary : "";
+    elSummary.textContent = status === "Failed"
+      ? (errorMessage || "Compatibility evaluation failed.")
+      : (summary || "");
 
     if (status) {
       elSubtitle.textContent = status;
@@ -1214,13 +1217,15 @@
       }
 
       elHistory.innerHTML = items.map(r => {
-        const { score, summary, status, createdAt } = extractRunFields(r);
+        const { score, summary, status, createdAt, errorMessage } = extractRunFields(r);
 
         const rel = (window.__relativeFromLocal && createdAt) ? window.__relativeFromLocal(createdAt) : "";
         const title = createdAt ? new Date(createdAt).toLocaleString() : "";
 
         const scoreLine = `score: ${fmtScoreText(score)}`;
-        const safeSummary = summary ? escapeHtml(summary) : "";
+        const safeSummary = status === "Failed"
+          ? escapeHtml(errorMessage || "Compatibility evaluation failed.")
+          : (summary ? escapeHtml(summary) : "");
 
         return `
           <div style="border:1px solid #eee; border-radius:10px; padding:10px; margin-bottom:8px;">

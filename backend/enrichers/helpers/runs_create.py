@@ -65,12 +65,31 @@ def _selected_gateway_config() -> tuple[str, str, str]:
     )
 
 
-def create_run_db(job_offering_id: str, user_id: str, enricher_type: str) -> Dict[str, Any]:
+def decide_automatic_run(latest: dict | None, cv_version_id: str | None) -> str:
+    """Return the Enrichment Core decision for an automatic request."""
+    if not latest:
+        return "created"
+    status = str(latest.get("status") or "").lower()
+    if status in ("pending", "queued", "leased"):
+        return "reused"
+    if status == "succeeded":
+        previous_cv = str(latest.get("cvVersionId") or "").lower()
+        current_cv = str(cv_version_id or "").lower()
+        # Unknown CV versions keep the historical no-refresh behavior.
+        if not previous_cv or previous_cv == current_cv:
+            return "reused"
+    if status == "failed" and latest.get("errorCode") == "INSUFFICIENT_JOB_DESCRIPTION":
+        return "suppressed"
+    return "created"
+
+
+def create_run_db(
+    job_offering_id: str, user_id: str, enricher_type: str,
+    *, request_mode: str = "manual",
+) -> Dict[str, Any]:
     """
-    DB-only creation:
-      - supersede existing active runs
-      - insert new Pending run
-      - returns minimal run dict (enough for snapshot + enqueue + response)
+    Decide and create inside one transaction. Manual requests always create.
+    Automatic requests can reuse a run or suppress a permanent failure.
     """
     now = _utcnow()
     run_id = str(uuid.uuid4())
@@ -81,32 +100,63 @@ def create_run_db(job_offering_id: str, user_id: str, enricher_type: str) -> Dic
         conn.autocommit = False
         cur = conn.cursor()
 
+        # Lock manual and automatic requests for the same subject.
+        # Keep the transaction lock until commit or rollback.
         cur.execute(
             """
-            UPDATE dbo.EnrichmentRuns
-            SET Status = 'Superseded',
-                UpdatedAt = ?
-            WHERE EnricherType = ?
-              AND SubjectKey = ?
-              AND Status IN ('Pending','Queued','Leased')
+            SET NOCOUNT ON;
+            DECLARE @lock_result int;
+            EXEC @lock_result = sp_getapplock
+                @Resource = ?, @LockMode = 'Exclusive',
+                @LockOwner = 'Transaction', @LockTimeout = 10000;
+            SELECT @lock_result;
             """,
-            now, enricher_type, subject_key
+            f"enrichment:{enricher_type}:{subject_key}",
         )
+        lock_row = cur.fetchone()
+        if lock_row is None or int(lock_row[0]) < 0:
+            raise RuntimeError("Could not lock enrichment subject")
 
-        # If you still want CVVersionId here, join it in or do a separate lookup.
-        cv_version_id = None
         cur.execute(
-            """
-            SELECT CVVersionId
-            FROM dbo.UserPreferences
-            WHERE UserId = ?
-            """,
+            "SELECT CVVersionId FROM dbo.UserPreferences WHERE UserId = ?",
             user_id,
         )
         row = cur.fetchone()
-        if row:
-            cv_version_id = row[0]
+        cv_version_id = row[0] if row else None
 
+        if request_mode == "automatic":
+            cur.execute(
+                """
+                SELECT TOP 1 RunId, Status, CVVersionId, ErrorCode
+                FROM dbo.EnrichmentRuns
+                WHERE EnricherType = ? AND SubjectKey = ?
+                ORDER BY RequestedAt DESC, RunId DESC
+                """,
+                enricher_type, subject_key,
+            )
+            latest_row = cur.fetchone()
+            latest = None
+            if latest_row:
+                latest = {
+                    "runId": str(latest_row[0]),
+                    "status": latest_row[1],
+                    "cvVersionId": latest_row[2],
+                    "errorCode": latest_row[3],
+                }
+            decision = decide_automatic_run(latest, cv_version_id)
+            if decision != "created":
+                conn.commit()
+                return {"runId": latest["runId"], "decision": decision}
+
+        cur.execute(
+            """
+            UPDATE dbo.EnrichmentRuns
+            SET Status = 'Superseded', UpdatedAt = ?
+            WHERE EnricherType = ? AND SubjectKey = ?
+              AND Status IN ('Pending','Queued','Leased')
+            """,
+            now, enricher_type, subject_key,
+        )
         cur.execute(
             """
             INSERT INTO dbo.EnrichmentRuns
@@ -114,7 +164,7 @@ def create_run_db(job_offering_id: str, user_id: str, enricher_type: str) -> Dic
              Status, RequestedAt, CVVersionId, UpdatedAt)
             VALUES (?, ?, ?, ?, ?, 'Pending', ?, ?, ?)
             """,
-            run_id, enricher_type, subject_key, job_offering_id, user_id, now, cv_version_id, now
+            run_id, enricher_type, subject_key, job_offering_id, user_id, now, cv_version_id, now,
         )
 
         conn.commit()
@@ -136,6 +186,7 @@ def create_run_db(job_offering_id: str, user_id: str, enricher_type: str) -> Dic
         "status": "Pending",
         "requestedAt": now.isoformat(),
         "cvVersionId": cv_version_id,
+        "decision": "created",
     }
 
 def mark_queued(run_id: str) -> None:

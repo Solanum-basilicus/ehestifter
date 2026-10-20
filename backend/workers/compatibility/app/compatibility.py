@@ -1,9 +1,11 @@
 # /app/compatibility.py
 from typing import Any, Dict, List, Optional
 import json
+import html
+import math
+import re
 
 MAX_SUMMARY_LEN = 1800
-MAX_RAW_SNIPPET_LEN = 400
 
 
 CEFR_ORDER = {
@@ -239,29 +241,102 @@ def _normalize_languages(obj: Any) -> Dict[str, Any]:
     return out
 
 
-def _normalize_scored_section(obj: Any, default_description: str = "") -> Dict[str, Any]:
-    if not isinstance(obj, dict):
-        return {"score": 0.0, "description": default_description}
-
-    score = (
-        obj.get("score")
-        or obj.get("Score")
-        or obj.get("value")
-        or obj.get("Value")
-        or 0.0
-    )
-    description = (
-        obj.get("description")
-        or obj.get("Description")
-        or obj.get("summary")
-        or obj.get("Summary")
-        or default_description
-    )
-
+def _normalize_scored_section(obj: Dict[str, Any]) -> Dict[str, Any]:
+    # The caller must validate all sections first.
     return {
-        "score": _coerce_score(score, default=0.0),
-        "description": _truncate_with_note(_safe_str(description), MAX_SUMMARY_LEN),
+        "score": round(float(_extract_subsection(obj, "score", "value")), 1),
+        "description": _truncate_with_note(
+            _safe_str(_extract_subsection(obj, "description", "summary")),
+            MAX_SUMMARY_LEN,
+        ),
     }
+
+
+class InvalidCompatibilityResult(ValueError):
+    """The inference response does not have a valid compatibility result."""
+
+
+class InsufficientJobDescription(ValueError):
+    """The job does not provide enough information for a comparison."""
+
+
+def check_job_description(job: Dict[str, Any]) -> None:
+    """Reject empty job data without making an inference request."""
+    raw = _safe_str(job.get("description") or job.get("jobDescription"))
+    text = html.unescape(re.sub(r"<[^>]*>", " ", raw))
+    text = " ".join(text.split())
+    title = _safe_str(job.get("title") or job.get("jobName"))
+    compact = re.sub(r"\W+", "", text, flags=re.UNICODE).casefold()
+    title_compact = re.sub(r"\W+", "", title, flags=re.UNICODE).casefold()
+    if not compact or compact == title_compact:
+        raise InsufficientJobDescription("The job description contains no requirements or tasks")
+    if len(compact) < 100:
+        # A short but specific description can still be useful.
+        signals = re.findall(
+            r"\b(?:python|sql|azure|aws|java|javascript|typescript|react|"
+            r"docker|kubernetes|linux|excel|finance|sales|marketing|"
+            r"design|testing|develop|build|manage|lead|support|"
+            r"experience|years|required|must|responsible|knowledge)\b",
+            text, flags=re.IGNORECASE,
+        )
+        if len(set(word.lower() for word in signals)) < 2:
+            raise InsufficientJobDescription("The job description is too short to evaluate")
+
+
+def _valid_comment(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if not text or not re.search(r"\w", text, flags=re.UNICODE):
+        return False
+    return (len(text) >= 15 and len(text.split()) >= 3
+            and text.casefold() not in {"n/a", "none", "null", "unknown", "tbd", "pending", "no comment"})
+
+
+def validate_result(obj: Dict[str, Any]) -> None:
+    """Reject incomplete inference output before it is normalized or scored."""
+    if not isinstance(obj, dict) or obj.get("__parse_error"):
+        raise InvalidCompatibilityResult("The model response is not valid JSON")
+    if str(obj.get("status") or "").strip().lower() == "insufficient_job_description":
+        raise InsufficientJobDescription("The model found no usable job requirements")
+
+    description = _extract_subsection(obj, "Description", "summary")
+    if not _valid_comment(description):
+        raise InvalidCompatibilityResult("The overall compatibility comment is missing or invalid")
+    for key in ("HardSkills", "Experience", "SoftSkills"):
+        aliases = {"HardSkills": ("HardSkills", "hard_skills"),
+                   "Experience": ("Experience",),
+                   "SoftSkills": ("SoftSkills", "soft_skills")}
+        section = _extract_subsection(obj, *aliases[key])
+        if not isinstance(section, dict):
+            raise InvalidCompatibilityResult(f"{key} section is missing")
+        score = _extract_subsection(section, "score", "value")
+        if isinstance(score, bool) or not isinstance(score, (int, float)):
+            raise InvalidCompatibilityResult(f"{key} score is not a number")
+        if not math.isfinite(score) or not 0 <= score <= 10:
+            raise InvalidCompatibilityResult(f"{key} score is outside 0 to 10")
+        if not _valid_comment(_extract_subsection(section, "description", "summary")):
+            raise InvalidCompatibilityResult(f"{key} comment is missing or invalid")
+
+    languages = _extract_subsection(obj, "Languages")
+    if not isinstance(languages, dict):
+        raise InvalidCompatibilityResult("Languages section is missing")
+    applicant = _extract_subsection(languages, "Applicant")
+    job_languages = _extract_subsection(languages, "Job")
+    if not isinstance(applicant, list) or not isinstance(job_languages, dict):
+        raise InvalidCompatibilityResult("Languages structure is invalid")
+    lists = [applicant]
+    for name in ("Mandatory", "Optional"):
+        items = _extract_subsection(job_languages, name)
+        if not isinstance(items, list):
+            raise InvalidCompatibilityResult("Job language lists are invalid")
+        lists.append(items)
+    for items in lists:
+        for item in items:
+            language = (_extract_subsection(item, "Language", "name")
+                        if isinstance(item, dict) else item)
+            if not isinstance(language, str) or not language.strip():
+                raise InvalidCompatibilityResult("A language entry is invalid")
 
 
 def build_prompt(*, job: Dict[str, Any], cv_text: str) -> str:
@@ -299,7 +374,9 @@ def build_prompt(*, job: Dict[str, Any], cv_text: str) -> str:
     }
 
     return f"""
-Please evaluate the candidate CV versus the job.
+Evaluate the candidate CV against the job. If the job description has no usable
+requirements or tasks, return only {"status":"insufficient_job_description"}.
+Do not invent requirements to make a score possible.
 
 JOB_TITLE:
 {title}
@@ -346,68 +423,27 @@ Bad Description examples:
 - "Results-driven engineer with passion for technology."
 - "I am a hardworking person with excellent communication skills."
 
+For a valid evaluation, do not use placeholders such as "..." in any comment.
+Each section comment must refer to relevant evidence in the CV or the job.
 No markdown. No extra keys. No extra text.
 """.strip()
 
 
 def normalize_result(obj: Dict[str, Any]) -> Dict[str, Any]:
-    notes = []
-
-    description = _safe_str(
-        obj.get("Description")
-        or obj.get("description")
-        or obj.get("summary")
-        or obj.get("Summary")
-        or ""
-    )
-    if not description:
-        description = "Structured compatibility summary could not be reliably extracted."
-        notes.append("description was absent")
-    description = _truncate_with_note(description, MAX_SUMMARY_LEN)
-
-    languages = _normalize_languages(
-        obj.get("Languages")
-        or obj.get("languages")
-        or {}
-    )
-
-    hard_skills = _normalize_scored_section(
-        obj.get("HardSkills") or obj.get("hardSkills") or obj.get("hard_skills"),
-        default_description="Hard skills match could not be reliably extracted.",
-    )
-    experience = _normalize_scored_section(
-        obj.get("Experience") or obj.get("experience"),
-        default_description="Experience match could not be reliably extracted.",
-    )
-    soft_skills = _normalize_scored_section(
-        obj.get("SoftSkills") or obj.get("softSkills") or obj.get("soft_skills"),
-        default_description="Soft skills match could not be reliably extracted.",
-    )
-
-    parse_err = obj.get("__parse_error")
-    raw_txt = obj.get("__raw")
-    if parse_err:
-        notes.append(f"model output JSON parse failed: {parse_err}")
-        if raw_txt:
-            snippet = _truncate_with_note(str(raw_txt), MAX_RAW_SNIPPET_LEN)
-            notes.append(f"raw model output snippet: {snippet}")
-
-    result = {
-        "description": description,
-        "languages": languages,
-        "hard_skills": hard_skills,
-        "experience": experience,
-        "soft_skills": soft_skills,
+    # Validation is mandatory. Never create a score from a missing section.
+    validate_result(obj)
+    return {
+        "description": _truncate_with_note(
+            _safe_str(_extract_subsection(obj, "Description", "summary")),
+            MAX_SUMMARY_LEN,
+        ),
+        "languages": _normalize_languages(_extract_subsection(obj, "Languages")),
+        "hard_skills": _normalize_scored_section(
+            _extract_subsection(obj, "HardSkills", "hard_skills")),
+        "experience": _normalize_scored_section(_extract_subsection(obj, "Experience")),
+        "soft_skills": _normalize_scored_section(
+            _extract_subsection(obj, "SoftSkills", "soft_skills")),
     }
-
-    for k in ("__parse_diag", "__llama_cpp", "__raw", "__parse_error", "__client_debug", "__server_debug"):
-        if k in obj:
-            result[k] = obj[k]
-
-    if notes:
-        result["__normalize_notes"] = notes
-
-    return result
 
 
 def evaluate_language_disqualification(languages: Dict[str, Any]) -> Dict[str, Any]:

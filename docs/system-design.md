@@ -399,8 +399,10 @@ Owns:
 - building prompt from job snapshot and CV text,
 - calling llama.cpp,
 - enforcing its per-request reasoning budget through llama.cpp,
-- normalizing result into score and summary,
-- returning result to Gateway.
+- checking whether the job description has useful content,
+- validating required model fields before it calculates a score,
+- retrying invalid model content once without creating another run,
+- returning a valid score or a terminal failure to Gateway.
 
 Inference rules:
 - `thinking_budget_tokens` is the worker policy name.
@@ -410,6 +412,9 @@ Inference rules:
 - If reasoning is still active when the cumulative generated token count reaches the configured budget plus 50, the worker sends one `reasoning_end` control action as a fallback.
 - The worker parses structured output only from final `content`, not from `reasoning_content`.
 - `max_tokens` remains the independent hard generation limit.
+- The client can set `reasoning_effort` separately from the budget.
+- Transport retries and inference-outage recovery remain separate from the single invalid-content retry.
+- `INSUFFICIENT_JOB_DESCRIPTION` is permanent for the current job description; `INFERENCE_INVALID_RESULT` is a terminal failure after the content retry. Neither becomes a score of zero.
 - The shared llama.cpp server must not use a compatibility-specific global reasoning budget.
 
 Does not own:
@@ -1858,7 +1863,7 @@ filesystem dependency. `tools/refresh_ats_geo_snapshot.py` is the host entry
 point and runs the Node generator inside the scanner Docker image from a full
 checkout. Scanner-only deployments consume the committed snapshot.
 
-Compatibility requests go through the existing Enrichment Core API. ATS Discovery never writes compatibility projections or enrichment tables directly.
+Compatibility requests go through the existing Enrichment Core API. ATS Discovery never writes compatibility projections or enrichment tables directly. ATS Discovery sends `requestMode: "automatic"` and does not read the latest enrichment run before requesting compatibility. Enrichment Core decides whether to create a new run, reuse an active/current-CV successful run, or suppress an automatic retry of a permanently insufficient job description. These decisions use a subject transaction lock. Manual callers omit `requestMode` and always create a new run. Enrichment Core returns a `decision` value (`created`, `reused`, or `suppressed`). A manual request can retry a job after its description changes; automatic job-description version detection is not available.
 
 ### 14.6 State, artifacts, and observability
 

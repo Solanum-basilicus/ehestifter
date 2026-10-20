@@ -22,6 +22,9 @@ def register(app: func.FunctionApp):
         job_id = body.get("jobOfferingId") or body.get("jobId")
         user_id = body.get("userId")
         enricher_type = body.get("enricherType") or "compatibility.v1"
+        request_mode = body.get("requestMode", "manual")
+        if request_mode not in ("automatic", "manual"):
+            return func.HttpResponse("Invalid requestMode", status_code=400)
 
         corr = req.headers.get("x-correlation-id") or req.headers.get("x-ms-client-request-id")
         logging.info("POST /enrichment/runs corr=%s body=%s", corr, body)
@@ -35,7 +38,14 @@ def register(app: func.FunctionApp):
         )
 
         # 1) DB create (Pending)
-        run = create_run_db(job_id, user_id, enricher_type)
+        run = create_run_db(job_id, user_id, enricher_type, request_mode=request_mode)
+        decision = run["decision"]
+        if decision != "created":
+            existing = svc.get_run(run["runId"])
+            existing["decision"] = decision
+            return func.HttpResponse(
+                json.dumps(existing), mimetype="application/json", status_code=200,
+            )
 
         source_surface = source_surface_from_request(req)
         if source_surface == "web":
@@ -96,6 +106,7 @@ def register(app: func.FunctionApp):
         except Exception as e:
             logging.exception("POST /enrichment/runs snapshot build failed (leaving Pending) corr=%s", corr)
             run = svc.get_run(run["runId"])
+            run["decision"] = decision
             return func.HttpResponse(json.dumps(run), mimetype="application/json", status_code=201)
 
         # 3) Dispatch to gateway (if this fails -> leave Pending; return 201; gateway sweep will pick it up)
@@ -104,12 +115,14 @@ def register(app: func.FunctionApp):
         except Exception:
             logging.exception("POST /enrichment/runs dispatch failed corr=%s", corr)
             run = svc.get_run(run["runId"])
+            run["decision"] = decision
             return func.HttpResponse(json.dumps(run), mimetype="application/json", status_code=201)
 
         # 4) Mark queued only after successful dispatch
         try:
             mark_queued(run["runId"])
             run = svc.get_run(run["runId"])
+            run["decision"] = decision
             return func.HttpResponse(json.dumps(run), mimetype="application/json", status_code=201)
         except Exception as e:
             # If this fails, we *did* enqueue. Better to return 500 and rely on later consistency check.

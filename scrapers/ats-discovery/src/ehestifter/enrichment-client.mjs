@@ -29,7 +29,7 @@ export function createEnrichmentClient(config, { fetchImpl = fetch } = {}) {
     'x-source-surface': 'system',
   };
 
-  async function requestWithRetry(url, options, { allowNotFound = false } = {}) {
+  async function requestWithRetry(url, options) {
     let lastError = null;
     for (let attempt = 0; attempt <= config.retryCount; attempt += 1) {
       let response = null;
@@ -40,7 +40,6 @@ export function createEnrichmentClient(config, { fetchImpl = fetch } = {}) {
           options,
           config.timeoutMs,
         );
-        if (allowNotFound && response.status === 404) return null;
         if (response.ok) return await response.json();
         lastError = await responseError(response, 'Enrichment API');
         if (response.status !== 429 && response.status < 500) throw lastError;
@@ -60,19 +59,6 @@ export function createEnrichmentClient(config, { fetchImpl = fetch } = {}) {
     throw lastError ?? new Error('Enrichment API request failed');
   }
 
-  async function getLatest(jobId, userId, enricherType) {
-    const endpoint = new URL(
-      `${config.baseUrl}/enrichment/subjects/${encodeURIComponent(jobId)}`
-      + `/${encodeURIComponent(userId)}/latest`,
-    );
-    endpoint.searchParams.set('enricherType', enricherType);
-    return requestWithRetry(
-      endpoint,
-      { method: 'GET', headers },
-      { allowNotFound: true },
-    );
-  }
-
   async function createRun(jobId, userId, enricherType) {
     const endpoint = new URL(`${config.baseUrl}/enrichment/runs`);
     return requestWithRetry(endpoint, {
@@ -82,9 +68,10 @@ export function createEnrichmentClient(config, { fetchImpl = fetch } = {}) {
         jobOfferingId: jobId,
         userId,
         enricherType,
+        requestMode: 'automatic',
       }),
     });
   }
 
-  return { getLatest, createRun };
+  return { createRun };
 }

@@ -101,6 +101,21 @@ class LlamaCppClientTests(unittest.TestCase):
             format=None,
         )
 
+    def test_reasoning_effort_is_passed_to_llama_cpp(self):
+        self.client.session.post.return_value = FakeResponse(json_data={
+            "choices": [{"message": {"content": '{"ok":true}'}, "finish_reason": "stop"}],
+        })
+        self.client.generate_json(
+            model="model-a", prompt="private candidate text", system="system",
+            temperature=1.0, top_p=0.95, reasoning_effort="medium",
+            enable_thinking=True, thinking_budget_tokens=None, format=None,
+        )
+        kwargs = self.client.session.post.call_args.kwargs
+        self.assertEqual(kwargs["json"]["reasoning_effort"], "medium")
+        redacted = self.client._redact_payload_for_log(kwargs["json"])
+        self.assertNotIn("preview", redacted["messages"][-1]["content"])
+        self.assertNotIn("private candidate text", json.dumps(redacted))
+
     def test_request_without_budget_uses_existing_synchronous_path(self):
         self.client.session.post.return_value = FakeResponse(
             json_data={

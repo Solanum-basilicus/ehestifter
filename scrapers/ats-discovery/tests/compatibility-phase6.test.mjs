@@ -33,7 +33,6 @@ const baseConfig = {
   concurrency: 2,
   maxPairsPerRun: 100,
   maxRequestsPerRun: 20,
-  refreshSucceededWithUnknownCvVersion: false,
 };
 
 test('builds one deterministic pair per job and matched user', () => {
@@ -48,92 +47,74 @@ test('builds one deterministic pair per job and matched user', () => {
   ]);
 });
 
-test('skips active and current successful runs and refreshes changed CVs', async () => {
+test('delegates all enrichment decisions to Enrichment Core', async () => {
   const creates = [];
-  const latestByUser = new Map([
-    [USER_A, { runId: 'run-a', status: 'Succeeded', cvVersionId: CV_A }],
-    [USER_B, { runId: 'run-b', status: 'Succeeded', cvVersionId: CV_A }],
-  ]);
   const result = await requestCompatibilityForMatches({
     importResults: [imported()],
     discoveryUsers: users,
     client: {
-      getLatest: async (_job, user) => latestByUser.get(user),
       createRun: async (job, user) => {
         creates.push([job, user]);
-        return { runId: `new-${user}`, status: 'Queued', cvVersionId: CV_B };
+        return user === USER_A
+          ? { runId: 'existing', status: 'Succeeded', decision: 'reused' }
+          : { runId: 'new', status: 'Queued', decision: 'created' };
       },
     },
     config: baseConfig,
   });
   assert.deepEqual(result.results.map((item) => item.status), [
-    'skipped_succeeded_current_cv',
-    'requested',
+    'skipped_reused', 'requested',
   ]);
-  assert.deepEqual(creates, [[JOB_A, USER_B]]);
+  assert.deepEqual(creates, [[JOB_A, USER_A], [JOB_A, USER_B]]);
 });
 
-test('missing, failed, and expired runs are requestable while active runs are not', async () => {
-  const latest = new Map([
-    [USER_A, { status: 'Queued', cvVersionId: CV_A }],
-    [USER_B, { status: 'Failed', cvVersionId: CV_B }],
-  ]);
+test('permanent failures are suppressed by Enrichment Core', async () => {
   const result = await requestCompatibilityForMatches({
     importResults: [imported()],
     discoveryUsers: users,
     client: {
-      getLatest: async (_job, user) => latest.get(user) ?? null,
-      createRun: async () => ({ runId: 'new', status: 'Pending' }),
+      createRun: async () => ({
+        runId: 'old', status: 'Failed', decision: 'suppressed',
+      }),
     },
     config: baseConfig,
   });
   assert.deepEqual(result.results.map((item) => item.status), [
-    'skipped_active',
-    'requested',
+    'skipped_suppressed', 'skipped_suppressed',
   ]);
 });
 
-test('pair and request caps are explicit and deterministic', async () => {
+test('pair and request limits remain deterministic', async () => {
   const result = await requestCompatibilityForMatches({
     importResults: [
       imported(),
       imported({ import: { status: 'submitted', jobId: JOB_B } }),
     ],
     discoveryUsers: users,
-    client: {
-      getLatest: async () => null,
-      createRun: async () => ({ runId: 'new', status: 'Queued' }),
-    },
+    client: { createRun: async () => ({ runId: 'new', status: 'Queued', decision: 'created' }) },
     config: { ...baseConfig, maxPairsPerRun: 3, maxRequestsPerRun: 1 },
   });
   assert.equal(result.totalPairs, 4);
   assert.equal(result.evaluatedPairs, 3);
   assert.equal(result.omittedPairs, 1);
   assert.deepEqual(result.results.map((item) => item.status), [
-    'requested',
-    'skipped_request_limit',
-    'skipped_request_limit',
+    'requested', 'skipped_request_limit', 'skipped_request_limit',
   ]);
 });
 
-test('latest-check and create failures remain pair-local diagnostics', async () => {
+test('create failures remain local to each pair', async () => {
   const observed = [];
   const result = await requestCompatibilityForMatches({
     importResults: [imported()],
     discoveryUsers: users,
     client: {
-      getLatest: async (_job, user) => {
-        if (user === USER_A) throw new Error('latest down');
-        return null;
-      },
       createRun: async () => { throw new Error('create down'); },
     },
     config: baseConfig,
     onResult: (item) => observed.push(item.status),
   });
   assert.deepEqual(result.results.map((item) => item.status), [
-    'error_latest_check',
-    'error_request',
+    'error_request', 'error_request',
   ]);
-  assert.deepEqual(observed.sort(), ['error_latest_check', 'error_request']);
+  assert.deepEqual(observed, ['error_request', 'error_request']);
 });

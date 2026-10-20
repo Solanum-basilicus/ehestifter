@@ -152,7 +152,8 @@ class Settings:
 
     enable_thinking: Optional[bool]
     thinking_budget_tokens: Optional[int]
-    reasoning_format: Optional[str]    
+    reasoning_format: Optional[str]
+    reasoning_effort: Optional[str]
 
     system_prompt: str
     rubric: str
@@ -169,6 +170,10 @@ def load_settings(config_path: str = "/app/config.yaml") -> Settings:
     presence_penalty_val = c.get("presence_penalty")
     if presence_penalty_val is None:
         presence_penalty_val = c.get("resence_penalty")  # typo fallback
+
+    effort = c.get("reasoning_effort")
+    if effort is not None and effort not in ("low", "medium", "high", "xhigh"):
+        raise ValueError("reasoning_effort must be low, medium, high, or xhigh")
 
     return Settings(
         enricher_type=os.getenv("ENRICHER_TYPE", "compatibility.v1"),
@@ -233,6 +238,8 @@ def load_settings(config_path: str = "/app/config.yaml") -> Settings:
             else None
         ),
 
+        reasoning_effort=(str(c["reasoning_effort"]).strip()
+                          if c.get("reasoning_effort") is not None else None),
         system_prompt=str(c.get("system_prompt", "")),
         rubric=str(c.get("rubric", "")),
     )

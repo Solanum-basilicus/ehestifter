@@ -327,11 +327,6 @@ export async function loadRuntimeConfig({
           20,
           'multiUser.compatibility.maxRequestsPerRun',
         ),
-        refreshSucceededWithUnknownCvVersion: booleanValue(
-          compatibility.refreshSucceededWithUnknownCvVersion,
-          false,
-          'multiUser.compatibility.refreshSucceededWithUnknownCvVersion',
-        ),
       },
     },
     careerOps: {

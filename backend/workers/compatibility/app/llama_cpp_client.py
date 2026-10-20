@@ -72,7 +72,6 @@ class LlamaCppClient:
                     "redacted": True,
                     "len": len(content),
                     "sha256_16": hashlib.sha256(content.encode("utf-8")).hexdigest()[:16],
-                    "preview": content[:120].replace("\n", "\\n"),
                 }
         return out
 
@@ -454,6 +453,7 @@ class LlamaCppClient:
         enable_thinking: Optional[bool] = None,
         thinking_budget_tokens: Optional[int] = None,
         reasoning_format: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
         format: Any = "json",
     ) -> Dict[str, Any]:
         url = f"{self.base_url}/v1/chat/completions"
@@ -501,6 +501,8 @@ class LlamaCppClient:
 
         if reasoning_format:
             payload["reasoning_format"] = reasoning_format
+        if reasoning_effort:
+            payload["reasoning_effort"] = reasoning_effort
 
         if use_reasoning_budget:
             # Use llama.cpp native per-request enforcement first. Keep streaming
@@ -552,12 +554,13 @@ class LlamaCppClient:
 
         self.log.info(
             "llama.cpp controls model=%s max_tokens=%s thinking_budget_tokens=%s "
-            "reasoning_format=%s chat_template_kwargs=%s response_format=%s "
+            "reasoning_format=%s reasoning_effort=%s chat_template_kwargs=%s response_format=%s "
             "reasoning_budget_tokens=%s reasoning_control=%s fallback_tokens=%s",
             payload.get("model"),
             payload.get("max_tokens"),
             budget_tokens,
             payload.get("reasoning_format"),
+            payload.get("reasoning_effort"),
             payload.get("chat_template_kwargs"),
             payload.get("response_format"),
             payload.get("reasoning_budget_tokens"),

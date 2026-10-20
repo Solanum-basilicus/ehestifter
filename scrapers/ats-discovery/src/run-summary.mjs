@@ -691,14 +691,11 @@ export function buildRunSummary({
     ),
     compatibilityAlreadyActive: count(
       compatibilityResults?.results ?? [],
-      (item) => item.status === 'skipped_active',
+      (item) => item.status === 'skipped_reused' && ['Pending', 'Queued', 'Leased'].includes(item.requestedRun?.status),
     ),
     compatibilityAlreadySucceeded: count(
       compatibilityResults?.results ?? [],
-      (item) => [
-        'skipped_succeeded_current_cv',
-        'skipped_succeeded_unknown_cv',
-      ].includes(item.status),
+      (item) => item.status === 'skipped_reused' && item.requestedRun?.status === 'Succeeded',
     ),
     compatibilitySkippedRequestLimit: count(
       compatibilityResults?.results ?? [],
@@ -706,8 +703,7 @@ export function buildRunSummary({
     ),
     compatibilityErrors: count(
       compatibilityResults?.results ?? [],
-      (item) => item.status === 'error_latest_check'
-        || item.status === 'error_request',
+      (item) => item.status === 'error_request',
     ),
 
     userGeography: {

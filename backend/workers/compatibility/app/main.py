@@ -15,9 +15,12 @@ from .llama_cpp_client import LlamaCppClient
 from .compatibility import (
     build_prompt,
     normalize_result,
+    check_job_description,
+    InsufficientJobDescription,
     evaluate_language_disqualification,
     calculate_final_score,
 )
+from .validated_inference import validate_with_content_retry
 from .stats import Stats
 from .inference_resilience import (
     InferenceFatal,
@@ -190,12 +193,6 @@ def main() -> None:
                         raise
 
                     if log.isEnabledFor(logging.DEBUG):
-                        try:
-                            lease_json = json.dumps(lease, ensure_ascii=False, separators=(",", ":"))
-                        except TypeError:
-                            lease_json = json.dumps({"lease": str(lease)}, ensure_ascii=False, separators=(",", ":"))
-                        log.debug("Gateway /lease response %s", _truncate(lease_json))
-
                         input_obj_dbg = (lease or {}).get("input") or {}
                         job_dbg = input_obj_dbg.get("job") or {}
                         cv_dbg = input_obj_dbg.get("cv")
@@ -235,6 +232,18 @@ def main() -> None:
                             len(cv_text),
                         )
 
+                    try:
+                        check_job_description(job)
+                    except InsufficientJobDescription as exc:
+                        gw.complete_error(
+                            parsed.run_id, lease_token,
+                            code="INSUFFICIENT_JOB_DESCRIPTION", message=str(exc),
+                        )
+                        stats.bump("completes_failed", "completes_failed_last_at")
+                        stats.flush()
+                        receiver.complete_message(msg)
+                        continue
+
                     prompt = build_prompt(job=job, cv_text=cv_text)
 
                     log.info("Running inference runId=%s model=%s", parsed.run_id, s.model)
@@ -246,7 +255,8 @@ def main() -> None:
                         "degraded_reason": "",
                     }
 
-                    def _llm_call(*, num_predict, system_override: str | None = None):
+                    def _llm_call(*, num_predict, system_override: str | None = None,
+                                  no_thinking: bool = False):
                         return llm.generate_json(
                             model=s.model,
                             prompt=prompt,
@@ -260,9 +270,10 @@ def main() -> None:
                             num_predict=num_predict,
                             format=None,  # schema removed intentionally
                             # llama.cpp / Qwen thinking controls
-                            enable_thinking=s.enable_thinking,
-                            thinking_budget_tokens=s.thinking_budget_tokens,
-                            reasoning_format=s.reasoning_format,                            
+                            enable_thinking=False if no_thinking else s.enable_thinking,
+                            thinking_budget_tokens=None if no_thinking else s.thinking_budget_tokens,
+                            reasoning_format=s.reasoning_format,
+                            reasoning_effort=None if no_thinking else s.reasoning_effort,
                         )
 
                     def _body_from_exc(e: Exception, limit: int = 1000) -> str:
@@ -303,6 +314,7 @@ def main() -> None:
                         return _llm_call(
                             num_predict=max_tokens_2,
                             system_override=retry_system,
+                            no_thinking=True,
                         )
 
                     def _on_attempt_error(exc: BaseException, attempt: int, will_retry: bool):
@@ -420,12 +432,53 @@ def main() -> None:
                             attempt_meta["degraded_reason"] += "; " + recovery_note
                         else:
                             attempt_meta["degraded_reason"] = recovery_note
-                    if log.isEnabledFor(logging.DEBUG):
-                        try:
-                            raw_json = json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
-                        except TypeError:
-                            raw_json = json.dumps({"raw": str(raw)}, ensure_ascii=False, separators=(",", ":"))
-                        log.debug("llama.cpp response %s", _truncate(raw_json))
+                    def _retry_invalid_content(current_token: str):
+                        return run_with_outage_recovery(
+                            initial_lease_token=current_token,
+                            primary_call=_fallback_call,
+                            fallback_call=_fallback_call,
+                            release_unavailable=_release_unavailable,
+                            reacquire_lease=_reacquire_lease,
+                            health_check=lambda: llm.is_healthy(
+                                timeout_s=s.inference_health_timeout_seconds,
+                            ),
+                            retry_delays_seconds=s.inference_retry_delays_seconds,
+                            outage_cooldown_seconds=s.inference_outage_cooldown_seconds,
+                            on_attempt_error=_on_attempt_error,
+                            on_circuit_open=_on_circuit_open,
+                            on_health_probe=_on_health_probe,
+                        )
+
+                    try:
+                        checked = validate_with_content_retry(
+                            recovery,
+                            retry=_retry_invalid_content,
+                            on_invalid=lambda exc: log.warning(
+                                "Invalid inference result runId=%s reason=%s; retrying",
+                                parsed.run_id, exc,
+                            ),
+                        )
+                    except InferenceFatal as exc:
+                        gw.complete_error(
+                            parsed.run_id, exc.lease_token,
+                            code=exc.code, message=exc.public_message,
+                        )
+                        stats.bump("completes_failed", "completes_failed_last_at")
+                        stats.flush()
+                        receiver.complete_message(msg)
+                        continue
+                    lease_token = checked.lease_token
+                    if checked.error_code:
+                        gw.complete_error(
+                            parsed.run_id, lease_token,
+                            code=checked.error_code,
+                            message=checked.error_message,
+                        )
+                        stats.bump("completes_failed", "completes_failed_last_at")
+                        stats.flush()
+                        receiver.complete_message(msg)
+                        continue
+                    raw = checked.raw
 
                     structured = normalize_result(raw)
 
@@ -446,27 +499,6 @@ def main() -> None:
                         soft_skills_score=soft_score,
                         language_disqualified=bool(lang_eval.get("disqualified")),
                     )
-
-                    if log.isEnabledFor(logging.DEBUG):
-                        log.debug(
-                            "Structured LLM result runId=%s description=%s languages=%s hard_skills=%s experience=%s soft_skills=%s",
-                            parsed.run_id,
-                            _truncate(json.dumps(description, ensure_ascii=False)),
-                            _truncate(json.dumps(languages, ensure_ascii=False, separators=(",", ":"))),
-                            _truncate(json.dumps(hard_skills, ensure_ascii=False, separators=(",", ":"))),
-                            _truncate(json.dumps(experience, ensure_ascii=False, separators=(",", ":"))),
-                            _truncate(json.dumps(soft_skills, ensure_ascii=False, separators=(",", ":"))),
-                        )
-                        log.debug(
-                            "Calculated compatibility runId=%s hard_score=%.1f experience_score=%.1f soft_score=%.1f language_disqualified=%s language_eval=%s final_score=%.1f",
-                            parsed.run_id,
-                            hard_score,
-                            exp_score,
-                            soft_score,
-                            bool(lang_eval.get("disqualified")),
-                            _truncate(json.dumps(lang_eval, ensure_ascii=False, separators=(",", ":"))),
-                            final_score,
-                        )
 
                     summary = description
                     diagnostics = []

@@ -57,8 +57,7 @@
       "enricherType": "compatibility.v1",
       "concurrency": 2,
       "maxPairsPerRun": 100,
-      "maxRequestsPerRun": 20,
-      "refreshSucceededWithUnknownCvVersion": false
+      "maxRequestsPerRun": 20
     }
   }
 }
