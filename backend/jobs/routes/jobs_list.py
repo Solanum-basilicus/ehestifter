@@ -1,5 +1,6 @@
 import json
 import logging
+import pyodbc
 import azure.functions as func
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, parse_qs
@@ -21,6 +22,8 @@ REMOTE_MAP = {
 }
 
 VALID_CATEGORIES = {"my", "open", "all"}
+# This limit applies to each SQL statement in the interactive job list.
+JOBS_LIST_SQL_TIMEOUT_SECONDS = 5
 VALID_SEARCH_FIELDS = {"title_company", "company", "title", "location", "description"}
 VALID_SORTS = {
     "created_desc", "created_asc",
@@ -76,6 +79,8 @@ def register(app: func.FunctionApp):
     @app.route(route="jobs", methods=["GET"])
     def list_jobs(req: func.HttpRequest) -> func.HttpResponse:
         logging.info("GET /jobs")
+        conn = None
+        cur = None
         try:
             # ----------------------------
             # Parse & validate query
@@ -138,6 +143,7 @@ def register(app: func.FunctionApp):
             # Dynamic SQL assembly
             # ----------------------------
             conn = get_connection()
+            conn.timeout = JOBS_LIST_SQL_TIMEOUT_SECONDS
             cur = conn.cursor()
 
             joins: list[str] = []
@@ -554,6 +560,31 @@ def register(app: func.FunctionApp):
                 mimetype="application/json"
             )
 
-        except Exception as e:
+        except pyodbc.OperationalError as exc:
+            if exc.args and str(exc.args[0]) in {"HYT00", "HYT01"}:
+                logging.warning("GET /jobs SQL query timed out: %s", exc)
+                return func.HttpResponse(
+                    json.dumps({
+                        "error": "jobs_query_timeout",
+                        "message": "The jobs search took too long. Change the filters and try again.",
+                    }),
+                    mimetype="application/json",
+                    status_code=504,
+                )
+            logging.exception("GET /jobs SQL error")
+            return func.HttpResponse("Jobs database error", status_code=500)
+        except Exception:
             logging.exception("GET /jobs error")
-            return func.HttpResponse(f"Error: {str(e)}", status_code=500)
+            return func.HttpResponse("Jobs service error", status_code=500)
+        finally:
+            # Close both handles on success and failure. Close also ends an open transaction.
+            if cur is not None:
+                try:
+                    cur.close()
+                except Exception:
+                    logging.exception("Could not close jobs list cursor")
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    logging.exception("Could not close jobs list connection")

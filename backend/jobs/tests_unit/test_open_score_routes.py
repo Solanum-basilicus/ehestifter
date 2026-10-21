@@ -42,6 +42,9 @@ class FakeCursor:
     def fetchall(self):
         return []
 
+    def close(self):
+        pass
+
 
 class FakeConnection:
     def __init__(self):
@@ -49,6 +52,9 @@ class FakeConnection:
 
     def cursor(self):
         return self.cur
+
+    def close(self):
+        pass
 
 
 def _request(method, url, params=None, body=None):

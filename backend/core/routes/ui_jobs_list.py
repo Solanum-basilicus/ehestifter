@@ -1,11 +1,13 @@
 from flask import Blueprint, request, jsonify
 from urllib.parse import urlencode
 import hashlib
+import logging
+
+import requests
 
 from helpers.analytics import emit_core_event
 from helpers.cache import memo_get, memo_put
-from helpers.http import jobs_base, jobs_fx_headers, fx_get_json
-from helpers.retry import retry_until_ready
+from helpers.http import jobs_base, jobs_fx_headers, fx_get_json_safe
 from helpers.users import get_in_app_user_id
 
 
@@ -87,28 +89,56 @@ def create_blueprint(auth):
             emit_success_events()
             return jsonify(cached), 200
 
-        def call():
-            params = {"limit": str(limit), "offset": str(offset), **forward_params}
-            headers = jobs_fx_headers(context={"userId": uid}) if uid != "anon" else jobs_fx_headers()
+        params = {"limit": str(limit), "offset": str(offset), **forward_params}
+        headers = jobs_fx_headers(context={"userId": uid}) if uid != "anon" else jobs_fx_headers()
 
-            envelope = fx_get_json(
+        # Call Jobs once. Repeating a slow list query can overload SQL.
+        try:
+            response, data = fx_get_json_safe(
                 f"{jobs_base()}/jobs",
                 headers=headers,
-                params=params
+                params=params,
+                timeout=20,
             )
+        except requests.Timeout:
+            return jsonify({
+                "error": "jobs_service_timeout",
+                "message": "The jobs request took too long. Try again later.",
+            }), 504
+        except requests.RequestException:
+            logging.exception("Jobs list request failed")
+            return jsonify({
+                "error": "jobs_service_unavailable",
+                "message": "Jobs service is unavailable. Try again later.",
+            }), 502
 
-            if isinstance(envelope, dict):
-                envelope.setdefault("limit", limit)
-                envelope.setdefault("offset", offset)
+        if response.status_code == 504:
+            return jsonify({
+                "error": "jobs_query_timeout",
+                "message": "The jobs search took too long. Change the filters and try again.",
+            }), 504
+        if response.status_code != 200:
+            if 400 <= response.status_code < 500:
+                return jsonify({
+                    "error": "jobs_request_failed",
+                    "message": "Jobs rejected the request.",
+                }), response.status_code
+            logging.warning("Jobs list returned HTTP %s", response.status_code)
+            return jsonify({
+                "error": "jobs_service_unavailable",
+                "message": "Jobs service is unavailable. Try again later.",
+            }), 502
 
-            return envelope
+        if not isinstance(data, dict) or data.get("error"):
+            return jsonify({
+                "error": "jobs_invalid_response",
+                "message": "Jobs returned an invalid response.",
+            }), 502
 
-        data = retry_until_ready(call, attempts=4, base_delay=0.75)
-
-        if not data.get("error"):
-            memo_put(cache_key, data)
-            emit_success_events()
-
+        data.setdefault("limit", limit)
+        data.setdefault("offset", offset)
+        memo_put(cache_key, data)
+        emit_success_events()
         return jsonify(data), 200
 
     return bp

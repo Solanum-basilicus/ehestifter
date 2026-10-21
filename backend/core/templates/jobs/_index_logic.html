@@ -138,6 +138,7 @@
   const geoAddLink = document.getElementById('geoAddLink');
 
   const VALID_MODES = ['remote', 'onsite', 'hybrid'];
+  const VALID_SEARCH_FIELDS = ['title_company', 'company', 'title', 'location'];
   const OPEN_LOADER_DELAY_MS = 500;
 
   let pageSize = Number(sessionStorage.getItem('jobs.pageSize') || 25);
@@ -286,7 +287,9 @@
     page = Math.max(1, Math.floor(off / pageSize) + 1);
 
     searchText = sp.get('q') || '';
-    searchField = sp.get('search_field') || searchField;
+    const requestedSearchField = sp.get('search_field') || searchField;
+    // Old links can contain the disabled description search. Use a safe field.
+    searchField = VALID_SEARCH_FIELDS.includes(requestedSearchField) ? requestedSearchField : 'title_company';
 
     modes = sp.getAll('mode').map(normMode).filter(x => VALID_MODES.includes(x));
     cities = sp.getAll('city').filter(Boolean);
@@ -770,7 +773,7 @@
       const url = buildApiUrl(requestedScore);
       syncUrl();
 
-      const data = await window.fetchWithRetry(url, 4);
+      const data = await window.Net.fetchJsonOnce(url);
       if (generation !== listLoadGeneration) return;
 
       if (!data || data.error) {

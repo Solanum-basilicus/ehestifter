@@ -16,8 +16,25 @@
     throw lastErr;
   }
 
+  // Job lists must not repeat failed requests. A second request can load SQL again.
+  async function fetchJsonOnce(url, init = {}) {
+    const response = await fetch(url, Object.assign({ credentials: 'same-origin' }, init));
+    let data;
+    try {
+      data = await response.json();
+    } catch (_) {
+      if (!response.ok) throw new Error(`Jobs request failed (HTTP ${response.status})`);
+      throw new Error('Jobs service returned an invalid response');
+    }
+    if (!response.ok) {
+      throw new Error((data && data.message) || `Jobs request failed (HTTP ${response.status})`);
+    }
+    return data;
+  }
+
   // Expose both a simple global and a namespaced variant
   if (typeof w.fetchWithRetry !== 'function') w.fetchWithRetry = fetchWithRetry;
   w.Net = w.Net || {};
+  w.Net.fetchJsonOnce = fetchJsonOnce;
   if (typeof w.Net.fetchWithRetry !== 'function') w.Net.fetchWithRetry = fetchWithRetry;
 })(window);
