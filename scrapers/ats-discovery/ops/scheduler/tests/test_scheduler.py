@@ -504,3 +504,22 @@ class SchedulerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class CompatibilityRetentionTests(unittest.TestCase):
+    def test_isolated_compatibility_failure_does_not_degrade_retention(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory)
+            (run / "summary.json").write_text(json.dumps({
+                "compatibilityRequested": 284,
+                "compatibilityErrors": 1,
+            }), encoding="utf-8")
+            self.assertEqual(scheduler.classify_run_for_retention(run), "success")
+
+    def test_material_compatibility_failure_degrades_retention(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory)
+            (run / "summary.json").write_text(json.dumps({
+                "compatibilityRequested": 18,
+                "compatibilityErrors": 2,
+            }), encoding="utf-8")
+            self.assertEqual(scheduler.classify_run_for_retention(run), "degraded_or_failed")

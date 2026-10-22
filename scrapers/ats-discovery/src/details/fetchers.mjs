@@ -1054,6 +1054,10 @@ async function fetchSuccessFactorsDetails(candidate, context) {
         'SuccessFactors detail page reports that the job is unavailable',
       );
     }
+    const visibleText = html.replace(/<[^>]*>/gu, ' ').replace(/\s+/gu, ' ');
+    if (/click\s+here\s+to\s+see\s+the\s+full\s+Job\s+Preview/iu.test(visibleText)) {
+      throw new DetailUnavailableError('successfactors_external_preview_missing');
+    }
     throw new Error('Detail page contains neither JobPosting JSON-LD nor a parseable SuccessFactors job description');
   }
   return {

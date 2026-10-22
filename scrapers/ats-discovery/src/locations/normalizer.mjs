@@ -1897,9 +1897,19 @@ function descriptionCarriesBroadLocationScope(window) {
 }
 
 function v2ClaimsForCandidate(candidate, locations, catalog, primaryObservations = []) {
+  // A business region must not become a city through legacy geocoding.
+  const rawBusinessRegions = new Set(
+    (String(candidate.rawLocation ?? '').match(/\b(?:APAC|EMEA|LATAM|DACH)\b/gu) ?? [])
+      .map((value) => lookupKey(value)),
+  );
+  const falseLegacyCity = (location) => (
+    location?.cityName
+    && rawBusinessRegions.has(lookupKey(location.cityName))
+  );
   const claims = [];
   const finalClaims = [];
   for (const location of locations) {
+    if (falseLegacyCity(location)) continue;
     const item = catalog.canonicalFromLegacy(location);
     if (item) {
       claims.push(item);
@@ -1915,6 +1925,7 @@ function v2ClaimsForCandidate(candidate, locations, catalog, primaryObservations
   for (const observation of primaryObservations) {
     if (!['raw_location', 'provider_detail_location'].includes(observation.source)) continue;
     if (observation.status !== 'resolved' || !observation.location) continue;
+    if (falseLegacyCity(observation.location)) continue;
     const item = catalog.canonicalFromLegacy(observation.location);
     if (!item) continue;
     if (item.kind === 'country' && observation.kind !== 'country_scope_alternative') {
@@ -1934,6 +1945,7 @@ function v2ClaimsForCandidate(candidate, locations, catalog, primaryObservations
   for (const observation of primaryObservations) {
     if (observation.source !== 'provider_structured') continue;
     if (observation.status !== 'resolved' || !observation.location) continue;
+    if (falseLegacyCity(observation.location)) continue;
     if (!observation.issues?.includes('city_unresolved_for_country')) continue;
     const countryCode = observation.location.countryCode;
     const regionMentions = countryCode

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { compatibilityDegraded } from './ehestifter/compatibility-health.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -863,7 +864,7 @@ async function runScan(args) {
       || summary.providerCanariesDegraded > 0
       || summary.providerHealthWarnings.length > 0
       || summary.discoveryUsersLoadStatus === 'error'
-      || summary.compatibilityErrors > 0
+      || compatibilityDegraded(summary.compatibilityErrors, summary.compatibilityRequested + summary.compatibilityErrors)
     ) {
       process.exitCode = 2;
     }

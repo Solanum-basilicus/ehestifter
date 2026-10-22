@@ -228,3 +228,75 @@ def test_index_only_preserves_previous_index_when_build_fails(tmp_path, monkeypa
         builder._build_index_from_catalog(catalog_path, manifest_path, index_path)
     assert index_path.read_bytes() == b"previous-valid-index"
     assert sorted(tmp_path.glob(".index.sqlite3.*.tmp")) == []
+
+
+def test_geonames_country_and_alternate_names_are_data_driven():
+    country_info = (
+        "TR\tTUR\t792\tTU\tTurkey\tAnkara\t780580\t85000000\tAS\t.tr\tTRY\tLira\t90\ttr-TR\t298795\t\t\n"
+        "TW\tTWN\t158\tTW\tTaiwan\tTaipei\t35980\t23000000\tAS\t.tw\tTWD\tDollar\t886\tzh-TW\t1668284\t\t\n"
+        "AT\tAUT\t040\tAU\tAustria\tVienna\t83879\t9000000\tEU\t.at\tEUR\tEuro\t43\tde-AT\t2782113\t\t\n"
+        "IT\tITA\t380\tIT\tItaly\tRome\t301340\t59000000\tEU\t.it\tEUR\tEuro\t39\tit-IT\t3175395\t\t\n"
+    ).encode()
+    city_data = io.BytesIO()
+    with zipfile.ZipFile(city_data, "w") as zf:
+        zf.writestr("cities500.txt", "\n".join([
+            _city_row(100, "Vienna", "Vienna", 48.2, 16.4, "AT", "", 2000000, "Europe/Vienna"),
+            _city_row(101, "Taipei", "Taipei", 25.0, 121.5, "TW", "", 2300000, "Asia/Taipei"),
+            _city_row(102, "Milan", "Milan", 45.46, 9.19, "IT", "", 1300000, "Europe/Rome"),
+        ]))
+    alternates = io.BytesIO()
+    with zipfile.ZipFile(alternates, "w") as zf:
+        zf.writestr("iso-languagecodes.txt", "iso3\tiso2\tiso1\tname\n")
+        zf.writestr("notes.txt", "Additional text does not contain alternate names")
+        zf.writestr("alternateNamesV2.txt", "\n".join([
+            "1\t100\tde\tWien\t1\t0\t0\t0\t\t",
+            "2\t298795\ten\tTurkey\t1\t0\t0\t0\t\t",
+            "3\t100\tde\tAlt-Wien\t0\t0\t0\t1\t\t",
+            "4\t100\tfr\tVienne\t0\t0\t0\t0\t\t",
+            "5\t102\tde\tMailand\t0\t0\t0\t0\t\t",
+            "6\t102\tit\tMilano\t0\t0\t0\t0\t\t",
+            "7\t102\tfr\tMilan-fr-test\t0\t0\t0\t0\t\t",
+        ]))
+    catalog = build_catalog(
+        city_data.getvalue(), b"", TIMEZONES, M49, LEGACY, 2026,
+        country_info_data=country_info,
+        alternate_names_data=alternates.getvalue(),
+    )
+    countries = {item["countryCode"]: item for item in catalog["countries"]}
+    cities = {item["name"]: item for item in catalog["cities"]}
+    assert countries["TW"]["alpha3Code"] == "TWN"
+    assert countries["TW"]["parentId"] == "m49:001"
+    assert "Turkey" in countries["TR"]["aliases"] or countries["TR"]["name"] == "Turkey"
+    assert cities["Taipei"]["countryCode"] == "TW"
+    assert "Wien" in cities["Vienna"]["aliases"]
+    assert "Alt-Wien" not in cities["Vienna"]["aliases"]
+    assert "Vienne" not in cities["Vienna"]["aliases"]
+    assert "Mailand" in cities["Milan"]["aliases"]
+    assert "Milano" in cities["Milan"]["aliases"]
+    assert "Milan-fr-test" not in cities["Milan"]["aliases"]
+
+
+def test_alternate_names_archive_requires_named_member():
+    import pytest
+
+    from tools.build_locations_v2_catalog import _parse_preferred_alternate_names
+
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("iso-languagecodes.txt", "en\tEnglish\n")
+        zf.writestr("other.txt", "1\t100\tde\tWien\t1\t0\t0\t0\t\t\n")
+    with pytest.raises(ValueError, match="alternateNamesV2.txt"):
+        _parse_preferred_alternate_names(archive.getvalue(), {"100": {"de"}})
+
+
+def test_alternate_names_archive_rejects_duplicate_named_members():
+    import pytest
+
+    from tools.build_locations_v2_catalog import _parse_preferred_alternate_names
+
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("alternateNamesV2.txt", "1\t100\tde\tWien\t1\t0\t0\t0\t\t\n")
+        zf.writestr("nested/alternateNamesV2.txt", "2\t100\tde\tAlt-Wien\t1\t0\t0\t0\t\t\n")
+    with pytest.raises(ValueError, match="exactly one alternateNamesV2.txt"):
+        _parse_preferred_alternate_names(archive.getvalue(), {"100": {"de"}})

@@ -29,7 +29,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 SCHEMA_VERSION = 2
-BUILD_VERSION = 2
+BUILD_VERSION = 4
+# Keep common ATS posting languages for foreign cities, not only local languages.
+CROSS_BORDER_CITY_LANGUAGES = frozenset({"en", "de"})
+GEONAMES_COUNTRY_INFO_URL = "https://download.geonames.org/export/dump/countryInfo.txt"
+GEONAMES_ALTERNATE_NAMES_URL = "https://download.geonames.org/export/dump/alternateNamesV2.zip"
 GEONAMES_CITIES500_URL = "https://download.geonames.org/export/dump/cities500.zip"
 GEONAMES_ADMIN1_URL = "https://download.geonames.org/export/dump/admin1CodesASCII.txt"
 GEONAMES_TIMEZONES_URL = "https://download.geonames.org/export/dump/timeZones.txt"
@@ -181,6 +185,64 @@ def _parse_m49(data: bytes) -> tuple[list[dict], dict[str, dict]]:
     return sorted(regions.values(), key=lambda item: item["id"]), countries
 
 
+def _parse_country_info(data: bytes) -> dict[str, dict]:
+    """Read ISO codes, GeoNames identifiers, and names from countryInfo.txt."""
+    countries = {}
+    for line in data.decode("utf-8-sig").splitlines():
+        if not line or line.startswith("#"):
+            continue
+        row = line.split("\t")
+        if len(row) < 15:
+            continue
+        code, alpha3, name, geoname_id = row[0].upper(), row[1].upper(), row[4], row[14]
+        if len(code) == 2 and len(alpha3) == 3 and geoname_id.isdigit():
+            countries[code] = {
+                "alpha3": alpha3,
+                "name": _clean_text(name),
+                "geonameId": geoname_id,
+                "languages": {part.split("-")[0].lower() for part in row[13].split(",") if part},
+            }
+    return countries
+
+
+def _parse_preferred_alternate_names(data: bytes, target_languages: dict[str, set[str]]) -> dict[str, list[str]]:
+    """Keep current proper names; skip historic, colloquial, and expired names."""
+    zf = zipfile.ZipFile(io.BytesIO(data))
+    filenames = [
+        name for name in zf.namelist()
+        if name.rsplit("/", 1)[-1] == "alternateNamesV2.txt"
+    ]
+    if len(filenames) != 1:
+        raise ValueError("GeoNames archive must contain exactly one alternateNamesV2.txt")
+    output = defaultdict(list)
+    seen = defaultdict(set)
+    with zf.open(filenames[0]) as source:
+        reader = csv.reader(io.TextIOWrapper(source, encoding="utf-8"), delimiter="\t")
+        for row in reader:
+            if len(row) < 8 or row[1] not in target_languages:
+                continue
+            language, name = row[2], _clean_text(row[3])
+            if language in {"link", "post", "iata", "icao", "faac", "wkdt"}:
+                continue
+            if row[6] == "1" or row[7] == "1":
+                continue
+            # V2 supplies optional validity dates in columns 8 and 9.
+            if len(row) > 9 and row[9]:
+                continue
+            if language.lower().split("-")[0] not in target_languages[row[1]] and not (
+                row[4] == "1" or row[5] == "1"
+            ):
+                continue
+            key = _lookup_key(name)
+            if not key or key in seen[row[1]] or len(name) < 3 or len(name) > 100:
+                continue
+            if re.fullmatch(r"[\W_\d]+", name, flags=re.UNICODE) or name.startswith(("http://", "https://")):
+                continue
+            seen[row[1]].add(key)
+            output[row[1]].append(name)
+    return output
+
+
 def _parse_legacy_country_aliases(data: bytes) -> dict[str, list[str]]:
     legacy = json.loads(data.decode("utf-8"))
     aliases: dict[str, list[str]] = defaultdict(list)
@@ -226,7 +288,7 @@ def _parse_admin1(data: bytes, countries: dict[str, dict]) -> list[dict]:
     return sorted(output, key=lambda item: (item["countryCode"], item["admin1Code"], item["id"]))
 
 
-def _parse_cities(data: bytes, countries: dict[str, dict], admin1_by_code: dict[str, dict]) -> list[dict]:
+def _parse_cities(data: bytes, countries: dict[str, dict], admin1_by_code: dict[str, dict], alternate_names: dict[str, list[str]] | None = None) -> list[dict]:
     zf = zipfile.ZipFile(io.BytesIO(data))
     names = [name for name in zf.namelist() if name.endswith(".txt")]
     if not names:
@@ -248,7 +310,7 @@ def _parse_cities(data: bytes, countries: dict[str, dict], admin1_by_code: dict[
                 continue
             aliases = []
             seen_aliases = {_lookup_key(name)}
-            for candidate in [ascii_name, *row[3].split(",")]:
+            for candidate in [ascii_name, *(alternate_names.get(geoname_id, []) if alternate_names is not None else row[3].split(","))]:
                 alias = _clean_text(candidate)
                 key = _lookup_key(alias)
                 if (
@@ -262,8 +324,6 @@ def _parse_cities(data: bytes, countries: dict[str, dict], admin1_by_code: dict[
                     continue
                 aliases.append(alias)
                 seen_aliases.add(key)
-                if len(aliases) >= 32:
-                    break
             admin_key = f"{country_code}.{_clean_text(row[10])}"
             admin = admin1_by_code.get(admin_key)
             parent_id = admin["id"] if admin else f"iso3166:{country_code}"
@@ -399,8 +459,26 @@ def build_catalog(
     m49_data: bytes,
     legacy_geo_data: bytes,
     reference_year: int,
+    country_info_data: bytes | None = None,
+    alternate_names_data: bytes | None = None,
 ) -> dict:
     regions, countries_by_code = _parse_m49(m49_data)
+    if country_info_data is not None:
+        country_info = _parse_country_info(country_info_data)
+        for code, info in country_info.items():
+            if code not in countries_by_code:
+                countries_by_code[code] = {
+                    "id": f"iso3166:{code}", "kind": "country",
+                    "name": info["name"], "countryCode": code,
+                    "alpha3Code": info["alpha3"], "m49Code": None,
+                    "parentId": "m49:001", "aliases": [],
+                }
+            else:
+                countries_by_code[code]["alpha3Code"] = info["alpha3"]
+            if _lookup_key(info["name"]) != _lookup_key(countries_by_code[code]["name"]):
+                countries_by_code[code]["aliases"].append(info["name"])
+    else:
+        country_info = {}
     legacy_aliases = _parse_legacy_country_aliases(legacy_geo_data)
     for code, aliases in legacy_aliases.items():
         country = countries_by_code.get(code)
@@ -413,11 +491,36 @@ def build_catalog(
                 country["aliases"].append(alias)
                 seen.add(key)
 
+    extra_names = None
+    if alternate_names_data is not None:
+        zf = zipfile.ZipFile(io.BytesIO(cities_data))
+        city_file = next(name for name in zf.namelist() if name.endswith(".txt"))
+        target_languages = {}
+        with zf.open(city_file) as source:
+            for row in csv.reader(io.TextIOWrapper(source, encoding="utf-8"), delimiter="\t"):
+                if len(row) > 8 and row[6] == "P" and row[8] in countries_by_code:
+                    target_languages[row[0]] = {
+                        *CROSS_BORDER_CITY_LANGUAGES,
+                        *country_info.get(row[8], {}).get("languages", set()),
+                    }
+        for info in country_info.values():
+            target_languages[info["geonameId"]] = {"en", *info["languages"]}
+        extra_names = _parse_preferred_alternate_names(alternate_names_data, target_languages)
+        for code, info in country_info.items():
+            country = countries_by_code.get(code)
+            if country is None:
+                continue
+            seen = {_lookup_key(country["name"]), *(_lookup_key(value) for value in country["aliases"])}
+            for alias in extra_names.get(info["geonameId"], []):
+                if _lookup_key(alias) not in seen:
+                    country["aliases"].append(alias)
+                    seen.add(_lookup_key(alias))
+
     admin_regions = _parse_admin1(admin1_data, countries_by_code)
     admin1_by_code = {
         f"{item['countryCode']}.{item['admin1Code']}": item for item in admin_regions
     }
-    cities = _parse_cities(cities_data, countries_by_code, admin1_by_code)
+    cities = _parse_cities(cities_data, countries_by_code, admin1_by_code, extra_names)
     countries = sorted(countries_by_code.values(), key=lambda item: item["countryCode"])
 
     all_by_id = {
@@ -669,7 +772,7 @@ def _read_catalog_for_index(catalog_path: Path, manifest_path: Path) -> dict:
 
     if (
         manifest.get("schemaVersion") != SCHEMA_VERSION
-        or manifest.get("buildVersion") != BUILD_VERSION
+        or manifest.get("buildVersion") not in {2, BUILD_VERSION}
     ):
         raise ValueError("Locations v2 manifest has an unsupported schema or build version")
     if catalog.get("schemaVersion") != SCHEMA_VERSION:
@@ -744,6 +847,8 @@ def main() -> int:
         action="store_true",
         help="Build SQLite from the existing catalog and manifest. Do not download sources.",
     )
+    parser.add_argument("--country-info", help="Local GeoNames countryInfo.txt. Download when omitted.")
+    parser.add_argument("--alternate-names", help="Local GeoNames alternateNamesV2.zip. Download when omitted.")
     parser.add_argument("--cities500", help="Local GeoNames cities500.zip. Download when omitted.")
     parser.add_argument("--admin1", help="Local GeoNames admin1CodesASCII.txt. Download when omitted.")
     parser.add_argument("--time-zones", help="Local GeoNames timeZones.txt. Download when omitted.")
@@ -769,6 +874,8 @@ def main() -> int:
     source_meta = {}
     for key, path, url in (
         ("geonamesCities500", args.cities500, GEONAMES_CITIES500_URL),
+        ("geonamesCountryInfo", args.country_info, GEONAMES_COUNTRY_INFO_URL),
+        ("geonamesAlternateNames", args.alternate_names, GEONAMES_ALTERNATE_NAMES_URL),
         ("geonamesAdmin1", args.admin1, GEONAMES_ADMIN1_URL),
         ("geonamesTimeZones", args.time_zones, GEONAMES_TIMEZONES_URL),
         ("unM49", args.m49, M49_OVERVIEW_URL),
@@ -788,6 +895,8 @@ def main() -> int:
         sources["unM49"],
         sources["legacyGeo"],
         args.reference_year,
+        country_info_data=sources["geonamesCountryInfo"],
+        alternate_names_data=sources["geonamesAlternateNames"],
     )
     catalog["catalogVersion"] = version
 

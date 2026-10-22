@@ -136,13 +136,13 @@ for (const { httpStatus, nativeId, detailStatus } of [
       },
     });
 
-    assert.deepEqual(calls, [
-      `https://boards-api.greenhouse.io/v1/boards/example/jobs/${nativeId || 'legacy-id'}`,
-    ]);
+    const expectedUrl = `https://boards-api.greenhouse.io/v1/boards/example/jobs/${nativeId || 'legacy-id'}`;
+    const expectedAttempts = httpStatus >= 500 ? 2 : 1;
+    assert.deepEqual(calls, Array(expectedAttempts).fill(expectedUrl));
     assert.equal(result.detail.status, detailStatus);
     assert.equal(result.detail.provider, 'greenhouse');
     assert.equal(result.detail.responseStatus, httpStatus);
-    assert.equal(result.detail.attempts, 1);
+    assert.equal(result.detail.attempts, expectedAttempts);
     assert.equal(result.description, '');
     assert.equal(result.descriptionStatus, 'missing');
     assert.equal(result.url, candidate.url);

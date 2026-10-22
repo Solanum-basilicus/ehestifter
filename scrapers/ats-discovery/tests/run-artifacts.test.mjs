@@ -169,7 +169,7 @@ test('Phase 4 summary quantifies catalog preflight ratio and scope rejections', 
     ],
     requestedMaxCreates: null,
   });
-  assert.equal(summary.schemaVersion, 3);
+  assert.equal(summary.schemaVersion, 4);
   assert.equal(summary.liveCatalogTargets, 1);
   assert.equal(summary.locationScopeRejected, 1);
   assert.equal(summary.preflightChecked, 3);
@@ -467,7 +467,7 @@ test('Phase 6 artifacts and summary expose bounded user matching and compatibili
   assert.equal(summary.discoveryUsersLoadStatus, 'ok');
   assert.equal(summary.titleMatchedCandidatesBeforeCap, 5);
   assert.equal(summary.titleCandidatesRetainedBeforeGeography, 5);
-  assert.equal(summary.titleCandidatesDroppedByPreGeographyGuard, 0);
+  assert.equal(summary.titleCandidatesDroppedByPreGeographyCap, 0);
   assert.equal(summary.candidatesBeforeFinalCap, 3);
   assert.equal(summary.candidatesDroppedByCap, 1);
   assert.equal(summary.candidateCapReached, true);

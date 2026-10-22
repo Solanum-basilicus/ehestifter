@@ -599,6 +599,23 @@ test('SuccessFactors unavailable shell is reported separately from parser failur
   assert.match(result.detail.error, /job is unavailable/);
 });
 
+test('SuccessFactors external preview shell is not a parser failure', async () => {
+  const source = candidate({
+    sourceProvider: 'successfactors',
+    sourceTenant: 'jobs.example.com',
+    url: 'https://jobs.example.com/job/Role/42-en_US',
+    provenance: { providerNativeId: '42', sourceOrigin: 'https://jobs.example.com' },
+  });
+  const [result] = await enrichCandidateDetails([source], {
+    concurrency: 1, maxFetches: 1, timeoutMs: 1000,
+    async fetchImpl(url) {
+      return response('<main>Click here to see the full Job Preview</main>', { url: String(url) });
+    },
+  });
+  assert.equal(result.detail.status, 'unavailable');
+  assert.equal(result.detail.error, 'successfactors_external_preview_missing');
+});
+
 test('BambooHR detail uses the public job detail endpoint', async () => {
   const source = candidate({
     sourceProvider: 'bamboohr',

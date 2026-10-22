@@ -56,3 +56,23 @@ test('successful but invalid Enrichment JSON is not retried', async () => {
   );
   assert.equal(attempts, 1);
 });
+
+test('failed Enrichment requests include final HTTP status and attempts', async () => {
+  let attempts = 0;
+  const client = createEnrichmentClient({
+    baseUrl: 'https://enrichers.example/api', functionKey: 'secret',
+    timeoutMs: 1000, retryCount: 1,
+  }, {
+    fetchImpl: async () => {
+      attempts += 1;
+      return new Response('unavailable', { status: 500 });
+    },
+  });
+  await assert.rejects(client.createRun(JOB, USER, 'compatibility.v1'), (error) => {
+    assert.equal(error.status, 500);
+    assert.equal(error.attempts, 2);
+    assert.equal(error.retriesExhausted, true);
+    return true;
+  });
+  assert.equal(attempts, 2);
+});

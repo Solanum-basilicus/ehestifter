@@ -327,7 +327,7 @@ export function buildRunSummary({
   }));
 
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     runId,
     mode,
     startedAtUtc: startedAt.toISOString(),
@@ -528,10 +528,10 @@ export function buildRunSummary({
     titleCandidatesRetainedBeforeGeography: (
       scanResult.titleCandidateAdmission?.candidatesRetained ?? null
     ),
-    titleCandidatesDroppedByPreGeographyGuard: (
+    titleCandidatesDroppedByPreGeographyCap: (
       scanResult.titleCandidateAdmission?.candidatesDroppedByCap ?? 0
     ),
-    preGeographyGuardReached: (
+    preGeographyCapReached: (
       scanResult.titleCandidateAdmission?.candidateCapReached ?? false
     ),
     candidatesBeforeFinalCap: scanResult.discoveryEligibility?.candidatesBeforeFinalCap ?? null,
@@ -556,7 +556,7 @@ export function buildRunSummary({
           priorityTitleCandidatesMatched: titleAdmission?.priorityTitleCandidatesMatched ?? 0,
           catalogTitleCandidatesMatched: titleAdmission?.catalogTitleCandidatesMatched ?? 0,
           titleCandidatesRetainedBeforeGeography: titleAdmission?.candidatesRetainedByCap ?? 0,
-          titleCandidatesDroppedByPreGeographyGuard: titleAdmission?.candidatesDroppedByCap ?? 0,
+          titleCandidatesDroppedByPreGeographyCap: titleAdmission?.candidatesDroppedByCap ?? 0,
           candidatesAfterGeography: scanResult.discoveryEligibility?.userCounts?.[user.userId] ?? 0,
           candidatesRetainedByCap: finalAdmission?.candidatesRetainedByCap ?? 0,
           candidatesDroppedByCap: finalAdmission?.candidatesDroppedByCap ?? 0,

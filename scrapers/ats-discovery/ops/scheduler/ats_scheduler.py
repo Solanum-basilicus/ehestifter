@@ -952,7 +952,13 @@ def classify_run_for_retention(run_path: Path) -> str:
         return "degraded_or_failed"
     if summary.get("discoveryUsersLoadStatus") == "error":
         return "degraded_or_failed"
-    if int(summary.get("compatibilityErrors") or 0) > 0:
+    compatibility_errors = int(summary.get("compatibilityErrors") or 0)
+    compatibility_attempted = int(summary.get("compatibilityRequested") or 0) + compatibility_errors
+    if compatibility_errors >= 5 or (
+        compatibility_errors >= 2
+        and compatibility_attempted > 0
+        and compatibility_errors / compatibility_attempted >= 0.10
+    ):
         return "degraded_or_failed"
     return "success"
 

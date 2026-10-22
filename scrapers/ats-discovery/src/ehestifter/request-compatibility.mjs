@@ -107,6 +107,9 @@ export async function requestCompatibilityForMatches({
         return {
           ...item,
           status: 'error_request',
+          httpStatus: Number.isInteger(error?.status) ? error.status : null,
+          attempts: Number.isInteger(error?.attempts) ? error.attempts : null,
+          retriesExhausted: error?.retriesExhausted === true,
           error: error instanceof Error ? error.message : String(error),
         };
       }

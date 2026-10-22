@@ -140,9 +140,9 @@ test('high transient error ratio recommends decrease without auto-applying it', 
   assert.equal(ashby.policy.concurrency, 4);
 });
 
-test('healthy sufficiently large fast sample suggests reviewable increase', () => {
+test('100 healthy fast requests suggest a reviewable increase', () => {
   const observations = buildRateObservations({
-    providerResults: Array.from({ length: 4 }, (_, sequence) => result({
+    providerResults: Array.from({ length: 100 }, (_, sequence) => result({
       sequence,
       durationMs: 1000 + sequence,
     })),
@@ -235,4 +235,22 @@ test('a fast sample with transient health failures does not recommend higher con
   const recommendation = observations.providers[0].recommendation;
   assert.equal(recommendation.action, 'hold');
   assert.equal(recommendation.suggestedConcurrency, 3);
+});
+
+test('26 healthy requests do not justify a concurrency increase', () => {
+  const observations = buildRateObservations({
+    providerResults: Array.from({ length: 26 }, (_, sequence) => result({ sequence, durationMs: 1000 })),
+    policy: policy({ concurrency: 3 }),
+  });
+  assert.equal(observations.providers[0].recommendation.action, 'hold');
+});
+
+test('one long request blocks a concurrency increase', () => {
+  const observations = buildRateObservations({
+    providerResults: Array.from({ length: 100 }, (_, sequence) => result({
+      sequence, durationMs: sequence === 99 ? 46000 : 1000,
+    })),
+    policy: policy({ concurrency: 3 }),
+  });
+  assert.equal(observations.providers[0].recommendation.action, 'hold');
 });

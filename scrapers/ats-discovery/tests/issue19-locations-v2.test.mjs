@@ -526,7 +526,7 @@ test('location fallback resolves unique alternate city names in the catalog', ()
 });
 
 test('location fallback does not turn ambiguous text or opaque codes into unrelated geography', () => {
-  const values = ['Bordon', 'Norwalk', '00', 'P6', 'APAC', 'VIC', 'Bade'];
+  const values = ['Bordon', 'Norwalk', '00', 'P6', 'VIC', 'Bade'];
   const normalized = normalizeCandidateLocations(values.map((rawLocation) => (
     candidate({ rawLocation, remoteType: 'On-Site' })
   )));
@@ -642,4 +642,35 @@ test('definite preliminary rejection is limited to resolved non-remote single-br
     ...base,
     locationNormalization: { consistency: 'consistent', unresolved: [{ raw: 'unknown' }] },
   }), false);
+});
+
+test('APAC resolves to Asia and Oceania and never to Apac in Uganda', () => {
+  const [item] = normalizeCandidateLocations([
+    candidate({ rawLocation: 'APAC, Remote, On-Site', remoteType: 'On-Site' }),
+  ]);
+  assert.ok(item.locationsV2.some((location) => location.locationId === 'm49:142'));
+  assert.ok(item.locationsV2.some((location) => location.locationId === 'm49:009'));
+  assert.ok(!item.locationsV2.some((location) => location.locationId === 'geonames:235130'));
+});
+
+test('canonical Cambridge beats an alias from Newton in the same region', () => {
+  const sample = createLocationsV2Catalog({
+    schemaVersion: 1,
+    regions: [],
+    countries: [{ id: 'iso3166:US', kind: 'country', name: 'United States', countryCode: 'US' }],
+    adminRegions: [{ id: 'admin:MA', kind: 'adminRegion', name: 'Massachusetts', countryCode: 'US', admin1Code: 'MA' }],
+    cities: [
+      { id: 'city:cambridge', kind: 'city', name: 'Cambridge', countryCode: 'US', admin1Id: 'admin:MA', population: 120000, aliases: [] },
+      { id: 'city:newton', kind: 'city', name: 'Newton', countryCode: 'US', admin1Id: 'admin:MA', population: 90000, aliases: ['Cambridge'] },
+    ],
+  });
+  assert.equal(sample.resolveCity('Cambridge', 'US', { adminRegion: 'MA' })?.id, 'city:cambridge');
+  assert.equal(sample.resolveCity('Newton', 'US')?.id, 'city:newton');
+});
+
+test('the actual city Apac in Uganda is not a business region', () => {
+  const [item] = normalizeCandidateLocations([
+    candidate({ rawLocation: 'Apac, Uganda', remoteType: 'On-Site' }),
+  ]);
+  assert.ok(!item.locationsV2.some((location) => ['m49:142', 'm49:009'].includes(location.locationId)));
 });

@@ -103,3 +103,41 @@ test('detail 429 pauses that provider and retries without blocking another provi
   assert.equal(paylocity.attempts, 2);
   assert.equal(paylocity.rateLimitedResponses, 1);
 });
+
+test('detail timeout retries once under the provider pace', async () => {
+  let now = 0;
+  let attempts = 0;
+  const results = await executeDetailRequests({
+    items: [request(0, 'paylocity')], globalConcurrency: 1, policy: policy(),
+    providerFor: (item) => item.provider,
+    healthPartitionFor: (item) => item.provider,
+    monotonicNow: () => now,
+    sleep: async (milliseconds) => { now += milliseconds; },
+    worker: async () => {
+      if (attempts++ === 0) {
+        const error = new Error('timeout'); error.name = 'AbortError'; throw error;
+      }
+      return 'ok';
+    },
+  });
+  assert.equal(results[0].value, 'ok');
+  assert.equal(results[0].attempts, 2);
+  assert.equal(results[0].transientResponses, 1);
+  assert.ok(now >= 2000);
+});
+
+test('detail permanent HTTP 404 is not retried', async () => {
+  let attempts = 0;
+  const results = await executeDetailRequests({
+    items: [request(0, 'greenhouse')], globalConcurrency: 1, policy: policy(),
+    providerFor: (item) => item.provider,
+    healthPartitionFor: (item) => item.provider,
+    worker: async () => {
+      attempts += 1;
+      const error = new Error('not found'); error.status = 404; throw error;
+    },
+  });
+  assert.equal(attempts, 1);
+  assert.equal(results[0].attempts, 1);
+  assert.equal(results[0].error.status, 404);
+});

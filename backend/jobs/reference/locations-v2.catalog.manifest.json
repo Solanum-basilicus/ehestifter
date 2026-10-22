@@ -1,23 +1,31 @@
 {
   "schemaVersion": 2,
-  "buildVersion": 2,
-  "catalogVersion": "177ba6bcc06be6876767",
+  "buildVersion": 4,
+  "catalogVersion": "1d100d69dfa8b2941742",
   "referenceYear": 2026,
-  "tzdata": "system-2026c",
+  "tzdata": "system-2026e",
   "counts": {
     "regions": 30,
     "countries": 248,
     "adminRegions": 3854,
-    "cities": 235880
+    "cities": 236466
   },
   "sources": {
     "geonamesCities500": {
       "source": "https://download.geonames.org/export/dump/cities500.zip",
-      "sha256": "0254566d8cda847ffea03f61e959e72713b77f1de641883fe024a703283463c4"
+      "sha256": "3b8292a6ffcb11d87aa3b2dff47972fb0c8c0ed7245d54227db8f2ca1c81fc7f"
+    },
+    "geonamesCountryInfo": {
+      "source": "https://download.geonames.org/export/dump/countryInfo.txt",
+      "sha256": "c55f638cfaafb4fe45a9aa15120a0f1f78e8a34a8e1847d7b9320cf740fbc9ab"
+    },
+    "geonamesAlternateNames": {
+      "source": "https://download.geonames.org/export/dump/alternateNamesV2.zip",
+      "sha256": "1ea8afef7da35370529cd2f7c38caac78e821ca3578f18f0207e5c31ee81fb05"
     },
     "geonamesAdmin1": {
       "source": "https://download.geonames.org/export/dump/admin1CodesASCII.txt",
-      "sha256": "1da92a6323a5fec3176f3f743bf4cf4040fd56a876da55e46fbca23c863aa60a"
+      "sha256": "b577baa3476bbe94f0454545e517e1835401d79c5b1105c8e02cf1d4a505e8ec"
     },
     "geonamesTimeZones": {
       "source": "https://download.geonames.org/export/dump/timeZones.txt",

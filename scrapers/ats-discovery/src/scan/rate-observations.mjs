@@ -90,10 +90,12 @@ function recommendation(observation, providerPolicy) {
   }
   const throughput = throughputLimits(observation, execution);
   if (
-    attempted >= config.minimumRequests
+    attempted >= Math.max(100, config.minimumRequests)
     && successRatio >= config.healthySuccessRatio
     && observation.healthLatencyMs.p95 != null
     && observation.healthLatencyMs.p95 <= config.fastP95Ms
+    && observation.healthLatencyMs.max != null
+    && observation.healthLatencyMs.max <= config.fastP95Ms * 2
     && observation.healthTransientErrors === 0
     && throughput.bindingConstraint === 'concurrency'
     && execution.concurrency < config.maximumSuggestedConcurrency
@@ -102,7 +104,7 @@ function recommendation(observation, providerPolicy) {
       action: 'consider_increase',
       suggestedConcurrency: execution.concurrency + 1,
       suggestedMinRequestIntervalMs: execution.minRequestIntervalMs,
-      rationale: 'The sample was healthy, latency was low, and concurrency limits observed throughput.',
+      rationale: 'At least 100 health requests met the p95 and maximum latency limits; concurrency limits throughput.',
     };
   }
   if (

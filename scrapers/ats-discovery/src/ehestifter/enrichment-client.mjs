@@ -47,14 +47,20 @@ export function createEnrichmentClient(config, { fetchImpl = fetch } = {}) {
         lastError = error;
         if (response?.ok) throw error;
         if (
-          error?.status
-          && error.status !== 429
-          && error.status < 500
-        ) throw error;
-        if (attempt === config.retryCount) throw error;
+          (error?.status && error.status !== 429 && error.status < 500)
+          || attempt === config.retryCount
+        ) {
+          error.attempts = attempt + 1;
+          error.retriesExhausted = attempt === config.retryCount;
+          throw error;
+        }
       }
       if (attempt === config.retryCount) break;
       await sleep(Math.min(500 * 2 ** attempt, 4000));
+    }
+    if (lastError) {
+      lastError.attempts = config.retryCount + 1;
+      lastError.retriesExhausted = true;
     }
     throw lastError ?? new Error('Enrichment API request failed');
   }

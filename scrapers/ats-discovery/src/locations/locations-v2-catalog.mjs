@@ -33,6 +33,8 @@ const BROAD_SCOPE_ALIASES = new Map([
   ['americas', [['globalRegion', 'm49:019']]],
   ['latin america', [['globalRegion', 'm49:419']]],
   ['latam', [['globalRegion', 'm49:419']]],
+  ['apac', [['globalRegion', 'm49:142'], ['globalRegion', 'm49:009']]],
+  ['asia pacific', [['globalRegion', 'm49:142'], ['globalRegion', 'm49:009']]],
   ['dach', [
     ['country', 'iso3166:DE'],
     ['country', 'iso3166:AT'],
@@ -131,6 +133,8 @@ export function createLocationsV2Catalog(data) {
   const adminByName = new Map();
   const cityByCountryName = new Map();
   const cityByName = new Map();
+  const canonicalByCountryName = new Map();
+  const canonicalByName = new Map();
   const globalCityNameKeys = new Set();
 
   for (const item of data.countries ?? []) {
@@ -159,6 +163,8 @@ export function createLocationsV2Catalog(data) {
     }
   }
   for (const item of data.cities ?? []) {
+    pushIndex(canonicalByCountryName, `${item.countryCode}\u0000${lookupKey(item.name)}`, item);
+    pushIndex(canonicalByName, lookupKey(item.name), item);
     for (const term of cityLookupTerms(item)) {
       const termKey = lookupKey(term);
       pushIndex(cityByCountryName, `${item.countryCode}\u0000${termKey}`, item);
@@ -222,8 +228,11 @@ export function createLocationsV2Catalog(data) {
 
   function resolveCity(value, countryCode, { adminRegion = null } = {}) {
     const code = cleanText(countryCode).toUpperCase();
+    const nameKey = `${code}\u0000${lookupKey(value)}`;
     const candidates = uniqueById(
-      cityByCountryName.get(`${code}\u0000${lookupKey(value)}`) ?? [],
+      canonicalByCountryName.get(nameKey)?.length
+        ? canonicalByCountryName.get(nameKey)
+        : cityByCountryName.get(nameKey) ?? [],
     );
     const adminId = typeof adminRegion === 'string'
       ? resolveAdminRegion(adminRegion, { countryCode: code })?.id ?? adminRegion
@@ -237,7 +246,10 @@ export function createLocationsV2Catalog(data) {
 
   function resolveCityGlobalResolution(value) {
     const raw = cleanText(value);
-    const candidates = uniqueById(cityByName.get(lookupKey(raw)) ?? []);
+    const key = lookupKey(raw);
+    const candidates = uniqueById(
+      canonicalByName.get(key)?.length ? canonicalByName.get(key) : cityByName.get(key) ?? [],
+    );
     if (!raw || /\d/u.test(raw)) return null;
     if (/^[A-Z]{3,6}$/u.test(raw)) return null;
     return dominantCityResolution(candidates);
@@ -253,7 +265,9 @@ export function createLocationsV2Catalog(data) {
     if (!raw || !key || /\d/u.test(raw)) return null;
     const country = resolveCountry(raw);
     const admins = uniqueById(adminByName.get(key) ?? []);
-    const cities = uniqueById(cityByName.get(key) ?? []);
+    const cities = uniqueById(
+      canonicalByName.get(key)?.length ? canonicalByName.get(key) : cityByName.get(key) ?? [],
+    );
     const codeLike = /^[A-Z]{2,6}$/u.test(raw);
 
     if (country) {
@@ -314,6 +328,9 @@ export function createLocationsV2Catalog(data) {
     }
     const claims = [];
     for (const [term, identities] of BROAD_SCOPE_ALIASES) {
+      // Treat business acronyms as scopes only when they are uppercase.
+      if (['apac', 'emea', 'latam', 'dach'].includes(term)
+        && !new RegExp(`\\b${term.toUpperCase()}\\b`, 'u').test(text)) continue;
       const pattern = exactPhraseRegex(term);
       if (!pattern?.test(text)) continue;
       for (const [kind, id] of identities) {

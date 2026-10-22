@@ -118,3 +118,23 @@ test('create failures remain local to each pair', async () => {
   ]);
   assert.deepEqual(observed, ['error_request', 'error_request']);
 });
+
+test('failed compatibility requests retain transport diagnostics', async () => {
+  const result = await requestCompatibilityForMatches({
+    importResults: [imported({ matchedUserIds: [USER_A] })],
+    discoveryUsers: users,
+    client: { createRun: async () => {
+      const error = new Error('Enrichment API returned 500');
+      error.status = 500;
+      error.attempts = 3;
+      error.retriesExhausted = true;
+      throw error;
+    } },
+    config: baseConfig,
+  });
+  const [failure] = result.results;
+  assert.equal(failure.status, 'error_request');
+  assert.equal(failure.httpStatus, 500);
+  assert.equal(failure.attempts, 3);
+  assert.equal(failure.retriesExhausted, true);
+});

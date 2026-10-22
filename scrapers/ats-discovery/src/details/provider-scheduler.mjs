@@ -1,9 +1,10 @@
 import { performance } from 'node:perf_hooks';
 
 import { getProviderPolicy } from '../policy/discovery-policy.mjs';
-import { providerHttpStatus } from '../scan/provider-errors.mjs';
+import { classifyProviderError, providerHttpStatus } from '../scan/provider-errors.mjs';
 
 const DEFAULT_RATE_LIMIT_RETRIES = 2;
+const DEFAULT_TRANSIENT_RETRIES = 1;
 const MAX_RATE_LIMIT_BACKOFF_MS = 60_000;
 const defaultSleep = (milliseconds) => new Promise(
   (resolve) => setTimeout(resolve, milliseconds),
@@ -123,6 +124,7 @@ export async function executeDetailRequests({
   providerFor,
   healthPartitionFor,
   rateLimitRetries = DEFAULT_RATE_LIMIT_RETRIES,
+  transientRetries = DEFAULT_TRANSIENT_RETRIES,
   monotonicNow = () => performance.now(),
   wallNow = () => Date.now(),
   sleep = defaultSleep,
@@ -135,6 +137,9 @@ export async function executeDetailRequests({
   }
   if (!Number.isInteger(rateLimitRetries) || rateLimitRetries < 0) {
     throw new Error('detail rateLimitRetries must be a non-negative integer');
+  }
+  if (!Number.isInteger(transientRetries) || transientRetries < 0) {
+    throw new Error('detail transientRetries must be a non-negative integer');
   }
   if (typeof worker !== 'function') throw new Error('detail worker must be a function');
   if (onResult != null && typeof onResult !== 'function') {
@@ -165,6 +170,7 @@ export async function executeDetailRequests({
       item,
       attempts: 0,
       rateLimitedResponses: 0,
+      transientResponses: 0,
       notBeforeMs: Number.NEGATIVE_INFINITY,
       startedAtMs: null,
     });
@@ -184,6 +190,7 @@ export async function executeDetailRequests({
       error,
       attempts: state.attempts,
       rateLimitedResponses: state.rateLimitedResponses,
+      transientResponses: state.transientResponses,
       durationMs: Math.max(
         0,
         Math.round(monotonicNow() - (state.startedAtMs ?? monotonicNow())),
@@ -252,6 +259,19 @@ export async function executeDetailRequests({
           return;
         }
         if (providerHttpStatus(error) === 429) state.rateLimitedResponses += 1;
+        const category = classifyProviderError(error);
+        if (
+          (category === 'timeout' || category === 'http_5xx')
+          && state.transientResponses < transientRetries
+        ) {
+          state.transientResponses += 1;
+          const delayMs = Math.max(2_000, queue.guard.policy.execution.minRequestIntervalMs * 2);
+          queue.guard.defer(delayMs);
+          state.notBeforeMs = monotonicNow() + delayMs;
+          queue.items.unshift(state);
+          return;
+        }
+        if (category === 'timeout' || category === 'http_5xx') state.transientResponses += 1;
         complete(state, queue.guard, null, error);
       })
       .finally(() => {
