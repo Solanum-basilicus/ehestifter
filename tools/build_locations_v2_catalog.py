@@ -584,10 +584,20 @@ def _search_key(value: str | None) -> str:
 
 
 def _search_index_country_display_name(country: dict) -> str:
-    aliases = [_clean_text(value) for value in country.get("aliases", []) if _clean_text(value)]
-    if aliases:
-        return min(aliases, key=lambda value: (len(value), value.casefold()))
-    return _clean_text(country.get("name"))
+    """Use the canonical name, or its shorter name from a formal long name."""
+    canonical = _clean_text(country.get("name"))
+    # An alias is a search term, not a display-name recommendation.
+    # Use a short form only when it is a complete prefix of the formal name.
+    short_forms = [
+        alias
+        for raw_alias in country.get("aliases", [])
+        if (alias := _clean_text(raw_alias))
+        and any(
+            canonical.casefold().startswith(alias.casefold() + suffix)
+            for suffix in (" of ", " (")
+        )
+    ]
+    return max(short_forms, key=len) if short_forms else canonical
 
 
 def _write_search_index(path: Path, catalog: dict) -> None:

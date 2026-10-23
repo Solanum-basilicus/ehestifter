@@ -302,3 +302,60 @@ def test_alternate_names_archive_rejects_duplicate_named_members():
         zf.writestr("nested/alternateNamesV2.txt", "2\t100\tde\tAlt-Wien\t1\t0\t0\t0\t\t\n")
     with pytest.raises(ValueError, match="exactly one alternateNamesV2.txt"):
         _parse_preferred_alternate_names(archive.getvalue(), {"100": {"de"}})
+
+
+def test_country_display_name_rejects_unrelated_short_aliases():
+    from tools.build_locations_v2_catalog import _search_index_country_display_name
+
+    cases = [
+        ({"name": "Canada", "aliases": ["ካናዳ", "CA", "Canada"]}, "Canada"),
+        (
+            {"name": "United Kingdom of Great Britain and Northern Ireland",
+             "aliases": ["U.K", "GB", "United Kingdom", "Britain"]},
+            "United Kingdom",
+        ),
+        ({"name": "United States of America", "aliases": ["US", "United States"]},
+         "United States"),
+        ({"name": "Türkiye", "aliases": ["TR", "Turkey"]}, "Türkiye"),
+    ]
+    for country, expected in cases:
+        assert _search_index_country_display_name(country) == expected
+
+
+def test_search_index_keeps_aliases_searchable_without_using_them_as_labels(tmp_path):
+    catalog = {
+        "catalogVersion": "test-version",
+        "regions": [],
+        "countries": [
+            {"id": "iso3166:CA", "kind": "country", "name": "Canada",
+             "countryCode": "CA", "aliases": ["ካናዳ", "CA"], "ancestors": []},
+            {"id": "iso3166:GB", "kind": "country",
+             "name": "United Kingdom of Great Britain and Northern Ireland",
+             "countryCode": "GB", "aliases": ["U.K", "United Kingdom"],
+             "ancestors": []},
+        ],
+        "adminRegions": [
+            {"id": "geonames:6093943", "kind": "adminRegion", "name": "Ontario",
+             "countryCode": "CA", "parentId": "iso3166:CA", "aliases": []},
+        ],
+        "cities": [
+            {"id": "geonames:6058560", "kind": "city", "name": "London",
+             "countryCode": "CA", "parentId": "geonames:6093943",
+             "admin1Id": "geonames:6093943", "aliases": [], "population": 400000},
+        ],
+    }
+    index_path = tmp_path / "locations.sqlite3"
+    _write_search_index(index_path, catalog)
+    with sqlite3.connect(index_path) as conn:
+        assert conn.execute(
+            "SELECT label FROM locations WHERE location_id = 'geonames:6058560'"
+        ).fetchone()[0] == "London, Ontario, Canada"
+        assert conn.execute(
+            "SELECT display_name FROM locations WHERE location_id = 'iso3166:GB'"
+        ).fetchone()[0] == "United Kingdom"
+        assert conn.execute(
+            "SELECT location_id FROM names WHERE search_name = ?", ("ካናዳ",)
+        ).fetchone()[0] == "iso3166:CA"
+        assert conn.execute(
+            "SELECT location_id FROM names WHERE search_name = ?", ("u k",)
+        ).fetchone()[0] == "iso3166:GB"
