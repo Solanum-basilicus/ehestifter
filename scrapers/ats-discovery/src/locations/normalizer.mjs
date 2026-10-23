@@ -754,6 +754,9 @@ function parseSegment(segment, dictionary, source) {
     for (const localityPart of localityParts) {
       const locality = stripLocalityQualifier(localityPart);
       if (!locality || dictionary.resolveCity(locality, country.countryCode)) continue;
+      // Uppercase 2/3-letter tokens are often country or admin codes.
+      // Do not infer a foreign city from them (MEX, MX -> Mex, Switzerland).
+      if (/^[A-Z]{2,3}$/u.test(locality)) continue;
       const city = dictionary.resolveCity(locality);
       if (!city || city.countryCode === country.countryCode) continue;
       const cityCountry = dictionary.countryByCode(city.countryCode);
@@ -1033,7 +1036,7 @@ function explicitLocationDeclaration(window) {
   return /^(?:[-*•]\s*)?(?:work\s+)?location\s*[:\-–—]/iu.test(window)
     || /\b(?:role|position|job)\s+is\s+based\s+(?:in|at)\b/iu.test(window)
     || /^(?:based|located)\s+(?:in|at)\b/iu.test(window)
-    || /\bbas(?:é|ée|é\(e\))\s+à\b/iu.test(window);
+    || /\bbas(?:é|ée|é\(e\))\s+à(?=\s|$)/iu.test(window);
 }
 
 function resolvedScopeLocations(terms, dictionary, source, context) {
@@ -1170,7 +1173,7 @@ function candidateScopeCountryHints(window, dictionary) {
 
       const candidateFirst = new RegExp(
         `\\b(?:candidates?|applicants?|employees?)\\s+`+
-        `(?:must\\s+|should\\s+|need\\s+to\\s+|are\\s+required\\s+to\\s+|are\\s+|who\\s+|that\\s+)?`+
+        `(?:must\\s+(?:be\\s+)?|should\\s+(?:be\\s+)?|need\\s+to\\s+(?:be\\s+)?|are\\s+required\\s+to\\s+(?:be\\s+)?|are\\s+|who\\s+|that\\s+)?`+
         `(?:resid(?:e|ing)|live|living|located|based)\\s+`+
         `(?:in|within)\\s+(?:anywhere\\s+)?(?:the\\s+)?${term}(?![\\p{L}\\p{N}])`,
         'iu',
@@ -1375,7 +1378,8 @@ function restrictedUsStateLocations(value, dictionary) {
   };
 }
 
-function descriptionEvidence(candidate, primaryLocations, dictionary, scopeFilter) {
+function descriptionEvidence(candidate, primaryLocations, dictionary, scopeFilter, policy) {
+  const baseline = policy === 'baseline';
   const allow = Array.isArray(scopeFilter?.allow) ? scopeFilter.allow : [];
   const block = Array.isArray(scopeFilter?.block) ? scopeFilter.block : [];
   const markers = Array.isArray(scopeFilter?.restriction_markers)
@@ -1391,6 +1395,7 @@ function descriptionEvidence(candidate, primaryLocations, dictionary, scopeFilte
   const primaryCountries = [...new Set(primaryLocations.map((item) => item.countryCode))];
   const restrictedStates = restrictedUsStateLocations(candidate.description, dictionary);
   if (restrictedStates.locations.length > 0) {
+    // A stated eligible-state list defines hiring scope for a remote job.
     locations.push(...restrictedStates.locations);
     observations.push(...restrictedStates.locations.map((location) => ({
       source: 'description',
@@ -1411,7 +1416,7 @@ function descriptionEvidence(candidate, primaryLocations, dictionary, scopeFilte
 
   for (const window of windows) {
     const candidateCountryHints = candidateScopeCountryHints(window, dictionary);
-    countryHints.push(...employerCountryHints(window, dictionary));
+    if (baseline) countryHints.push(...employerCountryHints(window, dictionary));
     countryHints.push(...candidateCountryHints);
     const descriptionArrangement = workArrangementFromDescriptionPolicy(window);
     if (descriptionArrangement) {
@@ -1484,11 +1489,15 @@ function descriptionEvidence(candidate, primaryLocations, dictionary, scopeFilte
     );
     const intrinsicCountries = intrinsicRestrictionCountryHints(window, dictionary)
       .filter((country) => !restrictedStateCountryCodes.has(country.countryCode));
+    const hiringCountries = new Set([
+      ...candidateCountryHints,
+      ...openCandidateCountryHints(window, dictionary),
+    ].map((country) => country.countryCode));
     for (const intrinsicCountry of intrinsicCountries) {
       const canonicalCountry = dictionary.countryByCode(intrinsicCountry.countryCode);
       if (!canonicalCountry) continue;
       const location = locationFromCountry(canonicalCountry);
-      locations.push(location);
+      if (baseline || hiringCountries.has(intrinsicCountry.countryCode)) locations.push(location);
       observations.push({
         source: 'description',
         raw: intrinsicCountry.matchedTerm,
@@ -1522,7 +1531,7 @@ function descriptionEvidence(candidate, primaryLocations, dictionary, scopeFilte
         text: window,
       });
       const location = locationFromCountry(citizenship.country);
-      locations.push(location);
+      if (baseline) locations.push(location);
       observations.push({
         source: 'description',
         raw: citizenship.term,
@@ -1550,12 +1559,17 @@ function descriptionEvidence(candidate, primaryLocations, dictionary, scopeFilte
       const scopeLocations = resolvedScopeLocations(
         [effectiveAllowedTerm, blockedTerm], dictionary, 'description', window,
       );
-      locations.push(...scopeLocations.locations);
+      if (baseline || !/work\s+authori|authori[sz]ed\s+to\s+work|work\s+permit|right\s+to\s+work/iu.test(window)) {
+        locations.push(...scopeLocations.locations);
+      }
       observations.push(...scopeLocations.observations);
     }
 
     const declared = extractDeclaredLocationText(window);
     if (!declared) continue;
+    // An applicant requirement alone does not declare a work site.
+    // Keep explicit job sites and required office attendance only.
+    if (!baseline && !explicitLocationDeclaration(window) && !mandatoryPresence(window)) continue;
     let parsed = normalizeRawLocation(declared, { dictionary });
     if (parsed.locations.length === 0 && primaryCountries.length === 1) {
       const city = dictionary.resolveCity(stripArrangementWords(declared), primaryCountries[0]);
@@ -1851,6 +1865,7 @@ function catalogLocationFallback(value, catalog, dictionary) {
     if (!location) continue;
     resolutions.push({
       raw: part,
+      item: resolution.item,
       location,
       resolutionMethod: resolution.method,
       confidence: resolution.confidence,
@@ -1861,8 +1876,15 @@ function catalogLocationFallback(value, catalog, dictionary) {
     resolutions.map((item) => item.location.countryCode).filter(Boolean),
   );
   if (countryCodes.size > 1) return null;
+  // A country or region can qualify a city in the same expression.
+  // Do not add both the city and its geographic parent as job sites.
+  const narrowest = resolutions.filter((candidate) => !resolutions.some((other) => (
+    other !== candidate
+    && other.item.id !== candidate.item.id
+    && catalog.facts(other.item).some((ancestor) => ancestor.id === candidate.item.id)
+  )));
   return {
-    resolutions,
+    resolutions: narrowest,
     complete: resolutions.length === parts.length,
   };
 }
@@ -1877,26 +1899,26 @@ function claimPrecision(item) {
   return { globalRegion: 0, country: 1, adminRegion: 2, city: 3 }[item?.kind] ?? -1;
 }
 
-function descriptionCarriesBroadLocationScope(window) {
-  const text = lookupKey(window);
-  if (!text) return false;
-  if (/\banywhere\s+(?:in|within)\b/u.test(text)) return false;
-  if (/\b(?:global|worldwide|world)\s+(?:remote\s+)?(?:culture|team|workforce|company|organisation|organization|customers?|network|business|impact|travel\s+policy)\b/u.test(text)) {
-    return false;
-  }
-  if (/\bglobally\s+(?:distributed|dispersed|located|operating)\b/u.test(text)) return false;
-
-  const scope = '(?:worldwide|global|europe|european\\s+union|eu|emea|dach|north\\s+america|africa|americas|latin\\s+america|latam)';
-  return new RegExp(`\\bremote\\b(?:\\s+(?:from|in|within|from\\s+within))?[\\s,:;()%0-9\\/-]{0,18}\\b${scope}\\b`, 'u').test(text)
-    || new RegExp(`\\b${scope}\\b[\\s,:;()%0-9\\/-]{0,18}\\bremote\\b`, 'u').test(text)
-    || /\b(?:work|working)\s+(?:remotely\s+)?(?:from\s+)?(?:worldwide|globally)\b/u.test(text)
-    || new RegExp(`\\b(?:hiring|eligible|open\\s+to)\\s+(?:(?:candidates?|applicants?)\\s+)?(?:in|from|across\\s+)?${scope}\\b`, 'u').test(text)
-    || new RegExp(`\\b(?:candidates?|applicants?)\\s+(?:are\\s+|must\\s+be\\s+|can\\s+be\\s+)?(?:located|based|residing)?\\s*(?:in|from|across)?\\s*${scope}\\b`, 'u').test(text)
-    || new RegExp(`\\b(?:based|located)\\s+(?:in|within)\\s+(?:the\\s+)?${scope}\\b`, 'u').test(text)
-    || /^(?:location|work\s+location)\s*[:\-–—]/u.test(text);
+function descriptionCarriesBroadLocationScope(window, policy = 'conservative') {
+  const text = cleanText(window).toLowerCase();
+  if (!text || negatesRequirement(window)) return false;
+  // Customer markets, other teams, and remote-working benefits are not job sites.
+  // Accept only declarations about this job or the location of its applicants.
+  const scope = String.raw`(?:worldwide|global|europe|european\s+union|eu|eea|emea|dach|apac|asia\s+pacific|north\s+america|africa|americas|latin\s+america|latam)`;
+  const patterns = [
+    String.raw`^(?:[-*•]\s*)?(?:work\s+)?location\s*[:\-–—]\s*.*\b${scope}\b`,
+    String.raw`^(?:[-*•]\s*)?(?:remote(?:\s+work)?|work\s+remotely)\s+(?:from|in|within|across)?[\s,:;()%0-9\/-]{0,18}\b${scope}\b`,
+    String.raw`^\s*(?:this\s+)?(?:role|position|job)\s+(?:is|will\s+be|can\s+be)\s+(?:based|located|remote)\s+(?:in|within|from|across)?\s+(?:the\s+)?${scope}\b`,
+    String.raw`\b(?:hiring|eligible|open\s+to)\s+(?:(?:candidates?|applicants?)\s+)?(?:in|from|across\s+)?${scope}\b`,
+    String.raw`\b(?:candidates?|applicants?)\s+(?:are\s+|must\s+be\s+|can\s+be\s+)?(?:located|based|residing)\s+(?:in|from|within|across)\s+(?:the\s+)?${scope}\b`,
+  ];
+  const acceptedPatterns = policy === 'baseline' ? patterns : [
+    patterns[0], patterns[1], patterns[2], patterns[4],
+  ];
+  return acceptedPatterns.some((pattern) => new RegExp(pattern, 'u').test(text));
 }
 
-function v2ClaimsForCandidate(candidate, locations, catalog, primaryObservations = []) {
+function v2ClaimsForCandidate(candidate, locations, catalog, primaryObservations = [], allObservations = [], policy = 'conservative') {
   // A business region must not become a city through legacy geocoding.
   const rawBusinessRegions = new Set(
     (String(candidate.rawLocation ?? '').match(/\b(?:APAC|EMEA|LATAM|DACH)\b/gu) ?? [])
@@ -1907,12 +1929,56 @@ function v2ClaimsForCandidate(candidate, locations, catalog, primaryObservations
     && rawBusinessRegions.has(lookupKey(location.cityName))
   );
   const claims = [];
+  const evidence = new Map();
   const finalClaims = [];
+  function recordClaim(item, sourceField, matchedText, rule, evidenceType) {
+    if (!item) return;
+    claims.push(item);
+    const key = `${item.kind}\u0000${item.id}`;
+    if (evidence.has(key)) return;
+    evidence.set(key, {
+      kind: item.kind,
+      locationId: item.id,
+      sourceField,
+      matchedText: typeof matchedText === 'string' ? matchedText.slice(0, 240) : null,
+      rule,
+      evidenceType,
+    });
+  }
+  const sourcePriority = new Map([
+    ['provider_structured', 0],
+    ['provider_detail_location', 1],
+    ['raw_location', 2],
+    ['description', 3],
+  ]);
+  // Index evidence once. Large provider location lists must not cause
+  // a quadratic number of catalog lookups.
+  const observedClaims = new Map();
+  for (const observation of allObservations) {
+    if (observation.status !== 'resolved' || !observation.location) continue;
+    const item = catalog.canonicalFromLegacy(observation.location);
+    if (!item) continue;
+    const current = observedClaims.get(item.id);
+    if (!current || (sourcePriority.get(observation.source) ?? 10)
+      < (sourcePriority.get(current.source) ?? 10)) {
+      observedClaims.set(item.id, observation);
+    }
+  }
+  function legacyEvidence(item) {
+    const observation = observedClaims.get(item.id);
+    return observation ? [
+      observation.source,
+      typeof observation.raw === 'string' ? observation.raw : null,
+      `normalized:${observation.kind}`,
+      observation.source === 'description' ? 'description_location' : 'provider_location',
+    ] : ['reconciled_locations', null, 'canonical_legacy_location', 'reconciled_location'];
+  }
+
   for (const location of locations) {
     if (falseLegacyCity(location)) continue;
     const item = catalog.canonicalFromLegacy(location);
     if (item) {
-      claims.push(item);
+      recordClaim(item, ...legacyEvidence(item));
       finalClaims.push(item);
     }
   }
@@ -1935,7 +2001,9 @@ function v2ClaimsForCandidate(candidate, locations, catalog, primaryObservations
       ));
       if (hasMorePreciseFinalClaim) continue;
     }
-    claims.push(item);
+    recordClaim(item, observation.source,
+      typeof observation.raw === 'string' ? observation.raw : null,
+      `primary:${observation.kind}`, 'provider_location');
   }
 
   // Provider structured fields often put a campus/site label into cityName.
@@ -1972,17 +2040,30 @@ function v2ClaimsForCandidate(candidate, locations, catalog, primaryObservations
       claimCountryCode(catalog, claim) === fallbackCountryCode
       && claimPrecision(claim) > claimPrecision(item)
     ));
-    if (!hasMorePreciseFinalClaim) claims.push(item);
+    if (!hasMorePreciseFinalClaim) recordClaim(item, 'provider_structured',
+      null, 'structured_unknown_city_country_fallback', 'provider_location');
   }
 
-  claims.push(...catalog.broadScopeClaims(candidate.rawLocation));
-  claims.push(...catalog.broadScopeClaims(candidate.detailRawLocation));
+  for (const [raw, source] of [
+    [candidate.rawLocation, 'raw_location'],
+    [candidate.detailRawLocation, 'provider_detail_location'],
+  ]) {
+    for (const item of catalog.broadScopeClaims(raw)) {
+      recordClaim(item, source, raw, 'explicit_provider_broad_scope', 'provider_scope');
+    }
+  }
   for (const window of descriptionWindows(candidate.description)) {
-    if (!descriptionCarriesBroadLocationScope(window)) continue;
-    claims.push(...catalog.broadScopeClaims(window));
+    if (!descriptionCarriesBroadLocationScope(window, policy)) continue;
+    for (const item of catalog.broadScopeClaims(window)) {
+      recordClaim(item, 'description', window,
+        'explicit_job_or_candidate_broad_scope', 'description_scope');
+    }
   }
   const unique = new Map(claims.map((item) => [`${item.kind}\u0000${item.id}`, item]));
-  return [...unique.values()].map((item) => ({ kind: item.kind, locationId: item.id }));
+  return {
+    claims: [...unique.values()].map((item) => ({ kind: item.kind, locationId: item.id })),
+    evidence: [...evidence.values()],
+  };
 }
 
 export function normalizeCandidateLocations(
@@ -1991,6 +2072,7 @@ export function normalizeCandidateLocations(
     dictionary = getDefaultGeoDictionary(),
     v2Catalog = getDefaultLocationsV2Catalog(),
     locationScopeFilter = null,
+    locationPolicy = 'conservative',
   } = {},
 ) {
   const activeScopeFilter = locationScopeFilter?.enabled === false
@@ -2050,7 +2132,10 @@ export function normalizeCandidateLocations(
     const catalogFallbackResolvedRaws = new Set();
     for (const item of primary.unresolved) {
       if (typeof item.raw !== 'string') continue;
-      if (/^[A-Z]{2}$/u.test(item.raw.trim())) {
+      // Unresolved qualifiers belong to an already parsed provider location.
+      // They can be site codes, not separate work locations (for example PEC).
+      if (item.reason === 'qualifier_unresolved_for_country') continue;
+      if (/^[A-Z]{2,3}$/u.test(item.raw.trim())) {
         const sourceRaw = item.source === 'provider_detail_location'
           ? candidate.detailRawLocation
           : candidate.rawLocation;
@@ -2085,6 +2170,7 @@ export function normalizeCandidateLocations(
       primaryLocations,
       dictionary,
       activeScopeFilter,
+      locationPolicy,
     );
     const providerLocality = providerLocalityRefinement(
       candidate,
@@ -2184,12 +2270,21 @@ export function normalizeCandidateLocations(
       ...primary.observations,
       ...catalogFallbackObservations,
     ];
-    const locationsV2 = v2ClaimsForCandidate(
+    const locationV2Result = v2ClaimsForCandidate(
       candidate,
       finalLocations,
       v2Catalog,
       primaryObservations,
+      [
+        ...primaryObservations,
+        ...titleObservations,
+        ...providerScope.observations,
+        ...description.observations,
+        ...providerLocality.observations,
+      ],
+      locationPolicy,
     );
+    const locationsV2 = locationV2Result.claims;
     const workTimeConstraintsV2 = workTimeConstraints.rangesV2 ?? [];
     const locationClaimKeys = new Set(
       locationsV2.map((item) => `${item.kind}\u0000${item.locationId}`),
@@ -2250,6 +2345,12 @@ export function normalizeCandidateLocations(
         consistency: reconciled.consistency,
         rawLocation: cleanText(candidate.rawLocation) || null,
         detailRawLocation: cleanText(candidate.detailRawLocation) || null,
+        claimEvidence: locationV2Result.evidence,
+        anomalies: locationsV2.length >= 50 ? [{
+          kind: 'large_location_set',
+          claimCount: locationsV2.length,
+          rawLocationLength: cleanText(candidate.rawLocation).length,
+        }] : [],
         observations: [
           ...primaryObservations,
           ...titleObservations,
@@ -2259,7 +2360,10 @@ export function normalizeCandidateLocations(
         ],
         unresolved: unresolvedEvidence,
       },
-      locationEligibility: eligibility,
+      locationEligibility: {
+        ...eligibility,
+        applicationQuestionSignals: candidate.applicationQuestions ?? [],
+      },
       workTimeConstraints,
     };
   });

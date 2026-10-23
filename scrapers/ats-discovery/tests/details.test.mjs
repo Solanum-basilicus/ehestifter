@@ -3,6 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { htmlToPlainText } from '../src/details/text.mjs';
+import { extractGreenhouseLocationQuestions } from '../src/details/greenhouse-questions.mjs';
 import {
   enrichCandidateDetails,
 } from '../src/details/fetchers.mjs';
@@ -69,6 +70,11 @@ test('Greenhouse details populate description without changing scanner provenanc
             location: {
               name: 'Remote/Hybrid if local to Maryland',
             },
+            questions: [
+              { label: 'First Name', required: true, fields: [{ name: 'first_name' }] },
+              { label: 'Are you legally authorized to work in the United States without sponsorship?', required: true, fields: [{ name: 'custom', values: ['PRIVATE'] }] },
+              { label: 'What is your current city and state of residence?', required: true },
+            ],
           }),
           {
             status: 200,
@@ -99,6 +105,12 @@ test('Greenhouse details populate description without changing scanner provenanc
   assert.equal(result.rawLocation, 'Remote');
   assert.equal(result.detailRawLocation, 'Remote/Hybrid if local to Maryland');
   assert.equal(result.detail.status, 'ok');
+  assert.equal(result.applicationQuestions.length, 2);
+  assert.deepEqual(result.applicationQuestions.map((item) => item.kind), [
+    'work_authorization', 'residence_or_location',
+  ]);
+  assert.equal(result.applicationQuestions[0].countryHint, 'US');
+  assert.equal(JSON.stringify(result.applicationQuestions).includes('PRIVATE'), false);
 });
 
 for (const { httpStatus, nativeId, detailStatus } of [
@@ -136,7 +148,7 @@ for (const { httpStatus, nativeId, detailStatus } of [
       },
     });
 
-    const expectedUrl = `https://boards-api.greenhouse.io/v1/boards/example/jobs/${nativeId || 'legacy-id'}`;
+    const expectedUrl = `https://boards-api.greenhouse.io/v1/boards/example/jobs/${nativeId || 'legacy-id'}?questions=true`;
     const expectedAttempts = httpStatus >= 500 ? 2 : 1;
     assert.deepEqual(calls, Array(expectedAttempts).fill(expectedUrl));
     assert.equal(result.detail.status, detailStatus);
@@ -362,4 +374,17 @@ test('detail budget prioritizes preliminary geography matches before mismatches'
 
   assert.equal(results[0].detail.status, 'skipped_limit');
   assert.equal(results[1].detail.status, 'unsupported_provider');
+});
+
+test('Greenhouse question extraction omits identity questions and field values', () => {
+  const questions = extractGreenhouseLocationQuestions({ questions: [
+    { label: 'Email', fields: [{ value: 'person@example.com' }] },
+    { label: '<p>Will you need H-1B visa sponsorship?</p>', required: true,
+      fields: [{ values: ['secret'] }] },
+    { label: 'Are you authorized to work with us on projects?', required: false },
+  ] });
+  assert.equal(questions.length, 2);
+  assert.equal(questions[0].countryHint, 'US');
+  assert.ok(questions.every((item) => !JSON.stringify(item).includes('secret')));
+  assert.equal(questions[1].countryHint, null);
 });

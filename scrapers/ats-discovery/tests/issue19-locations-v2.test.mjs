@@ -526,11 +526,57 @@ test('location fallback resolves unique alternate city names in the catalog', ()
 });
 
 test('location fallback does not turn ambiguous text or opaque codes into unrelated geography', () => {
-  const values = ['Bordon', 'Norwalk', '00', 'P6', 'VIC', 'Bade'];
+  const values = ['Bordon', 'Norwalk', '00', 'P6', 'VIC'];
   const normalized = normalizeCandidateLocations(values.map((rawLocation) => (
     candidate({ rawLocation, remoteType: 'On-Site' })
   )));
   for (const item of normalized) assert.deepEqual(item.locationsV2, [], item.rawLocation);
+});
+
+function fallbackRegressionCatalog() {
+  return createLocationsV2Catalog({
+    schemaVersion: 1,
+    sourceSchemaVersion: 2,
+    catalogVersion: 'fallback-regressions',
+    referenceYear: 2026,
+    regions: [],
+    countries: [
+      { id: 'iso3166:IN', kind: 'country', name: 'India', countryCode: 'IN', alpha3Code: 'IND', aliases: [] },
+      { id: 'iso3166:RS', kind: 'country', name: 'Serbia', countryCode: 'RS', aliases: [] },
+      { id: 'iso3166:TR', kind: 'country', name: 'Türkiye', countryCode: 'TR', aliases: ['Turkey'] },
+      { id: 'iso3166:TW', kind: 'country', name: 'Taiwan', countryCode: 'TW', aliases: [] },
+      { id: 'iso3166:IT', kind: 'country', name: 'Italy', countryCode: 'IT', aliases: [] },
+    ],
+    adminRegions: [{
+      id: 'geonames:10097359', kind: 'adminRegion', name: 'Peć District', countryCode: 'RS',
+      admin1Code: 'PEC', aliases: ['PEC'], ancestors: ['iso3166:RS'],
+    }],
+    cities: [
+      { id: 'geonames:1259229', kind: 'city', name: 'Pune', countryCode: 'IN', population: 3100000, ancestors: ['iso3166:IN'] },
+      { id: 'geonames:745044', kind: 'city', name: 'Istanbul', countryCode: 'TR', population: 15000000, ancestors: ['iso3166:TR'] },
+      { id: 'geonames:1670909', kind: 'city', name: 'Bade District', countryCode: 'TW', population: 209148, aliases: ['Bade'], ancestors: ['iso3166:TW'] },
+      { id: 'geonames:3173435', kind: 'city', name: 'Milan', countryCode: 'IT', population: 1371498, aliases: ['Mailand'], ancestors: ['iso3166:IT'] },
+    ],
+  });
+}
+
+test('unresolved provider site codes cannot become foreign administrative regions', () => {
+  const catalogWithPec = fallbackRegressionCatalog();
+  assert.equal(catalogWithPec.resolveStandalone('PEC')?.item.id, 'geonames:10097359');
+  const [result] = normalizeCandidateLocations([
+    candidate({ rawLocation: 'IND-Pune-Equifax Analytics-PEC', remoteType: 'On-Site' }),
+  ], { v2Catalog: catalogWithPec });
+  assert.deepEqual(result.locationsV2, [{ kind: 'city', locationId: 'geonames:1259229' }]);
+  assert.ok(result.locationNormalization.unresolved.some((item) => item.raw === 'PEC'));
+});
+
+test('short district aliases need country context for standalone lookup', () => {
+  const catalogWithBade = fallbackRegressionCatalog();
+  assert.equal(catalogWithBade.resolveStandalone('Bade'), null);
+  assert.equal(catalogWithBade.resolveCityGlobal('Bade'), null);
+  assert.equal(catalogWithBade.resolveCity('Bade', 'TW')?.id, 'geonames:1670909');
+  assert.equal(catalogWithBade.resolveStandalone('Bade District')?.item.id, 'geonames:1670909');
+  assert.equal(catalogWithBade.resolveStandalone('Mailand')?.item.id, 'geonames:3173435');
 });
 
 test('country and foreign admin exact-name collisions stay unresolved without context', () => {
@@ -580,9 +626,25 @@ test('catalog resolves alpha-3 country codes and data-supplied city alternate na
   });
 });
 
-test('partially resolvable comma geography keeps the city and unresolved evidence', () => {
+test('country-qualified fallback keeps the city, not its country ancestor', () => {
   const [result] = normalizeCandidateLocations([
     candidate({ rawLocation: 'Istanbul, Turkey, On-Site', remoteType: 'On-Site' }),
+  ], { v2Catalog: fallbackRegressionCatalog() });
+  assert.deepEqual(result.locationsV2, [{ kind: 'city', locationId: 'geonames:745044' }]);
+  assert.equal(result.locationNormalization.status, 'catalog_resolved');
+  assert.deepEqual(result.locationNormalization.unresolved, []);
+});
+
+test('repeated qualified fallback entries do not remove the location', () => {
+  const [result] = normalizeCandidateLocations([
+    candidate({ rawLocation: 'Turkey, Turkey', remoteType: 'On-Site' }),
+  ], { v2Catalog: fallbackRegressionCatalog() });
+  assert.deepEqual(result.locationsV2, [{ kind: 'country', locationId: 'iso3166:TR' }]);
+});
+
+test('partially resolvable comma geography keeps unresolved evidence', () => {
+  const [result] = normalizeCandidateLocations([
+    candidate({ rawLocation: 'Istanbul, Unknownshire, On-Site', remoteType: 'On-Site' }),
   ]);
   assert.deepEqual(result.locationsV2, [{ kind: 'city', locationId: 'geonames:745044' }]);
   assert.equal(result.locationNormalization.status, 'partially_resolved');
@@ -673,4 +735,106 @@ test('the actual city Apac in Uganda is not a business region', () => {
     candidate({ rawLocation: 'Apac, Uganda', remoteType: 'On-Site' }),
   ]);
   assert.ok(!item.locationsV2.some((location) => ['m49:142', 'm49:009'].includes(location.locationId)));
+});
+
+test('run1023 DACH customer region does not create German-speaking job locations', () => {
+  const [item] = normalizeCandidateLocations([candidate({
+    rawLocation: 'Sydney NSW, AU, 2000',
+    locations: [{ countryName: 'Australia', countryCode: 'AU', cityName: 'Sydney' }],
+    remoteType: 'On-Site',
+    description: 'This role is based in our Sydney office. A large share of customers is in the DACH region, and another engineering team is based in Germany.',
+  })]);
+  const ids = new Set(item.locationsV2.map((claim) => claim.locationId));
+  assert.ok(ids.has('geonames:2147714') || ids.has('iso3166:AU'));
+  for (const country of ['DE', 'AT', 'CH']) {
+    assert.ok(!ids.has(`iso3166:${country}`), country);
+  }
+  assert.ok(item.locationNormalization.claimEvidence.every((entry) => ids.has(entry.locationId)));
+});
+
+test('run1023 EU remote working benefit does not add 27 eligibility countries', () => {
+  const [item] = normalizeCandidateLocations([candidate({
+    rawLocation: 'Görlitz',
+    remoteType: 'On-Site',
+    description: 'Benefits: EU Remote Working. Your office is in Görlitz.',
+  })]);
+  assert.deepEqual(item.locationsV2, [{ kind: 'city', locationId: 'geonames:2918987' }]);
+});
+
+test('an explicit regional candidate eligibility statement remains a scope', () => {
+  const [item] = normalizeCandidateLocations([candidate({
+    rawLocation: 'Remote',
+    description: 'Candidates must be based in the DACH region.',
+  })]);
+  for (const code of ['DE', 'AT', 'CH']) {
+    assert.ok(item.locationsV2.some((claim) => claim.locationId === `iso3166:${code}`));
+  }
+  assert.ok(item.locationNormalization.claimEvidence.some((entry) => (
+    entry.sourceField === 'description' && entry.evidenceType === 'description_scope'
+  )));
+});
+
+test('run1023 MEX MX code does not resolve Mex Switzerland', () => {
+  const [item] = normalizeCandidateLocations([candidate({
+    rawLocation: 'Remote', detailRawLocation: 'Remote, MEX, MX',
+    remoteType: 'Remote',
+  })]);
+  assert.deepEqual(item.locationsV2, [{ kind: 'country', locationId: 'iso3166:MX' }]);
+  assert.ok(!item.locationNormalization.claimEvidence.some((entry) => entry.locationId === 'geonames:2659668'));
+});
+
+test('country-qualified locations and separate city lists retain valid cities', () => {
+  const [local, mixed] = normalizeCandidateLocations([
+    candidate({ rawLocation: 'London, Canada', remoteType: 'On-Site' }),
+    candidate({ rawLocation: 'Tallinn, Spain', remoteType: 'On-Site' }),
+  ]);
+  assert.ok(local.locationsV2.every((entry) => entry.locationId !== 'geonames:2643743'));
+  assert.ok(mixed.locationsV2.some((entry) => entry.locationId === 'geonames:588409'));
+});
+
+test('Taiwan city from data-backed catalog resolves structured country and city', () => {
+  const taiwanCatalog = createLocationsV2Catalog({
+    schemaVersion: 1, catalogVersion: 'taiwan-fixture', referenceYear: 2026,
+    regions: [{ id: 'm49:001', kind: 'globalRegion', name: 'World' }],
+    countries: [{ id: 'iso3166:TW', kind: 'country', name: 'Taiwan', countryCode: 'TW',
+      alpha3Code: 'TWN', ancestors: ['m49:001'] }],
+    adminRegions: [],
+    cities: [{ id: 'geonames:1668341', kind: 'city', name: 'Taipei', countryCode: 'TW',
+      population: 2400000, ancestors: ['iso3166:TW', 'm49:001'] }],
+  });
+  const [item] = normalizeCandidateLocations([candidate({
+    rawLocation: 'Taipei, TAIWAN, Taiwan, Remote',
+    locations: [{ countryName: 'Taiwan', countryCode: 'TW', cityName: 'Taipei', region: null }],
+  })], { v2Catalog: taiwanCatalog });
+  assert.deepEqual(item.locationsV2, [{ kind: 'city', locationId: 'geonames:1668341' }]);
+  assert.equal(item.locationNormalization.claimEvidence[0].sourceField, 'provider_structured');
+});
+
+test('location claim evidence names the matched provider field and rule', () => {
+  const [item] = normalizeCandidateLocations([candidate({ rawLocation: 'Remote DACH' })]);
+  assert.ok(item.locationNormalization.claimEvidence.length >= 3);
+  assert.ok(item.locationNormalization.claimEvidence.every((entry) => (
+    entry.sourceField === 'raw_location' && entry.rule === 'explicit_provider_broad_scope'
+  )));
+});
+
+test('authorization-only description does not create a job country', () => {
+  const raw = candidate({
+    rawLocation: 'Remote',
+    description: 'Applicants must have authorization to work in the United States without sponsorship. Benefits include 401(k).',
+    applicationQuestions: [{ label: 'Are you legally authorized to work in the United States?', required: true, countryHint: 'US', kind: 'work_authorization' }],
+  });
+  const [current] = normalizeCandidateLocations([raw]);
+  const [baseline] = normalizeCandidateLocations([raw], { locationPolicy: 'baseline' });
+  assert.deepEqual(current.locationsV2, []);
+  assert.ok(baseline.locationsV2.some((claim) => claim.locationId === 'iso3166:US'));
+  assert.equal(current.locationEligibility.applicationQuestionSignals.length, 1);
+});
+
+test('candidate hiring area remains geography without work authorization inference', () => {
+  const [result] = normalizeCandidateLocations([candidate({
+    rawLocation: 'Remote',
+    description: 'Candidates must be based in Germany.',
+  })]);
+  assert.ok(result.locationsV2.some((claim) => claim.locationId === 'iso3166:DE'));
 });

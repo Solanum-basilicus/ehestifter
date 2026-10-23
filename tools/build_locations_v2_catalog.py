@@ -29,7 +29,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 SCHEMA_VERSION = 2
-BUILD_VERSION = 4
+BUILD_VERSION = 5
 # Keep common ATS posting languages for foreign cities, not only local languages.
 CROSS_BORDER_CITY_LANGUAGES = frozenset({"en", "de"})
 GEONAMES_COUNTRY_INFO_URL = "https://download.geonames.org/export/dump/countryInfo.txt"
@@ -192,15 +192,16 @@ def _parse_country_info(data: bytes) -> dict[str, dict]:
         if not line or line.startswith("#"):
             continue
         row = line.split("\t")
-        if len(row) < 15:
+        if len(row) < 17:
             continue
-        code, alpha3, name, geoname_id = row[0].upper(), row[1].upper(), row[4], row[14]
+        # countryInfo.txt columns 15 and 16 hold languages and GeoNames ID.
+        code, alpha3, name, geoname_id = row[0].upper(), row[1].upper(), row[4], row[16]
         if len(code) == 2 and len(alpha3) == 3 and geoname_id.isdigit():
             countries[code] = {
                 "alpha3": alpha3,
                 "name": _clean_text(name),
                 "geonameId": geoname_id,
-                "languages": {part.split("-")[0].lower() for part in row[13].split(",") if part},
+                "languages": {part.split("-")[0].lower() for part in row[15].split(",") if part},
             }
     return countries
 

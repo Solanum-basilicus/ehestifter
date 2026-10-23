@@ -489,7 +489,7 @@ test('disabled scope filter never blocks import eligibility', () => {
   assert.equal(result.locationEligibility.reason, 'location_scope_filter_disabled');
 });
 
-test('citizenship still refines geography when eligibility filtering is disabled', () => {
+test('citizenship does not create work geography when eligibility filtering is disabled', () => {
   const [result] = normalizeCandidateLocations([
     candidate({
       rawLocation: 'Remote',
@@ -497,13 +497,10 @@ test('citizenship still refines geography when eligibility filtering is disabled
     }),
   ], { locationScopeFilter: { ...locationScopeFilter, enabled: false } });
 
-  assert.deepEqual(result.locations, [{
-    countryName: 'United States',
-    countryCode: 'US',
-    cityName: null,
-    region: null,
-  }]);
+  assert.deepEqual(result.locations, []);
+  assert.deepEqual(result.locationsV2, []);
   assert.equal(result.locationEligibility.status, 'unclear');
+  assert.ok(result.locationEligibility.evidence.some((item) => item.kind === 'citizenship_scope'));
 });
 
 test('US-based team references are not candidate restrictions', () => {
@@ -588,7 +585,7 @@ test('city and US state abbreviation resolve together from a location declaratio
   assert.equal(result.locationEligibility.status, 'ineligible');
 });
 
-test('city-only provider metadata is refined by strong employer country evidence', () => {
+test('employer headquarters text does not infer provider city country', () => {
   const [result] = normalizeCandidateLocations([
     candidate({
       rawLocation: 'Berlin',
@@ -596,15 +593,10 @@ test('city-only provider metadata is refined by strong employer country evidence
     }),
   ], { locationScopeFilter });
 
-  assert.deepEqual(result.locations, [{
-    countryName: 'Germany',
-    countryCode: 'DE',
-    cityName: 'Berlin',
-    region: null,
-  }]);
-  assert.equal(result.locationNormalization.consistency, 'refined');
-  assert.equal(result.locationEligibility.status, 'eligible');
-  assert.ok(result.locationNormalization.observations.some(
+  assert.deepEqual(result.locations, []);
+  // GeoNames resolves the actual city from provider metadata, not the employer text.
+  assert.deepEqual(result.locationsV2, [{ kind: 'city', locationId: 'geonames:2950159' }]);
+  assert.ok(!result.locationNormalization.observations.some(
     (item) => item.kind === 'provider_city_with_description_country_hint',
   ));
 });
@@ -768,55 +760,40 @@ test('conflicting candidate residence scopes do not refine a provider city', () 
   );
 });
 
-test('US citizenship restriction clarifies naked Remote scope', () => {
+test('US citizenship restriction is evidence but not a work site', () => {
   const [result] = normalizeCandidateLocations([
     candidate({
-      rawLocation: 'Remote',
-      remoteType: 'Remote',
+      rawLocation: 'Remote', remoteType: 'Remote',
       description: 'We are able to offer this opportunity only to US citizens.',
     }),
   ], { locationScopeFilter });
 
-  assert.deepEqual(result.locations, [{
-    countryName: 'United States',
-    countryCode: 'US',
-    cityName: null,
-    region: null,
-  }]);
+  assert.deepEqual(result.locations, []);
+  assert.deepEqual(result.locationsV2, []);
   assert.equal(result.locationEligibility.status, 'ineligible');
   assert.equal(result.locationEligibility.reason, 'citizenship_scope');
 });
 
-test('high-signal US employment evidence disambiguates St. Petersburg', () => {
+test('US employment benefits do not place an ambiguous provider city in the US', () => {
   const [result] = normalizeCandidateLocations([
     candidate({
       rawLocation: 'St. Petersburg',
       description: 'Benefits include medical insurance and a company 401(k) match.',
     }),
   ], { locationScopeFilter });
-
-  assert.deepEqual(result.locations, [{
-    countryName: 'United States',
-    countryCode: 'US',
-    cityName: 'St. Petersburg',
-    region: null,
-  }]);
+  assert.deepEqual(result.locations, []);
+  assert.ok(!result.locationsV2.some((item) => item.locationId === 'iso3166:US'));
 });
 
-test('US employment evidence disambiguates Georgia as a state', () => {
+test('US employment benefits do not resolve Georgia as a US state', () => {
   const [result] = normalizeCandidateLocations([
     candidate({
       rawLocation: 'Georgia',
       description: 'Benefits include health insurance and a company 401(k) match.',
     }),
   ], { locationScopeFilter });
-
-  assert.deepEqual(result.locations, [{
-    countryName: 'United States',
-    countryCode: 'US',
-    cityName: null,
-    region: 'Georgia',
-  }]);
+  assert.deepEqual(result.locations, []);
+  assert.ok(!result.locationsV2.some((item) => item.locationId === 'geonames:4197000'));
 });
 
 test('required Pacific Time work hours are retained as future filter evidence', () => {
@@ -852,23 +829,19 @@ test('bare PT is recorded only when a work-hours context is present', () => {
   assert.equal(unrelated.workTimeConstraints.status, 'none');
 });
 
-test('work authorization refines geography when scope filtering is disabled', () => {
+test('work authorization remains evidence without adding work geography', () => {
   const [result] = normalizeCandidateLocations([
     candidate({
-      rawLocation: 'Remote',
-      remoteType: 'Remote',
+      rawLocation: 'Remote', remoteType: 'Remote',
       description: 'Applicants must have authorization to work in the United States.',
     }),
   ], { locationScopeFilter: { ...locationScopeFilter, enabled: false } });
-
-  assert.deepEqual(result.locations, [{
-    countryName: 'United States',
-    countryCode: 'US',
-    cityName: null,
-    region: null,
-  }]);
-  assert.ok(result.locationsV2.some((item) => item.locationId === 'iso3166:US'));
+  assert.deepEqual(result.locations, []);
+  assert.deepEqual(result.locationsV2, []);
   assert.equal(result.locationEligibility.status, 'unclear');
+  assert.ok(result.locationEligibility.evidence.some((item) => (
+    item.kind === 'intrinsic_restriction_scope'
+  )));
 });
 
 test('numeric count before Remote is not resolved as geography', () => {

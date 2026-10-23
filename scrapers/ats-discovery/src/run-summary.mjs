@@ -1,3 +1,4 @@
+import { buildLocationAnomalyTelemetry } from './locations/anomaly-telemetry.mjs';
 import { CATALOG_PROVIDER_IDS } from './catalogs/provider-catalog.mjs';
 import { getProviderPolicy } from './policy/discovery-policy.mjs';
 import { isDurableProviderResult, isTransientProviderResult } from './scan/provider-errors.mjs';
@@ -237,6 +238,7 @@ export function buildRunSummary({
   evaluated,
   preflightResults = null,
   detailTelemetry = null,
+  locationResults = null,
   tenantStateChanges = null,
   rateObservations = null,
   requestedMaxCreates = null,
@@ -473,6 +475,7 @@ export function buildRunSummary({
       (item) => item.recommendation.action === 'consider_increase',
     ),
 
+    locationAnomalies: buildLocationAnomalyTelemetry(locationResults ?? []),
     multiUserEnabled,
     discoveryUsersLoadStatus: !multiUserEnabled
       ? 'disabled'

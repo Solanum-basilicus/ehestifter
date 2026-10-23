@@ -232,10 +232,10 @@ def test_index_only_preserves_previous_index_when_build_fails(tmp_path, monkeypa
 
 def test_geonames_country_and_alternate_names_are_data_driven():
     country_info = (
-        "TR\tTUR\t792\tTU\tTurkey\tAnkara\t780580\t85000000\tAS\t.tr\tTRY\tLira\t90\ttr-TR\t298795\t\t\n"
-        "TW\tTWN\t158\tTW\tTaiwan\tTaipei\t35980\t23000000\tAS\t.tw\tTWD\tDollar\t886\tzh-TW\t1668284\t\t\n"
-        "AT\tAUT\t040\tAU\tAustria\tVienna\t83879\t9000000\tEU\t.at\tEUR\tEuro\t43\tde-AT\t2782113\t\t\n"
-        "IT\tITA\t380\tIT\tItaly\tRome\t301340\t59000000\tEU\t.it\tEUR\tEuro\t39\tit-IT\t3175395\t\t\n"
+        "TR\tTUR\t792\tTU\tTurkey\tAnkara\t780580\t85000000\tAS\t.tr\tTRY\tLira\t90\t#####\tpost\ttr-TR\t298795\t\n"
+        "TW\tTWN\t158\tTW\tTaiwan\tTaipei\t35980\t23000000\tAS\t.tw\tTWD\tDollar\t886\t#####\tpost\tzh-TW\t1668284\t\n"
+        "AT\tAUT\t040\tAU\tAustria\tVienna\t83879\t9000000\tEU\t.at\tEUR\tEuro\t43\t#####\tpost\tde-AT\t2782113\t\n"
+        "IT\tITA\t380\tIT\tItaly\tRome\t301340\t59000000\tEU\t.it\tEUR\tEuro\t39\t#####\tpost\tit-IT\t3175395\t\n"
     ).encode()
     city_data = io.BytesIO()
     with zipfile.ZipFile(city_data, "w") as zf:
@@ -265,6 +265,8 @@ def test_geonames_country_and_alternate_names_are_data_driven():
     countries = {item["countryCode"]: item for item in catalog["countries"]}
     cities = {item["name"]: item for item in catalog["cities"]}
     assert countries["TW"]["alpha3Code"] == "TWN"
+    from tools.build_locations_v2_catalog import _parse_country_info
+    assert "zh" in _parse_country_info(country_info)["TW"]["languages"]
     assert countries["TW"]["parentId"] == "m49:001"
     assert "Turkey" in countries["TR"]["aliases"] or countries["TR"]["name"] == "Turkey"
     assert cities["Taipei"]["countryCode"] == "TW"

@@ -47,6 +47,22 @@ test('run writer emits Phase 3 state and rate artifacts in one published directo
   });
 });
 
+test('run writer keeps location shadow and manual review inputs in separate artifacts', async () => {
+  await withTempDir(async (directory) => {
+    const runPath = await writeRunArtifacts({
+      dataPath: directory, runId: 'run-shadow', metadata: {},
+      locationShadow: { schemaVersion: 1, policy: 'conservative-v1', final: { totals: { compared: 1 }, records: [] } },
+      locationLlmInputs: [{ title: 'Engineer', descriptionExcerpt: 'Remote' }],
+    });
+    const shadow = JSON.parse(await readFile(path.join(runPath, 'location-shadow.json'), 'utf8'));
+    const inputs = JSON.parse(await readFile(path.join(runPath, 'location-llm-inputs.json'), 'utf8'));
+    assert.equal(shadow.runId, 'run-shadow');
+    assert.equal(shadow.final.totals.compared, 1);
+    assert.equal(inputs.jobs.length, 1);
+    assert.equal(inputs.jobs[0].descriptionExcerpt, 'Remote');
+  });
+});
+
 test('run directory is not visible until all artifact writes succeed', async () => {
   await withTempDir(async (directory) => {
     const runPath = await writeRunArtifacts({

@@ -165,6 +165,8 @@ export async function writeRunArtifacts({
   detailResults,
   detailTelemetry,
   locationResults,
+  locationShadow = null,
+  locationLlmInputs = null,
   importResults,
   summary,
 }) {
@@ -278,6 +280,20 @@ export async function writeRunArtifacts({
       locationResults,
       2,
     );
+    if (locationShadow) {
+      await writeJsonArtifact(stagingPath, 'location-shadow.json', {
+        ...locationShadow, runId,
+      });
+    }
+    if (locationLlmInputs) {
+      await writeArrayArtifact(
+        stagingPath,
+        'location-llm-inputs.json',
+        { schemaVersion: 1, runId, descriptionLimit: 8000, sampleLimit: 30 },
+        'jobs',
+        locationLlmInputs,
+      );
+    }
     await writeOptionalJobsArtifact(
       stagingPath,
       'import-results.json',

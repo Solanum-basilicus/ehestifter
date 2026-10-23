@@ -103,6 +103,14 @@ function dominantCityResolution(items) {
   return null;
 }
 
+function unqualifiedDistrictAlias(value, city) {
+  // A short alias for a district is not sufficient to select its location.
+  // For example, Bade alone must not imply Bade District in Taiwan.
+  const name = lookupKey(city.name);
+  const stem = name.replace(/\s+district$/u, '');
+  return stem !== name && lookupKey(value) === stem;
+}
+
 function exactPhraseRegex(value) {
   const tokens = lookupKey(value).split(' ').filter(Boolean);
   if (tokens.length === 0) return null;
@@ -247,9 +255,10 @@ export function createLocationsV2Catalog(data) {
   function resolveCityGlobalResolution(value) {
     const raw = cleanText(value);
     const key = lookupKey(raw);
+    const canonical = canonicalByName.get(key) ?? [];
     const candidates = uniqueById(
-      canonicalByName.get(key)?.length ? canonicalByName.get(key) : cityByName.get(key) ?? [],
-    );
+      canonical.length ? canonical : cityByName.get(key) ?? [],
+    ).filter((item) => canonical.length > 0 || !unqualifiedDistrictAlias(raw, item));
     if (!raw || /\d/u.test(raw)) return null;
     if (/^[A-Z]{3,6}$/u.test(raw)) return null;
     return dominantCityResolution(candidates);
@@ -265,9 +274,10 @@ export function createLocationsV2Catalog(data) {
     if (!raw || !key || /\d/u.test(raw)) return null;
     const country = resolveCountry(raw);
     const admins = uniqueById(adminByName.get(key) ?? []);
+    const canonical = canonicalByName.get(key) ?? [];
     const cities = uniqueById(
-      canonicalByName.get(key)?.length ? canonicalByName.get(key) : cityByName.get(key) ?? [],
-    );
+      canonical.length ? canonical : cityByName.get(key) ?? [],
+    ).filter((item) => canonical.length > 0 || !unqualifiedDistrictAlias(raw, item));
     const codeLike = /^[A-Z]{2,6}$/u.test(raw);
 
     if (country) {

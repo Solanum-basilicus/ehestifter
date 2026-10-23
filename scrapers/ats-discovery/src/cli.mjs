@@ -32,6 +32,8 @@ import { repairLeverDescription } from './maintenance/repair-lever-description.m
 import { requestCompatibilityForMatches } from './ehestifter/request-compatibility.mjs';
 import { createUsersClient } from './ehestifter/users-client.mjs';
 import { normalizeCandidateLocations } from './locations/normalizer.mjs';
+import { compareLocationPolicies, manualLlmReviewInputs, selectLocationShadowIndices } from './locations/shadow-comparison.mjs';
+import { getDefaultLocationsV2Catalog } from './locations/locations-v2-catalog.mjs';
 import { geographyRejectionDetails } from './locations/rejection-diagnostics.mjs';
 import {
   annotatePreliminaryDiscoveryEligibility,
@@ -219,6 +221,9 @@ async function runScan(args) {
   let detailResults = null;
   let detailTelemetry = null;
   let locationResults = null;
+  let normalizedLocationResults = null;
+  const locationShadow = { schemaVersion: 1, policy: 'conservative-v1', baseline: 'run1023-v1' };
+  let locationLlmInputs = null;
   let importResults = null;
   let compatibilityResults = null;
   let rateObservations = null;
@@ -448,6 +453,18 @@ async function runScan(args) {
         scanResult.candidates,
         { locationScopeFilter: null },
       );
+      const preliminaryShadowIndices = selectLocationShadowIndices(
+        scanResult.candidates, preliminaryLocations, { limit: 60 },
+      );
+      const preliminaryBaseline = normalizeCandidateLocations(
+        preliminaryShadowIndices.map((index) => scanResult.candidates[index]),
+        { locationScopeFilter: null, locationPolicy: 'baseline' },
+      );
+      locationShadow.preliminary = compareLocationPolicies(
+        preliminaryShadowIndices.map((index) => preliminaryLocations[index]),
+        preliminaryBaseline,
+        { stage: 'preliminary', population: preliminaryLocations.length },
+      );
       const preliminaryEligibility = annotatePreliminaryDiscoveryEligibility(
         preliminaryLocations,
         discoveryMatcher.users,
@@ -562,6 +579,24 @@ async function runScan(args) {
             : planning.portalConfig.location_scope_filter,
         },
       );
+      normalizedLocationResults = locationResults;
+      const locationShadowIndices = selectLocationShadowIndices(
+        detailResults ?? preflightResults, locationResults, { limit: 120 },
+      );
+      const locationBaseline = normalizeCandidateLocations(
+        locationShadowIndices.map((index) => (detailResults ?? preflightResults)[index]),
+        {
+          locationScopeFilter: config.multiUser.enabled
+            ? null
+            : planning.portalConfig.location_scope_filter,
+          locationPolicy: 'baseline',
+        },
+      );
+      const shadowCurrent = locationShadowIndices.map((index) => locationResults[index]);
+      locationShadow.final = compareLocationPolicies(
+        shadowCurrent, locationBaseline, { population: locationResults.length },
+      );
+      locationLlmInputs = manualLlmReviewInputs(shadowCurrent, locationShadow.final);
       if (config.multiUser.enabled && discoveryMatcher) {
         failureStage = 'discovery_location_filter';
         const eligibilityResult = applyDiscoveryEligibility(
@@ -763,6 +798,7 @@ async function runScan(args) {
       evaluated,
       preflightResults,
       detailTelemetry,
+      locationResults: normalizedLocationResults,
       tenantStateChanges,
       rateObservations,
       requestedMaxCreates: args.maxCreate,
@@ -787,6 +823,10 @@ async function runScan(args) {
         mode: args.mode,
         scannerConfigPath: config.configPath,
         careerOpsUpstreamRef: config.careerOps.upstreamRef,
+        locationsV2CatalogVersion: getDefaultLocationsV2Catalog().catalogVersion,
+        locationNormalizationPolicy: 'conservative-v1',
+        locationShadowBaseline: 'run1023-v1',
+        locationsV2ReferenceYear: getDefaultLocationsV2Catalog().referenceYear,
         catalogs: Object.fromEntries(
           Object.entries(planning.plan.catalogs)
             .filter(([, value]) => value != null)
@@ -830,6 +870,8 @@ async function runScan(args) {
       detailResults,
       detailTelemetry,
       locationResults,
+      locationShadow: locationShadow.final ? locationShadow : null,
+      locationLlmInputs,
       importResults,
       summary,
     });

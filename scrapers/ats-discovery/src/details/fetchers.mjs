@@ -2,6 +2,7 @@ import { parseJobPostingJsonLd } from './jobposting-jsonld.mjs';
 import { htmlToPlainText } from './text.mjs';
 import { normalizeNoBreakWhitespace } from '../text/html.mjs';
 import { greenhouseHtmlToPlainText } from './greenhouse-text.mjs';
+import { extractGreenhouseLocationQuestions } from './greenhouse-questions.mjs';
 import {
   createHttpSession,
   BROWSER_LIKE_USER_AGENT,
@@ -596,6 +597,7 @@ async function fetchGreenhouseDetails(candidate, context) {
     + `/jobs/${encodeURIComponent(externalId)}`,
   );
   assertEndpointHost(endpoint, GREENHOUSE_HOST);
+  endpoint.searchParams.set('questions', 'true');
   let payload;
   try {
     payload = await fetchJsonWithTimeout({
@@ -615,6 +617,7 @@ async function fetchGreenhouseDetails(candidate, context) {
   return {
     description: greenhouseHtmlToPlainText(payload.content),
     descriptionStatus: 'greenhouse-detail-api',
+    applicationQuestions: extractGreenhouseLocationQuestions(payload),
     applyUrl: typeof payload.absolute_url === 'string'
       ? payload.absolute_url.trim()
       : null,
@@ -1236,6 +1239,9 @@ export async function enrichCandidateDetails(
         description,
         descriptionStatus: description ? details.descriptionStatus : 'missing',
         detailRawLocation,
+        applicationQuestions: Array.isArray(details.applicationQuestions)
+          ? details.applicationQuestions
+          : (candidate.applicationQuestions ?? []),
         locations: Array.isArray(details.locations) && details.locations.length > 0
           ? details.locations
           : candidate.locations,

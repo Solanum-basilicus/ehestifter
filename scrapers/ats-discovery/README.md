@@ -627,6 +627,19 @@ preferences decide eligibility after extraction; they do not control which job
 facts can be discovered. Country mentions about customers, partners, or company
 operations are not candidate geography.
 
+Description-derived broad regions require explicit statements about this role or
+candidate eligibility. Remote-working benefits, customer regions, and other
+teams do not add job locations. Short uppercase country/admin codes in a comma
+list are not recovered as unrelated foreign cities. For each v2 claim, ATS
+artifacts keep the source field, bounded matched text, normalization rule, and
+evidence type in `locationNormalization.claimEvidence`. These diagnostics are
+scanner-owned; they do not change the Jobs location contract.
+
+`summary.json.locationAnomalies` reports unusually large location sets and
+near-duplicate sets from the same provider tenant. It is diagnostic only: no
+location claim is removed based on list size or overlap. The scan's
+`metadata.json` includes the Locations v2 catalog version and reference year.
+
 Scanner text normalization converts Unicode no-break spaces to ordinary spaces
 before a description reaches the Jobs create payload. Web Core also applies
 defensive wrapping to job descriptions so historical or external long tokens do
@@ -663,13 +676,12 @@ federal states, and explicit German district forms such as `Landkreis ...` or
 and diagnostics without changing the Web UI geography source. Canonical v2
 output uses the resolved city or administrative-region identity when available.
 
-High-signal description declarations can refine provider metadata without
-replacing it. Examples include `Location: Austin, TX`, explicit candidate
-residency/citizenship restrictions, and employer-country evidence used only to
-disambiguate a provider city such as `Berlin`. US-specific employment markers
-such as `401(k)` are weak country hints and are used only to disambiguate
-provider localities (for example a city or the US state/country name
-`Georgia`); they do not create a location by themselves.
+Explicit job-location and candidate hiring-area statements can refine
+provider metadata. Examples include `Location: Austin, TX` and a remote job
+open only to candidates in named US states. Citizenship and work authorization
+statements stay in eligibility evidence. Employer headquarters and `401(k)`
+benefits no longer disambiguate provider cities in the active policy. The
+former policy remains available for bounded shadow diagnostics only.
 
 Explicit work-hours/timezone requirements are recorded in each normalized
 candidate as `workTimeConstraintsV2`. Discovery geography filters do not act on
@@ -1085,3 +1097,23 @@ Failure visibility is local: systemd unit state, journal output, scheduler state
 - Direct Compose commands still bypass the host lock.
 - Timers catch up after resume but do not wake sleeping hardware.
 - Rootless Docker requires explicit operator adaptation.
+
+### Location normalization review (manual experiment)
+
+ATS Discovery uses `conservative-v1` to normalize job locations. Work
+authorization, citizenship, employer office addresses, and benefits do not
+automatically become job work locations. An explicit hiring area can still
+constrain a remote job. The user's `allowUnknownLocation` preference is
+unchanged.
+
+Preflight and import runs also write `location-shadow.json`. It compares
+conservative locations with the former run1023 rules on the same candidates
+and catalog. The preliminary stage selects up to 60 candidates and records only changes.
+The final stage selects up to 120 candidates and records their claim differences.
+Both are targeted diagnostic samples, not random samples or whole-run metrics. These records are
+diagnostics and do not create extra Jobs API calls or change user matching.
+
+`location-llm-inputs.json` contains up to 30 public job description samples,
+location fields, and selected Greenhouse application question labels. It
+contains no question answers or applicant information. See
+`LLM-LOCATION-REVIEW.md` for manual classification instructions.

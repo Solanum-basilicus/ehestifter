@@ -1839,18 +1839,24 @@ actual detail errors and missing-description skips.
 Before creating a Jobs record, ATS Discovery canonicalizes provider locations
 against a committed snapshot generated from Web Core's geography dictionary and
 re-evaluates geographic eligibility after bounded detail enrichment. Provider
-location observations remain primary; explicit description statements can
-refine them, add independently supported scope, or mark a conflict, but do not
-silently overwrite them. Only decisive incompatible restrictions or mandatory
+location observations remain primary; explicit role or hiring-area statements
+can refine them, but citizenship, work authorization, employer headquarters,
+and benefits remain evidence rather than work-location claims. The former
+run1023 policy runs only on a bounded shadow sample for diagnostics. Only decisive incompatible restrictions or mandatory
 presence outside the compatible scope block creation. Unresolved parsing and
 inconclusive conflicts fail open and remain visible in location artifacts.
 
 ATS Discovery owns a separate, small administrative-region dictionary for
 deterministic vacancy parsing. It covers US states/DC and aliases, German
 federal states, and explicit German district forms. The dictionary is not a Web
-Core UI geography dependency. Description evidence may use explicit location,
-residency, citizenship, or strong employer-country context to refine provider
-metadata, but the original provider observations remain in run artifacts.
+Core UI geography dependency. Explicit job locations and hiring-area statements
+can refine provider metadata. Citizenship and work authorization statements
+remain eligibility evidence. Employer-country context and benefits do not
+disambiguate provider locations in the active policy. The original observations
+remain in run artifacts. Greenhouse job-detail reads may include application
+question labels, never responses or applicant data. A bounded shadow artifact
+compares the active and former policies. A small set of public job descriptions
+is retained for manual LLM review only; no LLM is called during discovery.
 
 Explicit timezone/work-hours requirements are normalized into scanner artifact
 evidence (`workTimeConstraints`) using coarse work-time regions. They are not
