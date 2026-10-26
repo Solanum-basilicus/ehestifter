@@ -74,14 +74,20 @@
       btn.onclick = initUser;
     }
 
+    let firstUserLoad = true;
     async function initUser() {
       if (inited) return;
       inited = true;
+      const initial = firstUserLoad;
+      firstUserLoad = false;
+      if (initial) window.ehPerf?.pageStart("user");
+      let succeeded = false;
       try {
         const data = await window.fetchWithRetry('/ui/users/me', 4);
         if (data && !data.error) {
           const username = data.name || data.preferred_username || data.username || data.email || 'me';
           setUser('To profile: ' + username, "{{ url_for('me') }}");
+          succeeded = true;
           // Expose CURRENT_USER_ID globally and notify listeners
           const uid = String(
             data.id ?? data.userId ?? data.user_id ?? data.sub ?? ''
@@ -102,6 +108,7 @@
       } finally {
         // allow manual retry even after first pass
         inited = false;
+        if (initial) window.ehPerf?.pageFinish("user", succeeded ? "ok" : "error");
       }
     }
 

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from io import StringIO
 import csv
 import requests
+from helpers.timing import jobs_call
 from zoneinfo import ZoneInfo  # py3.9+
 
 from helpers.http import jobs_base, jobs_fx_headers
@@ -249,7 +250,7 @@ def create_blueprint(auth):
         params = {"start": start, "aggregate": "true" if aggregate else "false"}
         if end: params["end"] = end
 
-        r = requests.get(f"{jobs_base()}/jobs/reports/status", headers=headers, params=params, timeout=15)
+        r = jobs_call(lambda: requests.get(f"{jobs_base()}/jobs/reports/status", headers=headers, params=params, timeout=15))
         if not r.ok:
             return r.text, r.status_code, {"Content-Type": r.headers.get("Content-Type","text/plain")}
 

@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 
 {% block head_extra %}
+<script src="{{ url_for('static', filename='js/job-intents.js') }}"></script>
 <style>
   .card { border:1px solid #e5e7eb; border-radius:12px; background:#fff; }
   .muted { color:#6b7280; }
@@ -619,14 +620,18 @@
           : this.statusOptions[0];
       },
 
-      async init() { await this.refresh(); },
+      async init() { await this.refresh(true); },
 
-      async refresh(){
+      async refresh(initial=false){
+        if (initial) window.ehPerf?.pageStart("status");
+        let succeeded = false;
         this.pending = true; this.error = "";
         try{
           const resp = await fetch(`/ui/jobs/${jobId}/status`, { credentials: 'same-origin' });
           if(!resp.ok) throw new Error('HTTP '+resp.status);
+          if (initial) window.ehPerf?.pageResponse("status", resp);
           const data = await resp.json();
+          succeeded = true;
           this.app.state = data.status || "Unset";
           this.loaded = true;
           // if we’re currently editing, keep the predictive selection; otherwise, align to current
@@ -637,6 +642,10 @@
           this.error = "Could not load status - please try again.";
         }finally{
           this.pending = false;
+          if (initial) {
+            await this.$nextTick();
+            window.ehPerf?.pageFinish("status", succeeded ? "ok" : "error");
+          }
         }
       },
 
@@ -657,6 +666,8 @@
           return false;
         }
 
+        const metric = window.ehPerf?.action("job.status.change");
+        let saved = false;
         this.pending = true;
         this.error = "";
         try {
@@ -666,6 +677,7 @@
             credentials: 'same-origin',
             body: JSON.stringify({ status })
           });
+          metric?.response(resp);
           if (!resp.ok) throw new Error('HTTP ' + resp.status);
           const data = await resp.json();
           if (!data.status) throw new Error('Missing status in response');
@@ -674,12 +686,15 @@
           this.loaded = true;
           this.selected = this.statusOptions.includes(data.status) ? data.status : this.selected;
           window.dispatchEvent(new CustomEvent('job-history-refresh', { detail: { jobId: this.jobId } }));
+          await this.$nextTick();
+          saved = true;
           return true;
         } catch (e) {
           this.error = "Could not set status - please try again.";
           return false;
         } finally {
           this.pending = false;
+          metric?.finish(saved ? "ok" : "error");
         }
       },
 
@@ -711,8 +726,11 @@
 
       async init(){
         if (this._inited) return; this._inited = true;
+        window.ehPerf?.pageStart("details");
+        let detailsOk = false;
         const tryFetch = async () => {
           const r = await fetch(`/ui/jobs/${this.jobId}`, { credentials:'same-origin' });
+          window.ehPerf?.pageResponse("details", r);
           if(!r.ok) throw new Error(`HTTP ${r.status}`);
           return r.json();
         };
@@ -723,11 +741,14 @@
           window.__lastJobPayload = payload;
           this.hydrateFromPayload(payload);
           this.descLoaded = true;
+          detailsOk = true;
         }catch(e){
           this.safeDescription = `<p class="muted">Unable to load description right now.</p>`;
           this.descLoaded = true;
         }
-        this.loadHistory();
+        await this.$nextTick();
+        window.ehPerf?.pageFinish("details", detailsOk ? "ok" : "error");
+        this.loadHistory(10, true);
         window.addEventListener('job-history-refresh', (e) => {
           if (!e.detail || e.detail.jobId === this.jobId) this.loadHistory();
         });
@@ -897,7 +918,9 @@
 
       safeStr(v){ return (v === null || v === undefined) ? '∅' : String(v); },
 
-      async loadHistory(limit=10){
+      async loadHistory(limit=10, initial=false){
+        if (initial) window.ehPerf?.pageStart("history");
+        let historyOk = false;
         this.history.error = "";
         try{
           const qs = new URLSearchParams({ limit:String(limit) }).toString();
@@ -906,9 +929,15 @@
           this.history.items = Array.isArray(data.items) ? data.items : [];
           this.history.nextCursor = data.nextCursor || null;
           this.history.loaded = true;
+          historyOk = true;
         }catch(e){
           this.history.error = "please try again";
           this.history.loaded = false;
+        }finally{
+          if (initial) {
+            await this.$nextTick();
+            window.ehPerf?.pageFinish("history", historyOk ? "ok" : "error");
+          }
         }
       },
       async loadMore(limit=10){
@@ -1129,10 +1158,11 @@
     }
   }
 
-  async function fetchLatest() {
+  async function fetchLatest(initial=false) {
     const url = `/ui/enrichment/subjects/${JOB_ID}/latest?enricherType=${encodeURIComponent(ENRICHER_TYPE)}`;
     const r = await fetch(url, { headers: { "Accept": "application/json" } });
 
+    if (initial) window.ehPerf?.pageResponse("compatibility", r);
     if (r.status === 404) return null;
 
     const payload = await r.json().catch(() => ({}));
@@ -1150,12 +1180,13 @@
     return await r.json();
   }
 
-  async function postRun() {
+  async function postRun(metric) {
     const r = await fetch("/ui/enrichment/runs", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Accept": "application/json" },
       body: JSON.stringify({ jobOfferingId: JOB_ID, enricherType: ENRICHER_TYPE })
     });
+    metric?.response(r);
     const payload = await r.json().catch(() => ({}));
     if (!r.ok) {
       const corr = payload?.diag?.corrId ? ` corr=${payload.diag.corrId}` : "";
@@ -1177,11 +1208,13 @@
   modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
 
   btnRun.addEventListener("click", async () => {
+    const metric = window.ehPerf?.action("job.compatibility.run");
+    let success = false;
     try {
       setRunning(true);
       elSubtitle.textContent = "Queueing…";
 
-      const runResp = await postRun();
+      const runResp = await postRun(metric);
 
       // If POST returns the run object with status, render it immediately.
       // If it returns something else, fallback to fetching latest once.
@@ -1193,11 +1226,13 @@
       } else {
         await refreshLatestOnce();
       }
+      success = true;
     } catch (e) {
       elSubtitle.textContent = String(e.message || e);
     } finally {
       // re-enable buttons, BUT DO NOT overwrite subtitle
       setRunning(false);
+      metric?.finish(success ? "ok" : "error");
     }
   });
 
@@ -1249,6 +1284,8 @@
 
   // initial load
   (async () => {
+    window.ehPerf?.pageStart("compatibility");
+    let initialOk = false;
     try {
       // architecture decision: buttons are disabled by default; enable only when ready
       setEnabled(btnRun, false);
@@ -1261,7 +1298,8 @@
       // show explicit loading state while we fetch
       elSubtitle.textContent = "Loading status…";
 
-      const latest = await fetchLatest();
+      const latest = await fetchLatest(true);
+      initialOk = true;
       if (latest) {
         renderLatest(latest);
       } else {
@@ -1272,6 +1310,8 @@
       }
   } catch (e) {
     elSubtitle.textContent = "latest unavailable";
+  } finally {
+    window.ehPerf?.pageFinish("compatibility", initialOk ? "ok" : "error");
   }
   })();
 </script>

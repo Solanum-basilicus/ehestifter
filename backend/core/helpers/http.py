@@ -1,5 +1,6 @@
 import os
 import requests
+from helpers.timing import jobs_call
 
 def jobs_base() -> str:
     """
@@ -70,16 +71,24 @@ def enrichers_fx_headers(context=None) -> dict:
 
     return h
 
+def _timed_request(url, callback):
+    # Instrument only Jobs. Users and Enrichers have separate timing contracts.
+    jobs_url = os.getenv("EHESTIFTER_JOBS_API_BASE_URL", "").rstrip("/")
+    if jobs_url and (url == jobs_url or url.startswith(jobs_url + "/")):
+        return jobs_call(callback)
+    return callback()
+
+
 def fx_get(url: str, headers: dict | None = None, timeout: int = 15):
-    return requests.get(url, headers=headers or {}, timeout=timeout)
+    return _timed_request(url, lambda: requests.get(url, headers=headers or {}, timeout=timeout))
 
 def fx_get_json(url, headers, params=None, timeout=10):
-    r = requests.get(url, headers=headers, params=params, timeout=timeout)
+    r = _timed_request(url, lambda: requests.get(url, headers=headers, params=params, timeout=timeout))
     r.raise_for_status()
     return r.json()
 
 def fx_get_json_safe(url, headers, params=None, timeout=10):
-    r = requests.get(url, headers=headers, params=params, timeout=timeout)
+    r = _timed_request(url, lambda: requests.get(url, headers=headers, params=params, timeout=timeout))
     # Do NOT raise; return response so caller can handle errors.
     try:
         data = r.json()
@@ -89,14 +98,14 @@ def fx_get_json_safe(url, headers, params=None, timeout=10):
 
 def fx_post_json(url, headers, json_body, timeout=15):
     # returns the raw Response; caller decides how to parse / handle status
-    return requests.post(url, headers=headers, json=json_body, timeout=timeout)
+    return _timed_request(url, lambda: requests.post(url, headers=headers, json=json_body, timeout=timeout))
 
 def fx_put_json(url: str, headers: dict | None = None, json_body: dict | None = None, timeout: int = 20):
     h = {"Content-Type": "application/json"}
     if headers:
         h.update(headers)
-    return requests.put(url, headers=h, json=json_body or {}, timeout=timeout)
+    return _timed_request(url, lambda: requests.put(url, headers=h, json=json_body or {}, timeout=timeout))
 
 def fx_delete(url, headers, timeout=15):
     # returns the raw Response; caller decides how to parse / handle status
-    return requests.delete(url, headers=headers, timeout=timeout)
+    return _timed_request(url, lambda: requests.delete(url, headers=headers, timeout=timeout))

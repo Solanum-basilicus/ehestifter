@@ -1,13 +1,15 @@
 import azure.functions as func
 import logging
 from routes import register_all
+from helpers.timing import TimedRoutes, timed_handler
 
 app = func.FunctionApp()
 
 @app.route(route="ping", methods=["GET"])
+@timed_handler
 def ping(req: func.HttpRequest) -> func.HttpResponse:
     logging.info("ping processed a request.")
     return func.HttpResponse("pong", status_code=200)
 
 # Register all routes from the routes/ package
-register_all(app)
+register_all(TimedRoutes(app))

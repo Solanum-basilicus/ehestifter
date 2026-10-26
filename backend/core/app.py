@@ -6,6 +6,7 @@ import logging
 from datetime import datetime, timezone
 from routes import register_all
 from helpers.session_store import configure_session_store
+from helpers.timing import begin_request, finish_request
 from helpers.analytics import (
     emit_core_event,
     ensure_job_create_flow_id,
@@ -19,6 +20,10 @@ logger.addHandler(logging.StreamHandler())
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.config.from_object(app_config)
 configure_session_store(app)
+
+# The request measurement also covers authentication and response construction.
+app.before_request(begin_request)
+app.after_request(finish_request)
 
 auth = Auth(
     app,

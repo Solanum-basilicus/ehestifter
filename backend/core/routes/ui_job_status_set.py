@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify
 from helpers.http import jobs_base, jobs_fx_headers
+from helpers.timing import jobs_call
 from helpers.users import get_in_app_user_id
 import requests
 
@@ -19,7 +20,7 @@ def create_blueprint(auth):
         uid = get_in_app_user_id(context)
         headers = jobs_fx_headers(context={"userId": uid})
 
-        r = requests.put(f"{jobs_base()}/jobs/{job_id}/status", headers=headers, json={"status": status}, timeout=10)
+        r = jobs_call(lambda: requests.put(f"{jobs_base()}/jobs/{job_id}/status", headers=headers, json={"status": status}, timeout=10))
         if not r.ok:
             return r.text, r.status_code, {"Content-Type": r.headers.get("Content-Type","text/plain")}
         data = r.json()

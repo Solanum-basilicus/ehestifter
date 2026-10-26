@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify
 from helpers.http import jobs_base, jobs_fx_headers
+from helpers.timing import jobs_call
 from helpers.users import get_in_app_user_id
 import requests
 
@@ -21,12 +22,12 @@ def create_blueprint(auth):
             return jsonify({"error": "Could not resolve in-app user id"}), 401
 
         headers = jobs_fx_headers(context={"userId": user_id})
-        r = requests.get(
+        r = jobs_call(lambda: requests.get(
             f"{jobs_base()}/jobs/{job_id}/history",
             headers=headers,
             params=params,
             timeout=10,
-        )
+        ))
         try:
             payload = r.json()
         except ValueError:

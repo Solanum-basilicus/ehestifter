@@ -1216,6 +1216,41 @@ Known tradeoff:
 - this is accepted for now because implementation is small and product action still wins if Analytics fails,
 - if UX is affected, replace or supplement this with asynchronous local emission, for example an in-process/background queue or a local durable cache/outbox that drains to Analytics later.
 
+### 11.8 Jobs and Web Core performance timing (issues #22 and #28)
+
+Jobs HTTP routes, including ping, send a `Server-Timing` response header with:
+- `app`: time inside the route handler, in milliseconds;
+- `dbconn`: total time spent getting SQL connections;
+- `sql`: total time in SQL cursor execute, executemany, and fetch calls;
+- `sql_count`: number of execute or executemany calls.
+
+These times describe client-side driver calls, not SQL Server CPU or the full Azure
+Functions host startup. Jobs uses one request-local collector. It does not write
+metrics to SQL, Blob storage, or Analytics. The response JSON does not change.
+
+Web Core sends `core;dur` on HTTP responses. It measures outgoing Jobs calls as
+`jobs_http`, reads numeric Jobs `Server-Timing` values into `jobs_app`, `jobs_sql`,
+and `jobs_dbconn`, and reports the Jobs HTTP call count as `attempts`. A cached
+job-detail response has `cache;desc="hit"` and no new Jobs call. Detail view
+Analytics time is `analytics`. Child times can overlap with parent times: do not
+add `jobs_app` to `jobs_http` or `core`. A missing Jobs field means the upstream
+did not provide it. Unhandled Functions host failures might omit timing headers.
+
+The job detail page loads `static/js/job-intents.js` to measure browser use cases.
+The `job.details.load` intent starts at navigation and finishes when the first
+HTML, user identity, details, status, history, and compatibility loads have all
+settled. Valid empty results count as success. Other errors produce `partial`
+or `failed` states. `job.status.change` and `job.compatibility.run` are separate
+intents and can overlap the page load. The compatibility run ends after queue
+confirmation and visible feedback, not after LLM processing. Later refreshes do
+not extend first-load measurements. The browser keeps up to 50 records in memory
+only and does not emit analytics events for timing.
+
+Inspect the browser data from the job page DevTools Console with
+`ehPerf.snapshot()` or `ehPerf.table()`. See DevTools Network for per-response
+`Server-Timing` and waterfall data. Browser history is lost on navigation or
+reload; persistent time series and Users API timing are separate work.
+
 ---
 
 ## 12. Telegram bot details
