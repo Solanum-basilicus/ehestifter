@@ -183,6 +183,7 @@ class ProviderGuard {
             errorClass: classifyProviderError(error),
             errorMessage: providerErrorMessage(error),
             networkDiagnostic: null,
+            redirectDestination: null,
             httpStatus: null,
             jobsReturned: fetched.jobs.length,
             candidatesMatched: 0,
@@ -208,6 +209,7 @@ class ProviderGuard {
           errorClass: null,
           errorMessage: null,
           networkDiagnostic: null,
+          redirectDestination: null,
           httpStatus: null,
           jobsReturned: fetched.jobs.length,
           candidatesMatched: 0,
@@ -238,6 +240,9 @@ class ProviderGuard {
           errorMessage: providerErrorMessage(error),
           networkDiagnostic: ['network', 'timeout'].includes(errorClass)
             ? providerNetworkDiagnostic(error)
+            : null,
+          redirectDestination: errorClass === 'http_redirect'
+            ? error.redirectDestination ?? null
             : null,
           httpStatus: providerHttpStatus(error),
           jobsReturned: partialJobs.length,

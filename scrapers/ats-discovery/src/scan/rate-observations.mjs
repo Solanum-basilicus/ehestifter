@@ -45,9 +45,10 @@ function recommendation(observation, providerPolicy) {
   const config = providerPolicy.recommendations;
   const execution = providerPolicy.execution;
   const attempted = observation.healthRequestsAttempted;
+  // Redirects are endpoint failures, not evidence of excessive request rate.
   const transientRatio = attempted === 0
     ? 0
-    : observation.healthTransientErrors / attempted;
+    : (observation.healthTransientErrors - observation.healthRedirects) / attempted;
   const successRatio = attempted === 0
     ? 1
     : observation.healthSuccesses / attempted;
@@ -182,6 +183,7 @@ export function buildRateObservations({
         durableTenantFailures: results.filter(isDurableProviderResult).length,
         transientErrors: results.filter(isTransientProviderResult).length,
         healthTransientErrors: healthResults.filter(isTransientProviderResult).length,
+        healthRedirects: healthResults.filter((item) => item.errorClass === 'http_redirect').length,
         jobsReturned: results.reduce((sum, item) => sum + item.jobsReturned, 0),
         candidatesMatched: results.reduce(
           (sum, item) => sum + (item.candidatesMatched ?? item.candidatesRetained ?? 0),

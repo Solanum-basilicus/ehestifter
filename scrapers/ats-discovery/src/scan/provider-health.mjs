@@ -14,5 +14,7 @@ export function isProviderHealthSignificantResult(result) {
   if (!result || result.status === 'skipped') return false;
   if (isDurableProviderResult(result)) return false;
   if (result.errorClass === 'rate_limited' || result.httpStatus === 429) return true;
+  // A redirect changes the Workday request contract even on recovery targets.
+  if (result.errorClass === 'http_redirect') return true;
   return !isMaintenanceScheduleBucket(result.scheduleBucket);
 }

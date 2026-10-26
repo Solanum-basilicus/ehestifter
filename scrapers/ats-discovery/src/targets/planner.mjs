@@ -583,7 +583,8 @@ export function buildTargetPlan({
   for (const provider of CATALOG_PROVIDER_IDS) {
     for (const item of overrides.disabledByProvider[provider]) {
       const entry = catalogItemToPortalEntry(provider, item);
-      disabledKeys.add(targetKey(provider, entry.provider_tenant, null));
+      const identity = targetHealthIdentity({ ...entry, provider });
+      disabledKeys.add(targetKey(provider, entry.provider_tenant, identity.providerVariant));
     }
   }
 
@@ -651,7 +652,11 @@ export function buildTargetPlan({
   const selectedPriority = [];
   for (const target of rawPriority) {
     const providerPolicy = getProviderPolicy(policy, target.provider);
-    const state = stateMaps.tenants.get(targetStateKey(target)) ?? null;
+    const state = stateMaps.tenants.get(targetStateKey(target))
+      ?? (target.provider === 'workday' && target.providerVariant != null
+        ? stateMaps.tenants.get(tenantStateKey(target.provider, target.tenant, null))
+        : null)
+      ?? null;
     if (mode === 'offline') {
       const providerState = stateMaps.providers.get(target.healthPartition);
       if (providerCooldownActive(providerState, now)) {
@@ -710,8 +715,6 @@ export function buildTargetPlan({
     const buckets = new Map(BUCKET_ORDER.map((bucket) => [bucket, []]));
     const populationByBucket = emptyBucketCounts();
     const dueByBucket = emptyBucketCounts();
-    const providerState = stateMaps.providers.get(provider);
-    const providerBlocked = providerCooldownActive(providerState, now);
     for (const item of catalog.items) {
       const target = catalogTarget(provider, item, metadata, plugin);
       const key = targetStateKey(target);
@@ -720,10 +723,14 @@ export function buildTargetPlan({
         continue;
       }
       metadata.eligibleItemCount += 1;
-      const state = stateMaps.tenants.get(key) ?? null;
+      const state = stateMaps.tenants.get(key)
+        ?? (target.provider === 'workday' && target.providerVariant != null
+          ? stateMaps.tenants.get(tenantStateKey(target.provider, target.tenant, null))
+          : null)
+        ?? null;
       const bucket = scheduleBucket(state);
       populationByBucket[bucket] += 1;
-      if (providerBlocked) {
+      if (providerCooldownActive(stateMaps.providers.get(target.healthPartition), now)) {
         recordSkipped(target, 'provider_cooldown', state);
         continue;
       }

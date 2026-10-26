@@ -80,6 +80,22 @@ async function boundedBytes(response, maximum, label) {
   return bytes;
 }
 
+// Keep only the public destination origin and a bounded path. Never store
+// credentials, queries, or fragments from redirects in run artifacts.
+function redirectDestination(requestUrl, location) {
+  if (typeof location !== 'string' || !location.trim()) return null;
+  try {
+    const parsed = new URL(location, requestUrl);
+    if (!['http:', 'https:'].includes(parsed.protocol)) return null;
+    const path = parsed.pathname.split('/').map((part) => (
+      part.length > 48 ? '[long-segment]' : part
+    )).join('/').slice(0, 200);
+    return `${parsed.origin}${path}`;
+  } catch {
+    return null;
+  }
+}
+
 function httpError(response, responseText) {
   const statusText = response.statusText ? ` ${response.statusText}` : '';
   const error = new Error(`HTTP ${response.status}${statusText}`);
@@ -141,6 +157,17 @@ export function createHttpSession({
         redirect,
         signal: controller.signal,
       });
+      // For a manual redirect, stop before reading the response body. Node
+      // fetch exposes the status and Location header without following it.
+      if (redirect === 'manual' && response.status >= 300 && response.status < 400) {
+        const error = new Error(`HTTP ${response.status} redirect`);
+        error.code = 'HTTP_REDIRECT';
+        error.status = response.status;
+        error.redirectDestination = redirectDestination(
+          url, response.headers?.get?.('location'),
+        );
+        throw error;
+      }
       absorbCookies(response.url || url, response);
       if (!response.ok) {
         let responseText = '';

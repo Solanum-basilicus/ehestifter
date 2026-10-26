@@ -37,6 +37,7 @@ export function classifyProviderError(error) {
   if (codes.includes('BAMBOOHR_TENANT_REDIRECTED')) return 'bamboohr_tenant_redirected';
   if (codes.includes('PAYLOCITY_TENANT_REDIRECTED')) return 'paylocity_tenant_redirected';
   if (codes.includes('PERSONIO_TENANT_REDIRECTED')) return 'personio_tenant_redirected';
+  if (codes.includes('HTTP_REDIRECT')) return 'http_redirect';
   if (codes.includes('WORKDAY_REQUEST_REJECTED')) return 'provider_schema';
   if (codes.includes('ICIMS_WAF_CAPTCHA')) return 'waf_captcha';
   if (codes.includes('ICIMS_JIBE_QUERY_REJECTED')) return 'provider_schema';
@@ -181,6 +182,7 @@ export function isTransientProviderResult(result) {
   }
   return [
     'timeout',
+    'http_redirect',
     'rate_limited',
     'http_5xx',
     'network',

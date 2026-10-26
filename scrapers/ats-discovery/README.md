@@ -505,6 +505,14 @@ make the run degraded. A rate-limit provider breaker uses
 `execution.breaker.cooldown_minutes` key is accepted so old local policy files
 still load, but it no longer controls persisted provider cooldown state.
 
+Workday has instance-specific health partitions such as `workday:wd1` and
+`workday:wd5`. Each instance uses the Workday policy but has an independent
+breaker and persisted cooldown. Existing tenant history is reused on the first
+attempt with the new partition. Workday CXS redirects are never followed or
+retried. `provider-results.json` records `errorClass: http_redirect`, HTTP 3xx
+status, and a bounded redirect destination without its query or fragment.
+This identifies moved endpoints without turning redirects into new requests.
+
 BambooHR, Paylocity, and Personio keep redirect following disabled. If a tenant
 listing endpoint redirects away from its expected provider origin/feed, that
 observation is durable tenant-local evidence instead of a provider-wide network

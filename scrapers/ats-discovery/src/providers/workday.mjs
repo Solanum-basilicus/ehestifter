@@ -270,7 +270,7 @@ export default {
     if (!ep) throw new Error(`workday: cannot derive CXS endpoint for ${entry.name}`);
     const postOpts = {
       method: 'POST',
-      redirect: 'error',
+      redirect: 'manual',
       headers: {
         'content-type': 'application/json',
         accept: 'application/json',

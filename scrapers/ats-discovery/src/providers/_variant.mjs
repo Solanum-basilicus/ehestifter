@@ -1,3 +1,5 @@
+import { resolveWorkdayEndpoint } from './workday.mjs';
+
 const SUCCESSFACTORS_CSB_HOSTS = Object.freeze([
   /(?:^|\.)jobs\.hr\.cloud\.sap$/i,
   /(?:^|\.)jobs\.hr\.sapcloud\.cn$/i,
@@ -46,6 +48,7 @@ export function icimsVariant(entry) {
 export function providerVariant(provider, target = null) {
   const providerId = clean(provider);
   if (!providerId) return null;
+  if (providerId === 'workday') return resolveWorkdayEndpoint(target ?? {})?.instance ?? null;
   if (providerId === 'successfactors') return successFactorsVariant(target);
   if (providerId === 'icims') return icimsVariant(target);
   return null;

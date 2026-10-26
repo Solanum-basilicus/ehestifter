@@ -275,3 +275,51 @@ test('scheduler bucket priority is global before provider round-robin fairness',
   assert.equal(normal[0].provider, 'greenhouse');
   assert.equal(normal[0].scheduleBucket, 'recent_activity');
 });
+
+test('Workday planning keeps healthy instances due when another instance is cooling down', () => {
+  const run = buildTargetPlan({
+    portalConfig: { tracked_companies: [] },
+    companyOverrides: {
+      schema_version: 1,
+      priority: {},
+      disabled: { workday: ['other|wd3|jobs'] },
+    },
+    discoveryPolicy: parseDiscoveryPolicy({
+      schema_version: 1,
+      providers: {
+        ashby: { catalog_enabled: false },
+        workday: {
+          catalog_enabled: true,
+          max_normal_targets_per_run: 10,
+          target_full_sweep_days: 3,
+        },
+      },
+    }),
+    catalogs: {
+      workday: catalog('workday', [
+        'blocked|wd1|External',
+        'other|wd3|jobs',
+        'healthy|wd5|External',
+      ]),
+    },
+    tenantState: {
+      schemaVersion: 1,
+      updatedAtUtc: NOW.toISOString(),
+      providers: [{
+        provider: 'workday',
+        providerVariant: 'wd1',
+        healthPartition: 'workday:wd1',
+        health: 'cooldown',
+        cooldownUntilUtc: '2026-07-26T12:00:00Z',
+      }],
+      tenants: [],
+    },
+    providers: providers(),
+    mode: 'offline',
+    generatedAt: NOW,
+  });
+  assert.deepEqual(run.plan.targets.map((item) => item.tenant), [
+    'healthy.wd5.myworkdayjobs.com/External',
+  ]);
+  assert.equal(run.plan.counts.skippedProviderCooldown, 1);
+});
