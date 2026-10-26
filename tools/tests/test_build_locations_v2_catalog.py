@@ -359,3 +359,12 @@ def test_search_index_keeps_aliases_searchable_without_using_them_as_labels(tmp_
         assert conn.execute(
             "SELECT location_id FROM names WHERE search_name = ?", ("u k",)
         ).fetchone()[0] == "iso3166:GB"
+
+
+def test_runtime_country_names_match_search_index_rule():
+    from backend.jobs.helpers.locations_v2 import load_locations_v2_catalog
+    from tools.build_locations_v2_catalog import _search_index_country_display_name
+
+    catalog = load_locations_v2_catalog()
+    for code, country in catalog.countries_by_code.items():
+        assert catalog.country_display_name(code) == _search_index_country_display_name(country), code

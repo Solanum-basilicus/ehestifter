@@ -171,10 +171,19 @@ class LocationsV2Catalog:
         country = self.countries_by_code.get(_clean(country_code).upper())
         if country is None:
             return None
-        aliases = [_clean(value) for value in country.get("aliases", []) if _clean(value)]
-        if aliases:
-            return min(aliases, key=lambda value: (len(value), value.casefold()))
-        return _clean(country.get("name")) or None
+        canonical = _clean(country.get("name"))
+        # Aliases can be in any language. Use only a short form of the formal name.
+        # Keep this rule the same as the search-index builder.
+        short_forms = [
+            alias
+            for raw_alias in country.get("aliases", [])
+            if (alias := _clean(raw_alias))
+            and any(
+                canonical.casefold().startswith(alias.casefold() + suffix)
+                for suffix in (" of ", " (")
+            )
+        ]
+        return (max(short_forms, key=len) if short_forms else canonical) or None
 
     def location_presentation(self, item: dict) -> dict:
         """Return human-readable catalog data for one canonical location."""
