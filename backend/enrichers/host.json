@@ -1,3 +1,23 @@
 {
-  "version": "2.0"
+  "version": "2.0",
+  "logging": {
+    "logLevel": {
+      "default": "Warning",
+      "Function": "Warning",
+      "Host.Results": "Error",
+      "Host.Aggregator": "Information"
+    },
+    "applicationInsights": {
+      "samplingSettings": {
+        "isEnabled": true,
+        "excludedTypes": "Request;Exception",
+        "maxTelemetryItemsPerSecond": 5
+      },
+      "enablePerformanceCountersCollection": false
+    }
+  },
+  "aggregator": {
+    "batchSize": 1000,
+    "flushTimeout": "00:05:00"
+  }
 }

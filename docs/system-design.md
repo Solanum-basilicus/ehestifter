@@ -1276,6 +1276,23 @@ Analytics or Mixpanel. Do not add job or user information to labels. See
 [`docs/performance-diagnostics.md`](performance-diagnostics.md) for inspection
 examples, known gaps, and deployment verification steps.
 
+### 11.9 Low-volume operational telemetry
+
+Azure Application Insights is used for abnormal conditions, failed operations,
+and aggregated Function App execution data. Routine successful operations and
+business-event history must not create one Application Insights trace per step.
+Web Core defaults to Python `WARNING` logging (`CORE_LOG_LEVEL` can enable a
+temporary diagnostic mode). Jobs, Users, and Enrichers Functions filter routine
+traces and retain five-minute execution aggregates. Full request-level diagnostics are available
+through temporary host configuration overrides. Performance diagnostics remain
+in `Server-Timing` and browser memory, not Application Insights.
+
+The workspace target is below 1 GB of billable ingestion per 30 days, with a
+25 MB/day working threshold. This target requires measurement after deployment;
+it is not enforced by the application. See
+[`docs/operational-telemetry.md`](operational-telemetry.md) for the current
+settings, trade-offs, verification queries, and rollback procedure.
+
 ---
 
 ## 12. Telegram bot details

@@ -4,12 +4,24 @@
     "applicationInsights": {
       "samplingSettings": {
         "isEnabled": true,
-        "excludedTypes": "Request"
-      }
+        "excludedTypes": "Request;Exception",
+        "maxTelemetryItemsPerSecond": 5
+      },
+      "enablePerformanceCountersCollection": false
+    },
+    "logLevel": {
+      "default": "Warning",
+      "Function": "Warning",
+      "Host.Results": "Error",
+      "Host.Aggregator": "Information"
     }
   },
   "extensionBundle": {
     "id": "Microsoft.Azure.Functions.ExtensionBundle",
     "version": "[4.*, 5.0.0)"
+  },
+  "aggregator": {
+    "batchSize": 1000,
+    "flushTimeout": "00:05:00"
   }
 }

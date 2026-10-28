@@ -1,8 +1,11 @@
 import os
+from helpers.logging_config import configure_core_logging
+
+configure_core_logging()
+
 from flask import Flask, render_template
 from identity.flask import Auth
 import app_config
-import logging
 from datetime import datetime, timezone
 from routes import register_all
 from helpers.session_store import configure_session_store
@@ -12,10 +15,6 @@ from helpers.analytics import (
     ensure_job_create_flow_id,
     get_user_id_for_analytics,
 )
-
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
-logger.addHandler(logging.StreamHandler())
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.config.from_object(app_config)

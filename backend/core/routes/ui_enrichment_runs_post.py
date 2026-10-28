@@ -38,21 +38,9 @@ def create_blueprint(auth):
         headers["x-correlation-id"] = corr_id
         headers["x-ms-client-request-id"] = corr_id
 
-        logger.info("Enricher run start corr=%s job=%s user=%s enricherType=%s url=%s",
-                    corr_id, job_id, user_id, enricher_type, url)
+        logger.debug("Enricher run start corr=%s type=%s", corr_id, enricher_type)
 
         r = fx_post_json(url, headers=headers, json_body=upstream_body)
-
-        #######################Remove that once you ensure we use proper id
-        logger.info("User claims keys=%s", list((context.get("user") or {}).keys()))
-        logger.info("Chosen user_id=%s oid=%s sub=%s",
-                    user_id,
-                    (context.get("user") or {}).get("oid"),
-                    (context.get("user") or {}).get("sub"))
-        claims = context.get("user") or {}
-        logger.info("Enrichers proxy user mapping corr=%s inAppUserId=%s oid=%s sub=%s",
-                    corr_id, user_id, claims.get("oid"), claims.get("sub"))                    
-        ##########################
 
         # capture some headers even if empty body
         resp_headers = {k: r.headers.get(k) for k in [
@@ -71,8 +59,8 @@ def create_blueprint(auth):
         }
 
         if r.status_code >= 400:
-            logger.error("Enricher run failed corr=%s status=%s headers=%s body_len=%s body_preview=%r",
-                         corr_id, r.status_code, resp_headers, len(text), text_preview)
+            logger.error("Enricher run failed corr=%s status=%s",
+                         corr_id, r.status_code)
             return jsonify({
                 "error": "Enricher run failed",
                 "details": {"text": text_preview},

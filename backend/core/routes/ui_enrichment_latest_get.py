@@ -42,8 +42,8 @@ def create_blueprint(auth):
 
         if r.status_code >= 400:
             text = (r.text or "").strip()[:2000]
-            logger.error("Latest failed corr=%s status=%s headers=%s body_preview=%r",
-                         corr_id, r.status_code, resp_headers, text)
+            logger.error("Latest failed corr=%s status=%s",
+                         corr_id, r.status_code)
             return jsonify({"error": "Latest failed", "details": (data if data is not None else {"text": text}), "diag": diag}), r.status_code
 
         # Success: return parsed JSON if we have it; else text
