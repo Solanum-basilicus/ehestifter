@@ -5,6 +5,7 @@ from helpers.db import get_connection
 from helpers.guid import normalize_guid
 from helpers.json import DatetimeEncoder
 from helpers.b2c_headers import get_b2c_headers
+from helpers.timing import step
 
 def register(app):
     @app.route(route="users/me", methods=["GET"])
@@ -22,12 +23,13 @@ def register(app):
             conn = get_connection()
             cursor = conn.cursor()
 
-            cursor.execute("""
-                SELECT Id, Email, Username, Role 
-                FROM Users 
-                WHERE B2CObjectId = ?
-            """, b2c_object_id)
-            row = cursor.fetchone()
+            with step("user_lookup"):
+                cursor.execute("""
+                    SELECT Id, Email, Username, Role
+                    FROM Users
+                    WHERE B2CObjectId = ?
+                """, b2c_object_id)
+                row = cursor.fetchone()
 
             if row:
                 user_id, email, username, role = row

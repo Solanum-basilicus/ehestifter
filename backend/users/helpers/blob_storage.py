@@ -2,6 +2,7 @@
 import os
 import json
 from typing import Any, Optional
+from helpers.timing import step
 
 
 def _get_blob_service_client():
@@ -18,8 +19,9 @@ def _get_blob_service_client():
     if client_id:
         os.environ["AZURE_CLIENT_ID"] = client_id
 
-    credential = DefaultAzureCredential()
-    return BlobServiceClient(account_url=account_url, credential=credential)
+    with step("blob_client"):
+        credential = DefaultAzureCredential()
+        return BlobServiceClient(account_url=account_url, credential=credential)
 
 
 def _get_container_name() -> str:
@@ -35,22 +37,24 @@ def upload_text(blob_path: str, content: str, *, overwrite: bool = True) -> None
     from azure.storage.blob import ContentSettings
 
     bc = _get_blob_client(blob_path)
-    bc.upload_blob(
-        content.encode("utf-8"),
-        overwrite=overwrite,
-        content_settings=ContentSettings(content_type="text/plain; charset=utf-8"),
-    )
+    with step("blob_upload"):
+        bc.upload_blob(
+            content.encode("utf-8"),
+            overwrite=overwrite,
+            content_settings=ContentSettings(content_type="text/plain; charset=utf-8"),
+        )
 
 
 def upload_json(blob_path: str, content: str, *, overwrite: bool = True) -> None:
     from azure.storage.blob import ContentSettings
 
     bc = _get_blob_client(blob_path)
-    bc.upload_blob(
-        content.encode("utf-8"),
-        overwrite=overwrite,
-        content_settings=ContentSettings(content_type="application/json; charset=utf-8"),
-    )
+    with step("blob_upload"):
+        bc.upload_blob(
+            content.encode("utf-8"),
+            overwrite=overwrite,
+            content_settings=ContentSettings(content_type="application/json; charset=utf-8"),
+        )
 
 
 def blob_exists(blob_path: str) -> bool:
@@ -72,7 +76,8 @@ def download_bytes(blob_path: str) -> Optional[bytes]:
 
     bc = _get_blob_client(blob_path)
     try:
-        return bc.download_blob().readall()
+        with step("blob_download"):
+            return bc.download_blob().readall()
     except ResourceNotFoundError:
         return None
 
@@ -97,7 +102,8 @@ def download_texts(blob_paths, *, encoding: str = "utf-8") -> dict[str, Optional
     for blob_path in unique_paths:
         blob_client = container.get_blob_client(blob_path)
         try:
-            data = blob_client.download_blob().readall()
+            with step("blob_download"):
+                data = blob_client.download_blob().readall()
         except ResourceNotFoundError:
             output[blob_path] = None
             continue

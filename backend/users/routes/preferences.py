@@ -15,6 +15,7 @@ from helpers.b2c_headers import get_b2c_headers
 from helpers.blob_storage import download_json, download_text, upload_json, upload_text
 from helpers.db import get_connection
 from helpers.quill_to_text import canonical_json, normalize_text, quill_delta_to_text
+from helpers.timing import step
 
 
 def _update_cv(req: func.HttpRequest) -> func.HttpResponse:
@@ -43,11 +44,12 @@ def _update_cv(req: func.HttpRequest) -> func.HttpResponse:
             return func.HttpResponse("User not found", status_code=404)
         user_id = user_row[0]
 
-        canonical = canonical_json(cv_quill)
-        cv_version_id = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-        rich_blob_path = f"cv/quill/{user_id}/{cv_version_id}.json"
-        text_blob_path = f"cv/text/{user_id}/{cv_version_id}.txt"
-        plain_norm = normalize_text(quill_delta_to_text(cv_quill))
+        with step("cv_convert"):
+            canonical = canonical_json(cv_quill)
+            cv_version_id = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            rich_blob_path = f"cv/quill/{user_id}/{cv_version_id}.json"
+            text_blob_path = f"cv/text/{user_id}/{cv_version_id}.txt"
+            plain_norm = normalize_text(quill_delta_to_text(cv_quill))
 
         upload_json(rich_blob_path, canonical, overwrite=True)
         upload_text(text_blob_path, plain_norm, overwrite=True)
@@ -77,24 +79,27 @@ def _update_cv(req: func.HttpRequest) -> func.HttpResponse:
         )
         conn.commit()
 
-        emit_users_event(
-            "CV Updated",
-            req=req,
-            user_id=str(user_id),
-            subject_type="cv",
-            subject_id=cv_version_id,
-            properties={"cv_version_id": cv_version_id},
-        )
+        with step("analytics"):
+            emit_users_event(
+                "CV Updated",
+                req=req,
+                user_id=str(user_id),
+                subject_type="cv",
+                subject_id=cv_version_id,
+                properties={"cv_version_id": cv_version_id},
+            )
 
-        return func.HttpResponse(
-            body=json.dumps(
+        with step("serialize"):
+            body = json.dumps(
                 {
                     "message": "CV updated",
                     "CVBlobPath": rich_blob_path,
                     "CVTextBlobPath": text_blob_path,
                     "CVVersionId": cv_version_id,
                 }
-            ),
+            )
+        return func.HttpResponse(
+            body=body,
             status_code=200,
             mimetype="application/json",
         )
@@ -124,15 +129,16 @@ def _get_cv(req: func.HttpRequest) -> func.HttpResponse:
             return func.HttpResponse("User not found", status_code=404)
         user_id = user_row[0]
 
-        cursor.execute(
-            """
-            SELECT CVBlobPath, CVTextBlobPath, CVVersionId, LastUpdated
-            FROM dbo.UserPreferences
-            WHERE UserId = ?
-            """,
-            (user_id,),
-        )
-        pref = cursor.fetchone()
+        with step("cv_lookup"):
+            cursor.execute(
+                """
+                SELECT CVBlobPath, CVTextBlobPath, CVVersionId, LastUpdated
+                FROM dbo.UserPreferences
+                WHERE UserId = ?
+                """,
+                (user_id,),
+            )
+            pref = cursor.fetchone()
         if not pref:
             return func.HttpResponse("CV not found", status_code=404)
 
@@ -140,8 +146,8 @@ def _get_cv(req: func.HttpRequest) -> func.HttpResponse:
         cv_quill_delta = download_json(cv_blob_path) if cv_blob_path else None
         cv_plain_text = download_text(cv_text_blob_path) if cv_text_blob_path else None
 
-        return func.HttpResponse(
-            body=json.dumps(
+        with step("serialize"):
+            body = json.dumps(
                 {
                     "UserId": str(user_id),
                     "CVBlobPath": cv_blob_path,
@@ -151,7 +157,9 @@ def _get_cv(req: func.HttpRequest) -> func.HttpResponse:
                     "CVQuillDelta": cv_quill_delta,
                     "CVPlainText": cv_plain_text,
                 }
-            ),
+            )
+        return func.HttpResponse(
+            body=body,
             status_code=200,
             mimetype="application/json",
         )

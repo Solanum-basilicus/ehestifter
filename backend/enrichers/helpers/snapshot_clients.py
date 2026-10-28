@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import os
 import httpx
+from time import perf_counter
+from helpers.timing import users_response_timing
 
 # -----------------------------
 # Jobs + Users (new, sync)
@@ -32,7 +34,13 @@ def get_user_cv_snapshot(user_id: str, *, timeout_s: float = 10.0) -> dict:
     if not USERS_BASE:
         raise ValueError("EHESTIFTER_USERS_BASE_URL is not set")
     url = f"{USERS_BASE}/users/internal/{user_id}/cv-snapshot"
-    with httpx.Client(timeout=timeout_s) as client:
-        r = client.get(url, headers=_fn_key_headers(USERS_KEY))
-        r.raise_for_status()
-        return r.json()
+    started = perf_counter()
+    response = None
+    try:
+        with httpx.Client(timeout=timeout_s) as client:
+            response = client.get(url, headers=_fn_key_headers(USERS_KEY))
+    finally:
+        header = response.headers.get("Server-Timing", "") if response is not None else ""
+        users_response_timing(header, (perf_counter() - started) * 1000)
+    response.raise_for_status()
+    return response.json()

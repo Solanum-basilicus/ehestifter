@@ -6,6 +6,7 @@ import types
 import unittest
 import uuid
 from datetime import datetime
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import patch
 
@@ -84,6 +85,8 @@ def load_route_module(connection_factory, blob_texts=None):
     blob_storage_module = types.ModuleType("helpers.blob_storage")
     blob_texts = blob_texts or {}
     blob_storage_module.download_texts = lambda paths: {path: blob_texts.get(path) for path in paths}
+    timing_module = types.ModuleType("helpers.timing")
+    timing_module.step = lambda name: nullcontext()
 
     discovery_filters_path = (
         Path(__file__).parents[1]
@@ -140,6 +143,7 @@ def load_route_module(connection_factory, blob_texts=None):
     helpers_module.discovery_filters = discovery_filters_module
     helpers_module.discovery_preferences = discovery_preferences_module
     helpers_module.discovery_readiness = discovery_readiness_module
+    helpers_module.timing = timing_module
 
     module_path = (
         Path(__file__).parents[1]
@@ -163,6 +167,7 @@ def load_route_module(connection_factory, blob_texts=None):
             "helpers.discovery_filters": discovery_filters_module,
             "helpers.discovery_preferences": discovery_preferences_module,
             "helpers.discovery_readiness": discovery_readiness_module,
+            "helpers.timing": timing_module,
         },
     ):
         spec.loader.exec_module(module)

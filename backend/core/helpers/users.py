@@ -2,6 +2,7 @@ import os, time, logging, requests
 from flask import session
 from .retry import retry_until_ready
 import json
+from helpers.timing import users_call, set_label
 
 base_url = os.getenv("EHESTIFTER_USERS_API_BASE_URL")
 fxkey    = os.getenv("EHESTIFTER_USERS_FUNCTION_KEY")
@@ -24,14 +25,16 @@ def create_or_get_user(msal_user: dict):
         "x-user-name": username,
         "Content-Type": "application/json"
     }
-    r = requests.get(url, headers=headers, timeout=10)
+    r = users_call(lambda: requests.get(url, headers=headers, timeout=10))
     r.raise_for_status()
     return r.json()
 
 def get_in_app_user(context, ttl_seconds=600):
     cached = session.get("in_app_user_cache")
     if cached and time.time() - cached.get("ts", 0) < ttl_seconds:
+        set_label("users_cache", "hit")
         return cached["data"]
+    set_label("users_cache", "miss")
     def call():
         return create_or_get_user(context["user"])
     data = retry_until_ready(call, attempts=3, base_delay=0.5)
@@ -64,7 +67,7 @@ class UpstreamHttpError(Exception):
         self.body = body
 
 def _do_get_link_code(url: str, headers: dict) -> dict:
-    r = requests.get(url, headers=headers, timeout=5)
+    r = users_call(lambda: requests.get(url, headers=headers, timeout=5))
     if r.status_code == 200:
         return r.json()
     if r.status_code in (500, 502, 503, 504):
@@ -111,7 +114,7 @@ def get_cv(context: dict) -> dict:
     headers = _b2c_headers_from_context(context)
     headers["Content-Type"] = "application/json"
 
-    r = requests.get(url, headers=headers, timeout=10)
+    r = users_call(lambda: requests.get(url, headers=headers, timeout=10))
 
     if r.status_code == 404:
         # UI-friendly default (no saved CV yet)
@@ -144,7 +147,7 @@ def set_cv(context: dict, *, cv_quill_delta) -> dict:
     headers["Content-Type"] = "application/json"
 
     payload = {"CVQuillDelta": cv_quill_delta}
-    r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=20)
+    r = users_call(lambda: requests.post(url, headers=headers, data=json.dumps(payload), timeout=20))
     r.raise_for_status()
     return r.json()
 
@@ -154,7 +157,7 @@ def get_discovery_status(context: dict) -> dict:
         raise ValueError("Users API env is not configured")
     url = f"{base_url}/users/discovery-status"
     headers = _b2c_headers_from_context(context)
-    r = requests.get(url, headers=headers, timeout=10)
+    r = users_call(lambda: requests.get(url, headers=headers, timeout=10))
     if not r.ok:
         raise UpstreamHttpError(r.status_code, r.text)
     return r.json()
@@ -165,7 +168,7 @@ def get_discovery_preferences(context: dict) -> dict:
         raise ValueError("Users API env is not configured")
     url = f"{base_url}/users/discovery-preferences"
     headers = _b2c_headers_from_context(context)
-    r = requests.get(url, headers=headers, timeout=10)
+    r = users_call(lambda: requests.get(url, headers=headers, timeout=10))
     r.raise_for_status()
     return r.json()
 
@@ -176,7 +179,7 @@ def set_discovery_preferences(context: dict, payload: dict) -> dict:
     url = f"{base_url}/users/discovery-preferences"
     headers = _b2c_headers_from_context(context)
     headers["Content-Type"] = "application/json"
-    r = requests.put(url, headers=headers, json=payload, timeout=15)
+    r = users_call(lambda: requests.put(url, headers=headers, json=payload, timeout=15))
     if not r.ok:
         raise UpstreamHttpError(r.status_code, r.text)
     return r.json()

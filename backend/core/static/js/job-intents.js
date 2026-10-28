@@ -32,7 +32,7 @@
     const fields = {};
     const labels = {};
     // A bounded parser for fixed metric names. No free-form metadata is stored.
-    for (const part of String(header || '').slice(0, 4096).split(',').slice(0, 55)) {
+    for (const part of String(header || '').slice(0, 4096).split(',').slice(0, 80)) {
       const numeric = part.trim().match(/^([a-z0-9_]+);dur=([0-9]+(?:\.[0-9]+)?)$/);
       if (numeric) {
         const value = Number(numeric[2]);
@@ -42,13 +42,17 @@
       const label = part.trim().match(/^([a-z0-9_]+);desc="([a-z0-9_]+)"$/);
       if (label) labels[label[1]] = label[2];
     }
-    const services = { core: { steps: {} }, jobs: { steps: {} }, enrichers: { steps: {}, gateway: { steps: {} } } };
+    const services = { core: { steps: {} }, jobs: { steps: {} }, users: { steps: {} },
+      enrichers: { steps: {}, gateway: { steps: {} }, users: { steps: {} } } };
     function addMetric(scope, key, value) {
       if (key.startsWith('step_')) scope.steps[key.slice(5)] = value;
       else scope[key] = value;
     }
     for (const [key, value] of Object.entries({ ...fields, ...labels })) {
-      if (key.startsWith('enrichers_gateway_')) addMetric(services.enrichers.gateway, key.slice(18), value);
+      if (key === 'users_cache') addMetric(services.core, key, value);
+      else if (key.startsWith('enrichers_users_')) addMetric(services.enrichers.users, key.slice(16), value);
+      else if (key.startsWith('users_')) addMetric(services.users, key.slice(6), value);
+      else if (key.startsWith('enrichers_gateway_')) addMetric(services.enrichers.gateway, key.slice(18), value);
       else if (key.startsWith('enrichers_')) addMetric(services.enrichers, key.slice(10), value);
       else if (key.startsWith('jobs_')) addMetric(services.jobs, key.slice(5), value);
       else addMetric(services.core, key, value);
@@ -117,6 +121,8 @@
         const services = data.server?.services;
         if (!services) return [];
         const stages = [
+          ...Object.entries(services.users.steps).map(([name, ms]) => [`${operation}.users.${name}`, ms]),
+          ...Object.entries(services.enrichers.users.steps).map(([name, ms]) => [`${operation}.enrichers.users.${name}`, ms]),
           ...Object.entries(services.jobs.steps).map(([name, ms]) => [`${operation}.jobs.${name}`, ms]),
           ...Object.entries(services.enrichers.steps).map(([name, ms]) => [`${operation}.enrichers.${name}`, ms]),
           ...Object.entries(services.enrichers.gateway.steps).map(([name, ms]) => [`${operation}.gateway.${name}`, ms])

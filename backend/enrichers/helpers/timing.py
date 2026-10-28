@@ -19,6 +19,12 @@ STAGES = frozenset({
 # Gateway metadata is copied only from this set of fields.
 GATEWAY_NUMBERS = frozenset({"app", "process_age", "step_servicebus_dispatch", "step_servicebus_client", "step_servicebus_sender", "step_servicebus_send"})
 GATEWAY_LABELS = frozenset({"process_first"})
+# Only the Users CV-snapshot call contributes these fields.
+USERS_NUMBERS = frozenset({
+    "app", "dbconn", "sql", "process_age", "step_cv_lookup",
+    "step_blob_client", "step_blob_download", "step_serialize",
+})
+USERS_LABELS = frozenset({"sql_count", "process_first"})
 
 
 class Measurements:
@@ -67,6 +73,23 @@ def gateway_response_timing(header, http_ms):
         measure.labels["gateway_" + name] = value
     if "app" in numbers:
         measure.values["gateway_unattributed"] = max(0, http_ms - numbers["app"])
+
+
+def users_response_timing(header, http_ms):
+    """Keep the Users HTTP attempt even without a returned timing header."""
+    from helpers.timing_header import parse_header
+
+    measure = current()
+    if measure is None:
+        return
+    measure.values["users_http"] = http_ms
+    numbers, labels = parse_header(header, USERS_NUMBERS, USERS_LABELS)
+    for name, value in numbers.items():
+        measure.values["users_" + name] = value
+    for name, value in labels.items():
+        measure.labels["users_" + name] = value
+    if "app" in numbers:
+        measure.values["users_unattributed"] = max(0, http_ms - numbers["app"])
 
 
 def timed_handler(handler):

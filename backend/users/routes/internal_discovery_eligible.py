@@ -15,6 +15,7 @@ from helpers.discovery_readiness import (
 )
 from helpers.blob_storage import download_texts
 from helpers.guid import normalize_guid
+from helpers.timing import step
 
 
 def _excluded_user_ids() -> set[str]:
@@ -81,101 +82,106 @@ def register(app: func.FunctionApp):
             excluded_actual: set[str] = set()
             conn = get_connection()
             cursor = conn.cursor()
-            cursor.execute(
-                f"""
-                WITH BoundedUsers AS (
-                    SELECT TOP ({limit})
-                        u.Id,
-                        p.CVVersionId,
-                        p.CVTextBlobPath,
-                        p.LastUpdated
-                    FROM dbo.Users AS u
-                    INNER JOIN dbo.UserPreferences AS p
-                        ON p.UserId = u.Id
-                    WHERE p.CVTextBlobPath IS NOT NULL
-                      AND LTRIM(RTRIM(p.CVTextBlobPath)) <> ''
-                      AND p.CVVersionId IS NOT NULL
-                      AND LTRIM(RTRIM(p.CVVersionId)) <> ''
-                    ORDER BY u.Id
-                ),
-                RankedFilters AS (
+            with step("discovery_query"):
+                cursor.execute(
+                    f"""
+                    WITH BoundedUsers AS (
+                        SELECT TOP ({limit})
+                            u.Id,
+                            p.CVVersionId,
+                            p.CVTextBlobPath,
+                            p.LastUpdated
+                        FROM dbo.Users AS u
+                        INNER JOIN dbo.UserPreferences AS p
+                            ON p.UserId = u.Id
+                        WHERE p.CVTextBlobPath IS NOT NULL
+                          AND LTRIM(RTRIM(p.CVTextBlobPath)) <> ''
+                          AND p.CVVersionId IS NOT NULL
+                          AND LTRIM(RTRIM(p.CVVersionId)) <> ''
+                        ORDER BY u.Id
+                    ),
+                    RankedFilters AS (
+                        SELECT
+                            f.Id,
+                            f.UserId,
+                            f.NormalizedJson,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY f.UserId
+                                ORDER BY f.CreatedAt DESC, f.Id DESC
+                            ) AS FilterRank
+                        FROM dbo.UserPreferenceFilters AS f
+                        INNER JOIN BoundedUsers AS u
+                            ON u.Id = f.UserId
+                    )
                     SELECT
+                        u.Id,
+                        u.CVVersionId,
+                        u.CVTextBlobPath,
+                        u.LastUpdated,
                         f.Id,
-                        f.UserId,
                         f.NormalizedJson,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY f.UserId
-                            ORDER BY f.CreatedAt DESC, f.Id DESC
-                        ) AS FilterRank
-                    FROM dbo.UserPreferenceFilters AS f
-                    INNER JOIN BoundedUsers AS u
-                        ON u.Id = f.UserId
+                        dp.PreferencesJson,
+                        dp.LastUpdated
+                    FROM BoundedUsers AS u
+                    LEFT JOIN RankedFilters AS f
+                        ON f.UserId = u.Id
+                       AND f.FilterRank <= 20
+                    LEFT JOIN dbo.UserDiscoveryPreferences AS dp
+                        ON dp.UserId = u.Id
+                    ORDER BY u.Id, f.FilterRank
+                    """
                 )
-                SELECT
-                    u.Id,
-                    u.CVVersionId,
-                    u.CVTextBlobPath,
-                    u.LastUpdated,
-                    f.Id,
-                    f.NormalizedJson,
-                    dp.PreferencesJson,
-                    dp.LastUpdated
-                FROM BoundedUsers AS u
-                LEFT JOIN RankedFilters AS f
-                    ON f.UserId = u.Id
-                   AND f.FilterRank <= 20
-                LEFT JOIN dbo.UserDiscoveryPreferences AS dp
-                    ON dp.UserId = u.Id
-                ORDER BY u.Id, f.FilterRank
-                """
-            )
+                rows = cursor.fetchall()
 
             users_by_id: dict[str, dict] = {}
-            for row in cursor.fetchall():
-                user_id = normalize_guid(row[0])
-                if user_id.lower() in excluded:
-                    excluded_actual.add(user_id.lower())
-                    continue
-                user = users_by_id.get(user_id)
-                if user is None:
-                    discovery_preferences, discovery_preferences_invalid = (
-                        parse_stored_discovery_preferences(row[6])
-                    )
-                    user = {
-                        "userId": user_id,
-                        "cvVersionId": str(row[1]).strip(),
-                        "_cvTextBlobPath": row[2],
-                        "cvLastUpdatedUtc": _iso(row[3]),
-                        "hasSavedFilters": False,
-                        "profiles": [],
-                        "invalidProfileCount": 0,
-                        "discoveryPreferences": discovery_preferences,
-                        "discoveryPreferencesInvalid": discovery_preferences_invalid,
-                        "discoveryPreferencesLastUpdatedUtc": _iso(row[7]),
-                    }
-                    users_by_id[user_id] = user
-                filter_id = row[4]
-                if filter_id is None:
-                    continue
-                user["hasSavedFilters"] = True
-                profile = normalize_discovery_profile(filter_id, row[5])
-                if profile is None:
-                    user["invalidProfileCount"] += 1
-                    continue
-                user["profiles"].append(profile)
+            with step("profile_normalize"):
+                for row in rows:
+                    user_id = normalize_guid(row[0])
+                    if user_id.lower() in excluded:
+                        excluded_actual.add(user_id.lower())
+                        continue
+                    user = users_by_id.get(user_id)
+                    if user is None:
+                        discovery_preferences, discovery_preferences_invalid = (
+                            parse_stored_discovery_preferences(row[6])
+                        )
+                        user = {
+                            "userId": user_id,
+                            "cvVersionId": str(row[1]).strip(),
+                            "_cvTextBlobPath": row[2],
+                            "cvLastUpdatedUtc": _iso(row[3]),
+                            "hasSavedFilters": False,
+                            "profiles": [],
+                            "invalidProfileCount": 0,
+                            "discoveryPreferences": discovery_preferences,
+                            "discoveryPreferencesInvalid": discovery_preferences_invalid,
+                            "discoveryPreferencesLastUpdatedUtc": _iso(row[7]),
+                        }
+                        users_by_id[user_id] = user
+                    filter_id = row[4]
+                    if filter_id is None:
+                        continue
+                    user["hasSavedFilters"] = True
+                    profile = normalize_discovery_profile(filter_id, row[5])
+                    if profile is None:
+                        user["invalidProfileCount"] += 1
+                        continue
+                    user["profiles"].append(profile)
 
             users = sorted(users_by_id.values(), key=lambda item: item["userId"])
-            cv_texts = download_texts(
-                [user["_cvTextBlobPath"] for user in users]
-            )
-            for user in users:
-                cv_path = user.pop("_cvTextBlobPath")
-                cv_plain_text = cv_texts.get(cv_path)
-                user["discoveryEligibility"] = build_discovery_readiness(
-                    cv_plain_text=cv_plain_text,
-                    discovery_preferences=user["discoveryPreferences"],
-                    discovery_preferences_invalid=user["discoveryPreferencesInvalid"],
+            with step("cv_batch_download"):
+                cv_texts = download_texts(
+                    [user["_cvTextBlobPath"] for user in users]
                 )
+            with step("readiness"):
+                for user in users:
+                    cv_path = user.pop("_cvTextBlobPath")
+                    cv_plain_text = cv_texts.get(cv_path)
+                    user["discoveryEligibility"] = build_discovery_readiness(
+                        cv_plain_text=cv_plain_text,
+                        discovery_preferences=user["discoveryPreferences"],
+                        discovery_preferences_invalid=user["discoveryPreferencesInvalid"],
+                    )
 
             payload = {
                 "schemaVersion": 1,
@@ -211,8 +217,10 @@ def register(app: func.FunctionApp):
                     "limit": limit,
                 },
             }
+            with step("serialize"):
+                body = json.dumps(payload)
             return func.HttpResponse(
-                json.dumps(payload),
+                body,
                 status_code=200,
                 mimetype="application/json",
             )

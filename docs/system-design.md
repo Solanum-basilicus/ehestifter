@@ -1216,12 +1216,12 @@ Known tradeoff:
 - this is accepted for now because implementation is small and product action still wins if Analytics fails,
 - if UX is affected, replace or supplement this with asynchronous local emission, for example an in-process/background queue or a local durable cache/outbox that drains to Analytics later.
 
-### 11.8 Performance diagnostics (Jobs, Web Core, Enrichers, Gateway; issues #22 and #28)
+### 11.8 Performance diagnostics (Jobs, Users, Web Core, Enrichers, Gateway; issues #22, #28, #36)
 
 Diagnostics use response `Server-Timing` headers. They do not change domain response
 bodies, make new network requests, or store historical measurements. Each process
-owns its collector; there is no cross-service runtime dependency. Jobs, Enrichers,
-and Azure Gateway use request-local Python `ContextVar` collectors. Web Core and
+owns its collector; there is no cross-service runtime dependency. Jobs, Users,
+Enrichers, and Azure Gateway use request-local Python `ContextVar` collectors. Web Core and
 Cloud Run Gateway use request-local Flask data; the Gateway's shared dispatch
 handler records Service Bus stages for both runtime types.
 
@@ -1231,14 +1231,24 @@ handler records Service Bus stages for both runtime types.
   `catalog_parse` and `catalog_index`. `catalog_cache` is `hit` or `miss`.
   GET `/jobs` and POST `/jobs/open/query` measure parsing, query construction,
   count/page queries, catalog use, and selected location hydration/serialization.
+- **Users:** all handled HTTP endpoints emit `app`, `dbconn`, `sql`,
+  `sql_count`, `process_age`, and `process_first`. CV reads/updates and
+  discovery-eligible use fixed `step_*` stages for the CV lookup, Blob client,
+  download/upload, conversion, SQL discovery query, profile normalization,
+  batch CV load, readiness, analytics, and JSON serialization. SQL timing
+  includes execute and fetch driver calls. Blob client setup is separate from
+  Blob transfers; a batch parent stage can contain the download stages.
 - **Web Core:** `core`, `identity`, `jobs_http`, `enrichers_http`, Jobs and
-  Enrichers handler/stage fields prefixed with their service name, `cache`,
+  Enrichers handler/stage fields prefixed with their service name,
+  `users_http` and selected `users_*` fields, `users_cache` hit/miss, `cache`,
   `retry_wait`, `sanitize`, `json_parse`, and existing `analytics` timing.
   `jobs_unattributed` and `enrichers_unattributed` are the non-negative
   differences between the HTTP attempt and a reported upstream handler time.
 - **Enrichers:** `app` and `step_*` fields for run creation, analytics,
   Jobs/CV snapshot requests, snapshot validation, Blob upload, snapshot path
-  update, Gateway dispatch, queued-status update, and run readback. The
+  update, Gateway dispatch, queued-status update, and run readback. A CV
+  snapshot subcall copies selected Users timings as `users_*`, including
+  `users_http` and `users_unattributed` when available. The
   Gateway response contributes `gateway_http`, `gateway_app`, selected
   `gateway_step_*` values, and `gateway_unattributed`.
 - **Gateway:** `app`, `step_servicebus_dispatch`, `step_servicebus_client`,
@@ -1257,6 +1267,14 @@ handler fields; the caller still measures HTTP elapsed time. Missing fields
 mean unmeasured or inapplicable, not zero. Reused Enrichers runs skip snapshot
 and dispatch stages; no zero-valued placeholders are created. A Gateway call
 that times out has HTTP duration but no Gateway handler duration.
+
+In Core, Users diagnostics from a direct call appear under
+`server.services.users` in `ehPerf.snapshot()`. Enrichers CV snapshot Users
+subcalls appear under `server.services.enrichers.users`. The existing
+`enrichers.steps.cv_snapshot` contains the Users subcall time; do not add
+these values. A Core identity cache hit reports `users_cache=hit` without a
+new Users handler time. The job detail page collects the initial `/ui/users/me`
+response timing, when it exists.
 
 The job detail browser records `job.details.load`, `job.status.change`, and
 `job.compatibility.run` as independent intents. The page load completes when

@@ -1,6 +1,7 @@
 """Request-local timing for Core and allowlisted downstream HTTP services."""
 
 import re
+from math import isfinite
 from threading import Lock
 from time import perf_counter
 
@@ -24,9 +25,22 @@ _ENRICHERS_NUMBERS = frozenset({
     "gateway_http", "gateway_app", "gateway_process_age", "gateway_unattributed",
     "gateway_step_servicebus_dispatch", "gateway_step_servicebus_client",
     "gateway_step_servicebus_sender", "gateway_step_servicebus_send",
+    "users_http", "users_app", "users_dbconn", "users_sql", "users_process_age",
+    "users_unattributed", "users_step_cv_lookup", "users_step_blob_client",
+    "users_step_blob_download", "users_step_serialize",
+})
+_USERS_NUMBERS = frozenset({
+    "app", "dbconn", "sql", "process_age", "step_cv_lookup",
+    "step_blob_client", "step_blob_download", "step_blob_upload",
+    "step_cv_convert", "step_discovery_query", "step_profile_normalize",
+    "step_cv_batch_download", "step_readiness", "step_analytics",
+    "step_serialize", "step_user_lookup",
 })
 _LABELS = frozenset({"process_first", "catalog_cache", "sql_count"})
-_ENRICHERS_LABELS = frozenset({"process_first", "gateway_process_first"})
+_ENRICHERS_LABELS = frozenset({
+    "process_first", "gateway_process_first", "users_process_first", "users_sql_count",
+})
+_USERS_LABELS = frozenset({"process_first", "sql_count"})
 _FIELD = re.compile(r'\s*([a-z0-9_]+);(dur=([0-9]+(?:\.[0-9]+)?)|desc="([a-z0-9_]+)")\s*')
 
 
@@ -47,6 +61,8 @@ def add_duration(name, ms):
 
 def set_label(name, value):
     if has_request_context() and hasattr(g, "timing_labels"):
+        if name == "users_cache" and g.timing_labels.get(name) == "miss":
+            return
         g.timing_labels[name] = str(value)
 
 
@@ -60,24 +76,33 @@ def measure_call(name, callback):
 
 def _read_upstream(header, numbers, labels):
     values, texts = {}, {}
-    for part in (header or "")[:4096].split(",")[:55]:
+    for part in (header or "")[:4096].split(",")[:80]:
         match = _FIELD.fullmatch(part)
         if not match:
             continue
         key = match.group(1)
         if match.group(3) is not None and key in numbers:
-            values[key] = float(match.group(3))
+            value = float(match.group(3))
+            if isfinite(value):
+                values[key] = value
         elif match.group(4) is not None and key in labels:
-            texts[key] = match.group(4)
+            value = match.group(4)
+            if key.endswith("process_first") and value not in ("0", "1"):
+                continue
+            if key.endswith("sql_count") and (not value.isdigit() or len(value) > 7):
+                continue
+            if key == "catalog_cache" and value not in ("hit", "miss"):
+                continue
+            texts[key] = value
     return values, texts
 
 
 def downstream_call(service, callback):
     """Measure a request attempt, including time before an HTTP response exists."""
-    if service not in ("jobs", "enrichers"):
+    if service not in ("jobs", "enrichers", "users"):
         raise ValueError("Unknown downstream service")
-    numbers = _JOBS_NUMBERS if service == "jobs" else _ENRICHERS_NUMBERS
-    labels = _LABELS if service == "jobs" else _ENRICHERS_LABELS
+    numbers = {"jobs": _JOBS_NUMBERS, "enrichers": _ENRICHERS_NUMBERS, "users": _USERS_NUMBERS}[service]
+    labels = {"jobs": _LABELS, "enrichers": _ENRICHERS_LABELS, "users": _USERS_LABELS}[service]
     if service == "jobs" and has_request_context() and hasattr(g, "timing_labels"):
         set_label("attempts", int(g.timing_labels.get("attempts", "0")) + 1)
     started = perf_counter()
@@ -90,7 +115,7 @@ def downstream_call(service, callback):
         if has_request_context() and hasattr(g, "timing_values"):
             for name, value in parsed.items():
                 key = service + "_" + name
-                if name in ("process_age", "gateway_process_age"):
+                if name in ("process_age", "gateway_process_age", "users_process_age"):
                     # Process age is one observation, not a duration to add.
                     g.timing_values[key] = value
                 else:
@@ -98,9 +123,9 @@ def downstream_call(service, callback):
             for name, value in descriptions.items():
                 key = service + "_" + name
                 previous = g.timing_labels.get(key)
-                if service == "jobs" and name == "sql_count":
+                if name in ("sql_count", "users_sql_count"):
                     value = int(previous or "0") + int(value)
-                elif name in ("process_first", "gateway_process_first"):
+                elif name in ("process_first", "gateway_process_first", "users_process_first"):
                     value = "1" if value == "1" or previous == "1" else "0"
                 elif name == "catalog_cache" and previous == "miss":
                     value = "miss"
@@ -120,6 +145,10 @@ def jobs_call(callback):
 
 def enrichers_call(callback):
     return downstream_call("enrichers", callback)
+
+
+def users_call(callback):
+    return downstream_call("users", callback)
 
 
 def finish_request(response):

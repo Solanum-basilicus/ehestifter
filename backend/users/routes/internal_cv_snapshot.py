@@ -9,6 +9,7 @@ from helpers.blob_storage import download_text
 # If you already have this helper (used in telegram_link.py), reuse it.
 # If you don't, you can remove it and just pass user_id through.
 from helpers.guid import normalize_guid
+from helpers.timing import step
 
 
 def register(app: func.FunctionApp):
@@ -35,18 +36,19 @@ def register(app: func.FunctionApp):
             conn = get_connection()
             cursor = conn.cursor()
 
-            cursor.execute(
-                """
-                SELECT
-                    CVTextBlobPath,
-                    CVVersionId,
-                    LastUpdated
-                FROM dbo.UserPreferences
-                WHERE UserId = ?
-                """,
-                (user_id_norm,),
-            )
-            row = cursor.fetchone()
+            with step("cv_lookup"):
+                cursor.execute(
+                    """
+                    SELECT
+                        CVTextBlobPath,
+                        CVVersionId,
+                        LastUpdated
+                    FROM dbo.UserPreferences
+                    WHERE UserId = ?
+                    """,
+                    (user_id_norm,),
+                )
+                row = cursor.fetchone()
             if not row:
                 return func.HttpResponse("CV not found", status_code=404)
 
@@ -67,8 +69,10 @@ def register(app: func.FunctionApp):
                 "CVPlainText": cv_plain_text,
             }
 
+            with step("serialize"):
+                body = json.dumps(payload)
             return func.HttpResponse(
-                body=json.dumps(payload),
+                body=body,
                 status_code=200,
                 mimetype="application/json",
             )

@@ -107,3 +107,37 @@ test('catalog cache labels and stage durations are available together', () => {
   assert.equal(server.jobs_sql_count, undefined);
   assert.equal(server.labels.jobs_sql_count, '4');
 });
+
+test('direct Users response is grouped for initial user load', () => {
+  const { perf } = setup();
+  perf.pageStart('user');
+  perf.pageResponse('user', { headers: { get: () => [
+    'core;dur=140', 'users_http;dur=120', 'users_app;dur=85',
+    'users_step_user_lookup;dur=35', 'users_sql_count;desc="1"',
+    'users_cache;desc="miss"'
+  ].join(', ') } });
+  perf.pageFinish('user', 'ok');
+  const server = perf.snapshot().intents[0].operations.user.server;
+  assert.equal(server.services.users.http, 120);
+  assert.equal(server.services.users.steps.user_lookup, 35);
+  assert.equal(server.services.users.sql_count, '1');
+  assert.equal(server.services.core.users_cache, 'miss');
+});
+
+test('enrichers nested Users timing does not replace CV snapshot stage', () => {
+  const { perf } = setup();
+  const run = perf.action('job.compatibility.run');
+  run.response({ headers: { get: () => [
+    'enrichers_step_cv_snapshot;dur=1000',
+    'enrichers_users_http;dur=750',
+    'enrichers_users_app;dur=450',
+    'enrichers_users_step_blob_download;dur=280',
+    'enrichers_users_process_first;desc="1"'
+  ].join(', ') } });
+  run.finish('ok');
+  const server = perf.snapshot().intents[1].operations.action.server;
+  assert.equal(server.services.enrichers.steps.cv_snapshot, 1000);
+  assert.equal(server.services.enrichers.users.http, 750);
+  assert.equal(server.services.enrichers.users.steps.blob_download, 280);
+  assert.equal(server.services.enrichers.users.process_first, '1');
+});
