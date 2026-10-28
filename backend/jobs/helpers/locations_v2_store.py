@@ -176,12 +176,38 @@ def _read_location_v2(row, catalog=None) -> dict:
     }
     if catalog is None:
         return result
-    item = catalog.get_location(row[0], row[1])
+    return _catalog_location_presentation(result, catalog)
+
+
+def _catalog_location_presentation(location: dict, catalog) -> dict:
+    item = catalog.get_location(location["kind"], location["locationId"])
     if item is None:
-        return result
+        return location
     presentation = catalog.location_presentation(item)
-    presentation["catalogVersion"] = row[4]
+    presentation["catalogVersion"] = location["catalogVersion"]
     return presentation
+
+
+def present_locations_v2_from_catalog(locations: list[dict], catalog) -> list[dict]:
+    """Apply the original catalog presentation to stored location rows."""
+    return [_catalog_location_presentation(location, catalog) for location in locations]
+
+
+def present_locations_v2_from_index(locations: list[dict], index) -> list[dict]:
+    """Read presentation by canonical ID. Keep SQL order and stored versions."""
+    if not locations:
+        return []
+    selectors = [(row["kind"], row["locationId"]) for row in locations]
+    items, _missing = index.lookup(selectors)
+    by_selector = {(item["kind"], item["locationId"]): item for item in items}
+    result = []
+    for row in locations:
+        presentation = by_selector.get((row["kind"], row["locationId"]))
+        if presentation is None:
+            result.append(row)
+        else:
+            result.append({**presentation, "catalogVersion": row["catalogVersion"]})
+    return result
 
 
 def fetch_locations_v2(cur, job_id: str, catalog=None) -> list[dict]:

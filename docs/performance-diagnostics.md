@@ -22,12 +22,23 @@ in memory for one request or browser page. No historical data is stored.
    `enrichers_gateway_process_first`, if present. Different requests can hit
    different processes. An ordinary cache hit does not contact Jobs.
 
-The main detail path includes `job_row`, `legacy_locations`, `catalog_load`,
-`locations_v2`, `work_time`, and `serialize`. When the catalog is loaded in that
-request, `catalog_parse` and `catalog_index` are nested inside `catalog_load`.
-On a cache hit, the nested parse/index stages are absent. During an error, a
-stage that fails records elapsed time when its context exits, provided the
-service returns an HTTP response with timing headers.
+The main detail path includes `job_row`, `legacy_locations`, `locations_v2`,
+`work_time`, and `serialize`. If the full catalog is loaded, `catalog_parse`
+and `catalog_index` are nested inside `catalog_load`. On a cache hit, the
+nested parse/index stages are absent. During an error, a stage that fails
+records elapsed time when its context exits, provided the service returns an
+HTTP response with timing headers.
+
+For Jobs GET-by-ID with the v2 model, `locations_v2` now includes the SQL read
+and the nested `location_lookup` step. `jobs_location_display=index` means that
+the packaged SQLite search index supplied the presentation. `fallback` means
+that the index read failed and Jobs used the full catalog. `stored` means the
+request did not need presentation lookup (v1 model or no v2 rows). On the
+normal index path, `catalog_load` and `catalog_cache` are absent. A fallback
+can report `catalog_load`, `catalog_parse`, `catalog_index`, and
+`catalog_cache`. Do not add nested stages when calculating total time.
+Jobs keeps canonical validation on write; the display index does not validate
+stored IDs. An unknown ID retains its stored fields and catalog version.
 
 The current browser implementation shows only the last response header for an
 operation with several browser retries. Core measures each Jobs attempt it

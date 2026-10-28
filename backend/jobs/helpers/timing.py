@@ -15,7 +15,7 @@ _seen_request = False
 # Fixed names only. Do not put request data in response headers.
 STEPS = frozenset({
     "job_row", "legacy_locations", "catalog_load", "catalog_parse",
-    "catalog_index", "locations_v2", "work_time", "serialize",
+    "catalog_index", "locations_v2", "location_lookup", "work_time", "serialize",
     "parse", "query_build", "count_query", "page_query",
     "location_hydration", "location_v2_hydration",
 })
@@ -23,7 +23,11 @@ STEPS = frozenset({
 
 def set_label(name, value):
     measurements = current()
-    if measurements is not None and name == "catalog_cache" and value in ("hit", "miss"):
+    allowed = {
+        "catalog_cache": ("hit", "miss"),
+        "location_display": ("index", "fallback", "stored"),
+    }
+    if measurements is not None and value in allowed.get(name, ()):
         measurements.labels[name] = value
 
 

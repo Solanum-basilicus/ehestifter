@@ -130,6 +130,30 @@ def test_retries_keep_first_process_and_catalog_miss_hints():
     assert "jobs_app;dur=30.00" in header
 
 
+def test_job_location_index_metrics_keep_only_allowed_values():
+    from helpers.timing import _read_upstream, _JOBS_NUMBERS, _LABELS
+
+    values, labels = _read_upstream(
+        'step_location_lookup;dur=12.5, location_display;desc="index", '
+        'unknown_location;desc="private", unknown_duration;dur=200',
+        _JOBS_NUMBERS,
+        _LABELS,
+    )
+    assert values == {"step_location_lookup": 12.5}
+    assert labels == {"location_display": "index"}
+
+    for expected in ("fallback", "stored"):
+        _, labels = _read_upstream(
+            f'location_display;desc="{expected}"', _JOBS_NUMBERS, _LABELS
+        )
+        assert labels == {"location_display": expected}
+
+    _, labels = _read_upstream(
+        'location_display;desc="arbitrary"', _JOBS_NUMBERS, _LABELS
+    )
+    assert labels == {}
+
+
 def test_direct_users_and_nested_enrichers_users_metadata():
     from helpers.timing import users_call, enrichers_call
 
