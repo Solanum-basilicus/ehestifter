@@ -1,13 +1,45 @@
 """Request-local HTTP and SQL timings for Jobs."""
 
 from contextvars import ContextVar
+from contextlib import contextmanager
+from threading import Lock
 from functools import wraps
 from time import perf_counter
 
-from azure.functions import HttpResponse
-
 
 _current = ContextVar("jobs_request_timing", default=None)
+_process_started = perf_counter()
+_first_lock = Lock()
+_seen_request = False
+
+# Fixed names only. Do not put request data in response headers.
+STEPS = frozenset({
+    "job_row", "legacy_locations", "catalog_load", "catalog_parse",
+    "catalog_index", "locations_v2", "work_time", "serialize",
+    "parse", "query_build", "count_query", "page_query",
+    "location_hydration", "location_v2_hydration",
+})
+
+
+def set_label(name, value):
+    measurements = current()
+    if measurements is not None and name == "catalog_cache" and value in ("hit", "miss"):
+        measurements.labels[name] = value
+
+
+@contextmanager
+def step(name):
+    if name not in STEPS:
+        raise ValueError("Unknown timing stage")
+    measurements = current()
+    start = perf_counter()
+    try:
+        yield
+    finally:
+        if measurements is not None:
+            key = "step_" + name
+            measurements.steps[key] = measurements.steps.get(key, 0.0) + (perf_counter() - start) * 1000
+
 
 
 class Measurements:
@@ -15,12 +47,22 @@ class Measurements:
         self.sql_ms = 0.0
         self.dbconn_ms = 0.0
         self.sql_count = 0
+        self.steps = {}
+        self.labels = {}
+        self.process_age_ms = 0.0
+        self.process_first = False
 
     def header(self, app_ms):
-        return (
-            f"app;dur={app_ms:.2f}, sql;dur={self.sql_ms:.2f}, "
-            f"dbconn;dur={self.dbconn_ms:.2f}, sql_count;desc=\"{self.sql_count}\""
-        )
+        parts = [
+            f"app;dur={app_ms:.2f}", f"sql;dur={self.sql_ms:.2f}",
+            f"dbconn;dur={self.dbconn_ms:.2f}",
+            f"process_age;dur={self.process_age_ms:.2f}",
+            f'sql_count;desc="{self.sql_count}"',
+            f'process_first;desc="{int(self.process_first)}"',
+        ]
+        parts.extend(f"{key};dur={value:.2f}" for key, value in self.steps.items())
+        parts.extend(f'{key};desc="{value}"' for key, value in self.labels.items())
+        return ", ".join(parts)
 
 
 def current():
@@ -31,11 +73,17 @@ def timed_handler(handler):
     """Measure one invocation. Do not share measurements between requests."""
     @wraps(handler)
     def wrapped(*args, **kwargs):
+        global _seen_request
         measure = Measurements()
+        measure.process_age_ms = (perf_counter() - _process_started) * 1000
+        with _first_lock:
+            measure.process_first = not _seen_request
+            _seen_request = True
         token = _current.set(measure)
         start = perf_counter()
         try:
             response = handler(*args, **kwargs)
+            from azure.functions import HttpResponse
             if isinstance(response, HttpResponse):
                 response.headers["Server-Timing"] = measure.header((perf_counter() - start) * 1000)
             return response
@@ -131,3 +179,23 @@ class TimedConnection:
 
     def __setattr__(self, name, value):
         setattr(self._connection, name, value)
+
+
+def catalog_call(callback):
+    """Report hit when this request did not execute the uncached loader."""
+    measure = current()
+    with step("catalog_load"):
+        result = callback()
+    if measure is not None and "catalog_cache" not in measure.labels:
+        set_label("catalog_cache", "hit")
+    return result
+
+
+def record_elapsed(name, started):
+    """Measure an existing long block without moving its control flow."""
+    if name not in STEPS:
+        raise ValueError("Unknown timing stage")
+    measure = current()
+    if measure is not None:
+        key = "step_" + name
+        measure.steps[key] = measure.steps.get(key, 0.0) + (perf_counter() - started) * 1000

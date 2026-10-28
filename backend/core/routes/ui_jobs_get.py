@@ -16,7 +16,7 @@ def create_blueprint(auth):
     @auth.login_required
     def ui_job_details(job_id: str, *, context):
         try:
-            uid = get_in_app_user_id(context)
+            uid = measure_call("identity", lambda: get_in_app_user_id(context))
         except Exception:
             uid = None
 
@@ -32,7 +32,7 @@ def create_blueprint(auth):
             ))
 
         cache_key = f"job:{job_id}"
-        cached = memo_get(cache_key, ttl=60)
+        cached = measure_call("cache_get", lambda: memo_get(cache_key, ttl=60))
         if cached:
             set_label("cache", "hit")
             emit_success_event()
@@ -44,11 +44,11 @@ def create_blueprint(auth):
             headers = jobs_fx_headers(context={"userId": uid}) if uid else jobs_fx_headers()
             response = fx_get(f"{jobs_base()}/jobs/{job_id}", headers=headers, timeout=10)
             response.raise_for_status()
-            job = response.json()
+            job = measure_call("json_parse", response.json)
 
             desc = job.get("descriptionHtml") or job.get("DescriptionHtml") or job.get("Description") or ""
             if desc:
-                job["descriptionHtml"] = sanitize_description_html(desc)
+                job["descriptionHtml"] = measure_call("sanitize", lambda: sanitize_description_html(desc))
 
             if "locations" not in job or not isinstance(job["locations"], list):
                 job["locations"] = []
@@ -62,7 +62,7 @@ def create_blueprint(auth):
         data = retry_until_ready(call, attempts=4, base_delay=0.75)
 
         if not data.get("error"):
-            memo_put(cache_key, data)
+            measure_call("cache_put", lambda: memo_put(cache_key, data))
             emit_success_event()
 
         return jsonify(data), 200

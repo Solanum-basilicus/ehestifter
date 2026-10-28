@@ -4,6 +4,7 @@ import logging
 from typing import Any, Mapping
 
 from helpers.sb_client import send_dispatch_message
+from helpers.timing import step
 from .common import (
     ResponseTuple,
     correlation_id,
@@ -46,7 +47,8 @@ def handle_gateway_dispatch(
     )
 
     try:
-        message_id = send_dispatch_message(body, corr=corr)
+        with step("servicebus_dispatch"):
+            message_id = send_dispatch_message(body, corr=corr)
     except Exception as e:
         logging.exception(
             "POST /gateway/dispatch SB dispatch failed corr=%s runId=%s",

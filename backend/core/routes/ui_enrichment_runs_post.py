@@ -1,3 +1,4 @@
+from helpers.timing import measure_call
 import logging
 import uuid
 from flask import Blueprint, jsonify, request
@@ -19,7 +20,7 @@ def create_blueprint(auth):
             return jsonify({"error": "Missing jobOfferingId/jobId"}), 400
 
         try:
-            user_id = get_in_app_user_id(context)
+            user_id = measure_call("identity", lambda: get_in_app_user_id(context))
         except Exception as e:
             return jsonify({"error": "Could not resolve in-app user id"}), 401
 

@@ -1,9 +1,10 @@
 (function (w) {
-  async function fetchWithRetry(url, attempts = 4, baseDelay = 750, init = {}) {
+  async function fetchWithRetry(url, attempts = 4, baseDelay = 750, init = {}, onResponse = null) {
     let lastErr;
     for (let i = 0; i < attempts; i++) {
       try {
         const r = await fetch(url, Object.assign({ credentials: 'same-origin' }, init));
+        if (typeof onResponse === 'function') onResponse(r);
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return await r.json(); // JSON-only, matches current callers' expectations
       } catch (e) {

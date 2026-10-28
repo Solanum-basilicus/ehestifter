@@ -1,6 +1,7 @@
 import json
 import logging
 import azure.functions as func
+from helpers.timing import step, catalog_call
 from helpers.db import get_connection
 from helpers.history import DatetimeEncoder
 from helpers.ids import normalize_guid, normalize_guid_in_dict
@@ -18,31 +19,37 @@ def register(app: func.FunctionApp):
             conn = get_connection()
             cur = conn.cursor()
 
-            cur.execute("SELECT * FROM dbo.JobOfferings WHERE Id = ?", job_id)
-            row = cur.fetchone()
-            if not row:
-                return func.HttpResponse("Not found", status_code=404)
-            cols = [c[0] for c in cur.description]
-            job = dict(zip(cols, row))
-            normalize_guid_in_dict(job, ["Id", "CreatedByUserId"])  # CreatedByUserId may be NULL; handled safely
+            with step("job_row"):
+                cur.execute("SELECT * FROM dbo.JobOfferings WHERE Id = ?", job_id)
+                row = cur.fetchone()
+                if not row:
+                    return func.HttpResponse("Not found", status_code=404)
+                cols = [c[0] for c in cur.description]
+                job = dict(zip(cols, row))
+                normalize_guid_in_dict(job, ["Id", "CreatedByUserId"])
 
-            cur.execute("""
-              SELECT CountryName, CountryCode, CityName, Region
-              FROM dbo.JobOfferingLocations
-              WHERE JobOfferingId = ?
-              ORDER BY CountryName, CityName
-            """, job_id)
-            job["locations"] = [
-                {"countryName": r[0], "countryCode": r[1], "cityName": r[2], "region": r[3]}
-                for r in cur.fetchall()
-            ]
+            with step("legacy_locations"):
+                cur.execute("""
+                  SELECT CountryName, CountryCode, CityName, Region
+                  FROM dbo.JobOfferingLocations
+                  WHERE JobOfferingId = ?
+                  ORDER BY CountryName, CityName
+                """, job_id)
+                job["locations"] = [
+                    {"countryName": r[0], "countryCode": r[1], "cityName": r[2], "region": r[3]}
+                    for r in cur.fetchall()
+                ]
             location_model = active_location_model()
-            catalog = load_locations_v2_catalog() if location_model == "v2" else None
-            job["locationsV2"] = fetch_locations_v2(cur, job_id, catalog=catalog)
-            job["workTimeConstraintsV2"] = fetch_work_time_constraints_v2(cur, job_id)
+            catalog = catalog_call(load_locations_v2_catalog) if location_model == "v2" else None
+            with step("locations_v2"):
+                job["locationsV2"] = fetch_locations_v2(cur, job_id, catalog=catalog)
+            with step("work_time"):
+                job["workTimeConstraintsV2"] = fetch_work_time_constraints_v2(cur, job_id)
             job["activeLocationModel"] = location_model
 
-            return func.HttpResponse(json.dumps(job, cls=DatetimeEncoder), mimetype="application/json")
+            with step("serialize"):
+                response = func.HttpResponse(json.dumps(job, cls=DatetimeEncoder), mimetype="application/json")
+            return response
         except Exception as e:
             logging.exception("GET /jobs/{id} error")
             return func.HttpResponse(f"Error: {str(e)}", status_code=500)

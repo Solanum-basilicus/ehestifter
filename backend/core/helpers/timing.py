@@ -1,20 +1,43 @@
-"""HTTP timing for Web Core. Each Flask request owns its own measurements."""
+"""Request-local timing for Core and allowlisted downstream HTTP services."""
 
 import re
+from threading import Lock
 from time import perf_counter
 
 from flask import g, has_request_context
 
+_STARTED = perf_counter()
+_SEEN = False
+_LOCK = Lock()
 
-# Accept only known numeric Jobs metrics. Never forward untrusted header text.
-_JOB_NUMBERS = re.compile(r'(app|sql|dbconn);dur=([0-9]+(?:\.[0-9]+)?)')
-_JOB_COUNT = re.compile(r'sql_count;desc="([0-9]+)"')
+# Accept only known fields. Never forward arbitrary downstream header text.
+_JOBS_NUMBERS = frozenset({
+    "app", "sql", "dbconn", "process_age", "step_job_row", "step_legacy_locations",
+    "step_catalog_load", "step_catalog_parse", "step_catalog_index", "step_locations_v2",
+    "step_work_time", "step_serialize", "step_parse", "step_query_build",
+    "step_count_query", "step_page_query", "step_location_hydration", "step_location_v2_hydration",
+})
+_ENRICHERS_NUMBERS = frozenset({
+    "app", "process_age", "step_run_create", "step_run_readback", "step_analytics",
+    "step_job_snapshot", "step_cv_snapshot", "step_snapshot_validate", "step_blob_upload",
+    "step_snapshot_path_update", "step_gateway_dispatch", "step_mark_queued",
+    "gateway_http", "gateway_app", "gateway_process_age", "gateway_unattributed",
+    "gateway_step_servicebus_dispatch", "gateway_step_servicebus_client",
+    "gateway_step_servicebus_sender", "gateway_step_servicebus_send",
+})
+_LABELS = frozenset({"process_first", "catalog_cache", "sql_count"})
+_ENRICHERS_LABELS = frozenset({"process_first", "gateway_process_first"})
+_FIELD = re.compile(r'\s*([a-z0-9_]+);(dur=([0-9]+(?:\.[0-9]+)?)|desc="([a-z0-9_]+)")\s*')
 
 
 def begin_request():
+    global _SEEN
     g.timing_start = perf_counter()
-    g.timing_values = {}
+    g.timing_values = {"process_age": (g.timing_start - _STARTED) * 1000}
     g.timing_labels = {}
+    with _LOCK:
+        g.timing_labels["process_first"] = str(int(not _SEEN))
+        _SEEN = True
 
 
 def add_duration(name, ms):
@@ -35,31 +58,75 @@ def measure_call(name, callback):
         add_duration(name, (perf_counter() - start) * 1000)
 
 
-def jobs_call(callback):
-    """Measure one Jobs HTTP attempt and read its Server-Timing response."""
-    def invoke():
-        response = callback()
-        if has_request_context() and hasattr(g, "timing_values"):
-            headers = getattr(response, "headers", {}) or {}
-            values = headers.get("Server-Timing", "")
-            for field, value in _JOB_NUMBERS.findall(values):
-                add_duration("jobs_" + field, float(value))
-            found = _JOB_COUNT.search(values)
-            if found:
-                count = int(g.timing_labels.get("jobs_sql_count", "0"))
-                set_label("jobs_sql_count", count + int(found.group(1)))
-        return response
+def _read_upstream(header, numbers, labels):
+    values, texts = {}, {}
+    for part in (header or "")[:4096].split(",")[:55]:
+        match = _FIELD.fullmatch(part)
+        if not match:
+            continue
+        key = match.group(1)
+        if match.group(3) is not None and key in numbers:
+            values[key] = float(match.group(3))
+        elif match.group(4) is not None and key in labels:
+            texts[key] = match.group(4)
+    return values, texts
 
-    if has_request_context() and hasattr(g, "timing_values"):
+
+def downstream_call(service, callback):
+    """Measure a request attempt, including time before an HTTP response exists."""
+    if service not in ("jobs", "enrichers"):
+        raise ValueError("Unknown downstream service")
+    numbers = _JOBS_NUMBERS if service == "jobs" else _ENRICHERS_NUMBERS
+    labels = _LABELS if service == "jobs" else _ENRICHERS_LABELS
+    if service == "jobs" and has_request_context() and hasattr(g, "timing_labels"):
         set_label("attempts", int(g.timing_labels.get("attempts", "0")) + 1)
-    return measure_call("jobs_http", invoke)
+    started = perf_counter()
+    parsed = {}
+    try:
+        response = callback()
+        parsed, descriptions = _read_upstream(
+            (getattr(response, "headers", {}) or {}).get("Server-Timing", ""), numbers, labels
+        )
+        if has_request_context() and hasattr(g, "timing_values"):
+            for name, value in parsed.items():
+                key = service + "_" + name
+                if name in ("process_age", "gateway_process_age"):
+                    # Process age is one observation, not a duration to add.
+                    g.timing_values[key] = value
+                else:
+                    add_duration(key, value)
+            for name, value in descriptions.items():
+                key = service + "_" + name
+                previous = g.timing_labels.get(key)
+                if service == "jobs" and name == "sql_count":
+                    value = int(previous or "0") + int(value)
+                elif name in ("process_first", "gateway_process_first"):
+                    value = "1" if value == "1" or previous == "1" else "0"
+                elif name == "catalog_cache" and previous == "miss":
+                    value = "miss"
+                set_label(key, value)
+        return response
+    finally:
+        elapsed = (perf_counter() - started) * 1000
+        add_duration(service + "_http", elapsed)
+        # Only calculate this when the returned handler duration is known.
+        if "app" in parsed:
+            add_duration(service + "_unattributed", max(0, elapsed - parsed["app"]))
+
+
+def jobs_call(callback):
+    return downstream_call("jobs", callback)
+
+
+def enrichers_call(callback):
+    return downstream_call("enrichers", callback)
 
 
 def finish_request(response):
     if not hasattr(g, "timing_start"):
         return response
-    ms = (perf_counter() - g.timing_start) * 1000
-    values = {"core": ms, **g.timing_values}
+    elapsed = (perf_counter() - g.timing_start) * 1000
+    values = {"core": elapsed, **g.timing_values}
     parts = [f"{name};dur={value:.2f}" for name, value in values.items()]
     parts.extend(f'{name};desc="{value}"' for name, value in g.timing_labels.items())
     response.headers["Server-Timing"] = ", ".join(parts)

@@ -6,6 +6,7 @@ from typing import Optional
 from azure.servicebus import ServiceBusClient, ServiceBusMessage
 from azure.servicebus.exceptions import ServiceBusError  # broad base
 from helpers.settings import SB_CONNECTION_STRING, SB_QUEUE_NAME
+from helpers.timing import step
 
 
 def send_dispatch_message(payload: dict, corr: Optional[str] = None) -> str:
@@ -33,9 +34,14 @@ def send_dispatch_message(payload: dict, corr: Optional[str] = None) -> str:
     logging.info("SB send start queue=%s runId=%s corr=%s", SB_QUEUE_NAME, run_id, corr)
 
     try:
-        with ServiceBusClient.from_connection_string(SB_CONNECTION_STRING) as client:
-            with client.get_queue_sender(queue_name=SB_QUEUE_NAME) as sender:
-                sender.send_messages(msg)
+        with step("servicebus_client"):
+            client_context = ServiceBusClient.from_connection_string(SB_CONNECTION_STRING)
+            with client_context as client:
+                with step("servicebus_sender"):
+                    sender_context = client.get_queue_sender(queue_name=SB_QUEUE_NAME)
+                    with sender_context as sender:
+                        with step("servicebus_send"):
+                            sender.send_messages(msg)
     except ServiceBusError as e:
         logging.exception("SB send failed queue=%s runId=%s corr=%s", SB_QUEUE_NAME, run_id, corr)
         raise

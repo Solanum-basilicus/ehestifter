@@ -1,4 +1,5 @@
 import time, random, logging
+from helpers.timing import measure_call
 
 def retry_until_ready(fn, *, attempts=4, base_delay=0.75):
     last_exc = None
@@ -10,5 +11,5 @@ def retry_until_ready(fn, *, attempts=4, base_delay=0.75):
             sleep_s = base_delay * (2 ** (i - 1)) + random.uniform(0, 0.25)
             logging.warning("upstream attempt %s/%s failed: %s - sleeping %.2fs",
                             i, attempts, e, sleep_s)
-            time.sleep(sleep_s)
+            measure_call("retry_wait", lambda: time.sleep(sleep_s))
     raise last_exc

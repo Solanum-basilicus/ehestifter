@@ -1,6 +1,6 @@
 import os
 import requests
-from helpers.timing import jobs_call
+from helpers.timing import jobs_call, enrichers_call
 
 def jobs_base() -> str:
     """
@@ -72,10 +72,13 @@ def enrichers_fx_headers(context=None) -> dict:
     return h
 
 def _timed_request(url, callback):
-    # Instrument only Jobs. Users and Enrichers have separate timing contracts.
+    # Keep downstream ownership separate from the Core HTTP timer.
     jobs_url = os.getenv("EHESTIFTER_JOBS_API_BASE_URL", "").rstrip("/")
+    enrichers_url = os.getenv("EHESTIFTER_ENRICHERS_API_BASE_URL", "").rstrip("/")
     if jobs_url and (url == jobs_url or url.startswith(jobs_url + "/")):
         return jobs_call(callback)
+    if enrichers_url and (url == enrichers_url or url.startswith(enrichers_url + "/")):
+        return enrichers_call(callback)
     return callback()
 
 

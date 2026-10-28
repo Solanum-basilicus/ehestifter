@@ -73,3 +73,37 @@ test('navigation marks pending instances abandoned', () => {
   hide();
   assert.deepEqual(Array.from(perf.snapshot().intents, it => it.state), ['abandoned', 'abandoned']);
 });
+
+test('nested service steps and cold-start hints are kept with the intended operation', () => {
+  const { perf } = setup();
+  const run = perf.action('job.compatibility.run');
+  run.response({ headers: { get: () => [
+    'core;dur=9000', 'enrichers_http;dur=8700', 'enrichers_app;dur=1100',
+    'enrichers_unattributed;dur=7600', 'enrichers_process_first;desc="1"',
+    'enrichers_step_run_create;dur=200', 'enrichers_step_gateway_dispatch;dur=550',
+    'enrichers_gateway_step_servicebus_send;dur=150',
+    'enrichers_gateway_process_first;desc="1"'
+  ].join(', ') } });
+  run.finish('ok');
+  const server = perf.snapshot().intents[1].operations.action.server;
+  assert.equal(server.enrichers_unattributed, 7600);
+  assert.equal(server.labels.enrichers_process_first, '1');
+  assert.equal(server.services.enrichers.steps.run_create, 200);
+  assert.equal(server.services.enrichers.gateway.steps.servicebus_send, 150);
+  assert.equal(server.services.enrichers.gateway.process_first, '1');
+  assert.ok(perf.table()[1].slowestStages.includes('gateway.servicebus_send'));
+});
+
+test('catalog cache labels and stage durations are available together', () => {
+  const { perf } = setup();
+  perf.pageStart('details');
+  perf.pageResponse('details', { headers: { get: () =>
+    'core;dur=5000, jobs_step_catalog_load;dur=4300, jobs_step_catalog_parse;dur=1800, jobs_step_catalog_index;dur=2500, jobs_catalog_cache;desc="miss", cache;desc="miss", jobs_sql_count;desc="4"' } });
+  perf.pageFinish('details', 'ok');
+  const server = perf.snapshot().intents[0].operations.details.server;
+  assert.equal(server.services.jobs.steps.catalog_index, 2500);
+  assert.equal(server.services.jobs.catalog_cache, 'miss');
+  assert.equal(server.labels.cache, 'miss');
+  assert.equal(server.jobs_sql_count, undefined);
+  assert.equal(server.labels.jobs_sql_count, '4');
+});

@@ -8,6 +8,7 @@ import logging
 import requests
 
 from helpers.db import get_connection
+from helpers.timing import gateway_response_timing
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -277,7 +278,14 @@ def dispatch_via_gateway(run: Dict[str, Any], input_snapshot_blob_path: str, cor
         corr,
     )
 
-    r = requests.post(url, json=payload, headers=headers, timeout=10)
+    from time import perf_counter
+    start = perf_counter()
+    try:
+        r = requests.post(url, json=payload, headers=headers, timeout=10)
+    except Exception:
+        gateway_response_timing("", (perf_counter() - start) * 1000)
+        raise
+    gateway_response_timing(r.headers.get("Server-Timing", ""), (perf_counter() - start) * 1000)
     if r.status_code >= 300:
         raise Exception(
             f"Gateway dispatch failed selected_gateway={gateway_kind} "

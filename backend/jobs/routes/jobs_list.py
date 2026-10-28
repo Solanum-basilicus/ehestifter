@@ -4,6 +4,8 @@ import pyodbc
 import azure.functions as func
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, parse_qs
+from helpers.timing import step, catalog_call, record_elapsed
+from time import perf_counter
 from helpers.db import get_connection
 from helpers.history import DatetimeEncoder
 from helpers.ids import normalize_guid
@@ -82,6 +84,7 @@ def register(app: func.FunctionApp):
         conn = None
         cur = None
         try:
+            parse_start = perf_counter()
             # ----------------------------
             # Parse & validate query
             # ----------------------------
@@ -139,12 +142,14 @@ def register(app: func.FunctionApp):
                     status_code=400
                 )
 
+            record_elapsed("parse", parse_start)
             # ----------------------------
             # Dynamic SQL assembly
             # ----------------------------
             conn = get_connection()
             conn.timeout = JOBS_LIST_SQL_TIMEOUT_SECONDS
             cur = conn.cursor()
+            query_start = perf_counter()
 
             joins: list[str] = []
             where = ["j.IsDeleted = 0"]
@@ -304,7 +309,7 @@ def register(app: func.FunctionApp):
 
             if countries:
                 if location_model == "v2":
-                    catalog = load_locations_v2_catalog()
+                    catalog = catalog_call(load_locations_v2_catalog)
                     selectors = []
                     seen_selectors = set()
                     for value in countries:
@@ -449,6 +454,7 @@ def register(app: func.FunctionApp):
             else:
                 order_sql = "ORDER BY j.CreatedAt DESC"
 
+            record_elapsed("query_build", query_start)
             # ----------------------------
             # Total count
             # ----------------------------
@@ -458,8 +464,9 @@ def register(app: func.FunctionApp):
                 {join_sql}
                 WHERE {where_sql}
             """
-            cur.execute(count_sql, params_count)
-            total = int(cur.fetchone()[0] or 0)
+            with step("count_query"):
+                cur.execute(count_sql, params_count)
+                total = int(cur.fetchone()[0] or 0)
 
             # ----------------------------
             # Paged select
@@ -487,8 +494,9 @@ def register(app: func.FunctionApp):
                 OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
             """
             params_select = params + [offset, limit]
-            cur.execute(select_sql, params_select)
-            rows = cur.fetchall()
+            with step("page_query"):
+                cur.execute(select_sql, params_select)
+                rows = cur.fetchall()
 
             if not rows:
                 payload = {
@@ -501,10 +509,12 @@ def register(app: func.FunctionApp):
                     **({"minCompatibilityScore": min_score} if category == "open" else {}),
                     "items": []
                 }
-                return func.HttpResponse(
-                    json.dumps(payload, cls=DatetimeEncoder),
-                    mimetype="application/json"
-                )
+                with step("serialize"):
+                    response = func.HttpResponse(
+                        json.dumps(payload, cls=DatetimeEncoder),
+                        mimetype="application/json"
+                    )
+                return response
 
             cols = [c[0] for c in cur.description]
             jobs = [dict(zip(cols, r)) for r in rows]
@@ -520,6 +530,7 @@ def register(app: func.FunctionApp):
             loc_map = {jid: [] for jid in norm_ids}
             loc_v2_map = {jid: [] for jid in norm_ids}
             if category == "open":
+                location_start = perf_counter()
                 if norm_ids:
                     placeholders = ",".join(["?"] * len(norm_ids))
                     cur.execute(f"""
@@ -538,8 +549,10 @@ def register(app: func.FunctionApp):
                             "region": region
                         })
 
-                catalog = load_locations_v2_catalog() if location_model == "v2" else None
-                loc_v2_map = fetch_locations_v2_map(cur, norm_ids, catalog=catalog)
+                record_elapsed("location_hydration", location_start)
+                catalog = catalog_call(load_locations_v2_catalog) if location_model == "v2" else None
+                with step("location_v2_hydration"):
+                    loc_v2_map = fetch_locations_v2_map(cur, norm_ids, catalog=catalog)
 
             for j in jobs:
                 j["locations"] = loc_map.get(j["Id"], [])
@@ -555,10 +568,12 @@ def register(app: func.FunctionApp):
                     **({"minCompatibilityScore": min_score} if category == "open" else {}),
                 "items": jobs
             }
-            return func.HttpResponse(
-                json.dumps(payload, cls=DatetimeEncoder),
-                mimetype="application/json"
-            )
+            with step("serialize"):
+                response = func.HttpResponse(
+                    json.dumps(payload, cls=DatetimeEncoder),
+                    mimetype="application/json"
+                )
+            return response
 
         except pyodbc.OperationalError as exc:
             if exc.args and str(exc.args[0]) in {"HYT00", "HYT01"}:

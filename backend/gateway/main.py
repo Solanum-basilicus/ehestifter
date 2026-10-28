@@ -4,7 +4,9 @@ import logging
 import os
 from typing import Any
 
-from flask import Flask, Response, jsonify, request
+from flask import Flask, Response, jsonify, request, g
+from time import perf_counter
+from helpers.timing import begin as begin_timing, end as end_timing
 from handlers.common import require_gateway_key
 
 ##### For local testing uncomment those
@@ -44,6 +46,18 @@ def _flask_response(result) -> Response:
 
 def create_app() -> Flask:
     app = Flask(__name__)
+
+    @app.before_request
+    def start_timing():
+        g.timing_token, g.timing_measure, g.timing_start = begin_timing()
+
+    @app.after_request
+    def finish_timing(response):
+        response.headers["Server-Timing"] = g.timing_measure.header(
+            (perf_counter() - g.timing_start) * 1000
+        )
+        end_timing(g.timing_token)
+        return response
 
     @app.get("/ping")
     def ping():

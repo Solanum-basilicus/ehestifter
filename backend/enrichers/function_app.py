@@ -1,17 +1,19 @@
 import azure.functions as func
 import logging
 from routes import register_all
+from helpers.timing import TimedRoutes, timed_handler
 from timers.cleanup_runs import main as cleanup_runs_main
 from timers.dispatch_projections import main as dispatch_projections_main
 
 app = func.FunctionApp()
 
 @app.route(route="ping", methods=["GET"])
+@timed_handler
 def ping(req: func.HttpRequest) -> func.HttpResponse:
     logging.info("enrichers ping")
     return func.HttpResponse("pong", status_code=200)
 
-register_all(app)
+register_all(TimedRoutes(app))
 
 @app.function_name(name="cleanup_runs")
 @app.schedule(schedule="0 0 18 * * *", arg_name="mytimer", run_on_startup=False, use_monitor=False)

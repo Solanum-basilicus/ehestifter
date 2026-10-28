@@ -2,6 +2,7 @@
 import json
 from typing import Any, Dict
 from helpers.blob_storage import enrichments_upload_json
+from helpers.timing import step
 from helpers.db import get_connection
 
 def _update_snapshot_path(run_id: str, blob_path: str) -> None:
@@ -29,7 +30,9 @@ def write_input_snapshot(run: Dict[str, Any], snapshot: Dict[str, Any]) -> str:
     blob_path = f"runs/{run_id}/input.json"
 
     # Writes to the env-configured ENRICHMENTS_STORAGE__containerName container
-    enrichments_upload_json(blob_path, snapshot, overwrite=True)
-    _update_snapshot_path(run_id, blob_path)
+    with step("blob_upload"):
+        enrichments_upload_json(blob_path, snapshot, overwrite=True)
+    with step("snapshot_path_update"):
+        _update_snapshot_path(run_id, blob_path)
 
     return blob_path

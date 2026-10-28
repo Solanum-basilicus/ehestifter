@@ -925,7 +925,8 @@
         try{
           const qs = new URLSearchParams({ limit:String(limit) }).toString();
           const url = `/ui/jobs/${this.jobId}/history?` + qs;
-          const data = await window.fetchWithRetry(url, 4, 900);
+          const data = await window.fetchWithRetry(url, 4, 900, {},
+            initial ? (response) => window.ehPerf?.pageResponse("history", response) : null);
           this.history.items = Array.isArray(data.items) ? data.items : [];
           this.history.nextCursor = data.nextCursor || null;
           this.history.loaded = true;

@@ -28,15 +28,40 @@
     if (op && op.state === 'pending' && op.startMs === null) op.startMs = clock();
   }
 
+  function parseServerTiming(header) {
+    const fields = {};
+    const labels = {};
+    // A bounded parser for fixed metric names. No free-form metadata is stored.
+    for (const part of String(header || '').slice(0, 4096).split(',').slice(0, 55)) {
+      const numeric = part.trim().match(/^([a-z0-9_]+);dur=([0-9]+(?:\.[0-9]+)?)$/);
+      if (numeric) {
+        const value = Number(numeric[2]);
+        if (Number.isFinite(value)) fields[numeric[1]] = value;
+        continue;
+      }
+      const label = part.trim().match(/^([a-z0-9_]+);desc="([a-z0-9_]+)"$/);
+      if (label) labels[label[1]] = label[2];
+    }
+    const services = { core: { steps: {} }, jobs: { steps: {} }, enrichers: { steps: {}, gateway: { steps: {} } } };
+    function addMetric(scope, key, value) {
+      if (key.startsWith('step_')) scope.steps[key.slice(5)] = value;
+      else scope[key] = value;
+    }
+    for (const [key, value] of Object.entries({ ...fields, ...labels })) {
+      if (key.startsWith('enrichers_gateway_')) addMetric(services.enrichers.gateway, key.slice(18), value);
+      else if (key.startsWith('enrichers_')) addMetric(services.enrichers, key.slice(10), value);
+      else if (key.startsWith('jobs_')) addMetric(services.jobs, key.slice(5), value);
+      else addMetric(services.core, key, value);
+    }
+    // Keep the previous flat numeric API for existing console usage.
+    return { ...fields, labels, services };
+  }
+
   function captureResponse(id, name, response) {
     const item = running.get(id);
     if (!item || !item.operations[name] || !response || !response.headers) return;
     const header = response.headers.get('Server-Timing') || '';
-    const fields = {};
-    for (const match of header.matchAll(/([a-z_]+);dur=([0-9]+(?:\.[0-9]+)?)/g)) {
-      fields[match[1]] = Number(match[2]);
-    }
-    if (Object.keys(fields).length) item.operations[name].server = fields;
+    if (header) item.operations[name].server = parseServerTiming(header);
   }
 
   function finishOperation(id, name, state) {
@@ -87,7 +112,17 @@
   function table() {
     const rows = records.map(r => ({
       id: r.id, intent: r.name, state: r.state, durationMs: r.durationMs,
-      operations: Object.entries(r.operations).map(([k, v]) => `${k}:${v.state}`).join(' ')
+      operations: Object.entries(r.operations).map(([k, v]) => `${k}:${v.state}`).join(' '),
+      slowestStages: Object.entries(r.operations).flatMap(([operation, data]) => {
+        const services = data.server?.services;
+        if (!services) return [];
+        const stages = [
+          ...Object.entries(services.jobs.steps).map(([name, ms]) => [`${operation}.jobs.${name}`, ms]),
+          ...Object.entries(services.enrichers.steps).map(([name, ms]) => [`${operation}.enrichers.${name}`, ms]),
+          ...Object.entries(services.enrichers.gateway.steps).map(([name, ms]) => [`${operation}.gateway.${name}`, ms])
+        ];
+        return stages.sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, ms]) => `${name}=${ms}ms`);
+      }).join(' ')
     }));
     w.console.table(rows);
     return rows;

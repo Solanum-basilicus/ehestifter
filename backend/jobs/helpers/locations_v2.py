@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
+from helpers.timing import step, set_label
 
 
 DEFAULT_CATALOG_PATH = Path(__file__).resolve().parents[1] / "reference" / "locations-v2.catalog.json.gz"
@@ -271,9 +272,12 @@ def load_locations_v2_catalog() -> LocationsV2Catalog:
         raise FileNotFoundError(
             f"Locations v2 catalog not found at {path}. Build tools/build_locations_v2_catalog.py first."
         )
-    with gzip.open(path, "rt", encoding="utf-8") as source:
-        payload = json.load(source)
-    return LocationsV2Catalog(payload)
+    set_label("catalog_cache", "miss")
+    with step("catalog_parse"):
+        with gzip.open(path, "rt", encoding="utf-8") as source:
+            payload = json.load(source)
+    with step("catalog_index"):
+        return LocationsV2Catalog(payload)
 
 
 def project_legacy_locations(catalog: LocationsV2Catalog, rows: list[dict]) -> dict:

@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from helpers.http import jobs_base, jobs_fx_headers
-from helpers.timing import jobs_call
+from helpers.timing import jobs_call, measure_call
 from helpers.users import get_in_app_user_id
 import requests
 
@@ -17,7 +17,7 @@ def create_blueprint(auth):
             params["cursor"] = cursor
 
         try:
-            user_id = get_in_app_user_id(context)
+            user_id = measure_call("identity", lambda: get_in_app_user_id(context))
         except Exception:
             return jsonify({"error": "Could not resolve in-app user id"}), 401
 
@@ -29,7 +29,7 @@ def create_blueprint(auth):
             timeout=10,
         ))
         try:
-            payload = r.json()
+            payload = measure_call("json_parse", r.json)
         except ValueError:
             payload = {"error": "bad-upstream", "body": r.text[:400]}
         return jsonify(payload), r.status_code

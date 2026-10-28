@@ -6,6 +6,8 @@ import logging
 import azure.functions as func
 
 from helpers.compatibility_threshold import parse_min_compatibility_score
+from helpers.timing import step, catalog_call, record_elapsed
+from time import perf_counter
 from helpers.db import get_connection
 from helpers.history import DatetimeEncoder
 from helpers.ids import normalize_guid
@@ -49,6 +51,7 @@ def register(app: func.FunctionApp):
     def query_open_jobs(req: func.HttpRequest) -> func.HttpResponse:
         logging.info("POST /jobs/open/query")
         try:
+            parse_start = perf_counter()
             try:
                 body = _parse_body(req)
                 limit, offset = _parse_page(body)
@@ -65,7 +68,7 @@ def register(app: func.FunctionApp):
                 eligibility = None
                 catalog = None
                 if location_model == "v2" and "eligibility" in body and raw_eligibility is not None:
-                    catalog = load_locations_v2_catalog()
+                    catalog = catalog_call(load_locations_v2_catalog)
                     eligibility = validate_eligibility(catalog, raw_eligibility)
             except ValueError as exc:
                 return func.HttpResponse(str(exc), status_code=400)
@@ -81,9 +84,11 @@ def register(app: func.FunctionApp):
                 if raw_eligibility is not None and location_model != "v2":
                     logging.info("Locations v2 eligibility ignored because active model is v1")
 
+            record_elapsed("parse", parse_start)
             conn = get_connection()
             cur = conn.cursor()
 
+            query_start = perf_counter()
             from_sql = """
                 FROM dbo.JobOfferings j
                 LEFT JOIN dbo.UserJobStatus us
@@ -108,11 +113,14 @@ def register(app: func.FunctionApp):
                 *eligibility_params,
             ]
 
-            cur.execute(f"SELECT COUNT(*) {from_sql} WHERE {where_sql}", query_params)
-            total = int(cur.fetchone()[0] or 0)
+            record_elapsed("query_build", query_start)
+            with step("count_query"):
+                cur.execute(f"SELECT COUNT(*) {from_sql} WHERE {where_sql}", query_params)
+                total = int(cur.fetchone()[0] or 0)
 
-            cur.execute(
-                f"""
+            with step("page_query"):
+                cur.execute(
+                    f"""
                 SELECT
                     j.Id,
                     j.Title,
@@ -131,9 +139,9 @@ def register(app: func.FunctionApp):
                 ORDER BY j.CreatedAt DESC
                 OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
                 """,
-                [*query_params, offset, limit],
-            )
-            rows = cur.fetchall()
+                    [*query_params, offset, limit],
+                )
+                rows = cur.fetchall()
             cols = [column[0] for column in cur.description]
             jobs = [dict(zip(cols, row)) for row in rows]
 
@@ -167,8 +175,9 @@ def register(app: func.FunctionApp):
 
             read_catalog = catalog
             if location_model == "v2" and read_catalog is None:
-                read_catalog = load_locations_v2_catalog()
-            v2_map = fetch_locations_v2_map(cur, job_ids, catalog=read_catalog)
+                read_catalog = catalog_call(load_locations_v2_catalog)
+            with step("location_v2_hydration"):
+                v2_map = fetch_locations_v2_map(cur, job_ids, catalog=read_catalog)
             for job in jobs:
                 job["locations"] = v1_map.get(job["Id"], [])
                 job["locationsV2"] = v2_map.get(job["Id"], [])
@@ -183,11 +192,13 @@ def register(app: func.FunctionApp):
                 "minCompatibilityScore": min_score,
                 "items": jobs,
             }
-            return func.HttpResponse(
-                json.dumps(payload, cls=DatetimeEncoder),
-                mimetype="application/json",
-                status_code=200,
-            )
+            with step("serialize"):
+                response = func.HttpResponse(
+                    json.dumps(payload, cls=DatetimeEncoder),
+                    mimetype="application/json",
+                    status_code=200,
+                )
+            return response
         except Exception as exc:
             logging.exception("POST /jobs/open/query error")
             return func.HttpResponse(f"Error: {str(exc)}", status_code=500)

@@ -1216,40 +1216,65 @@ Known tradeoff:
 - this is accepted for now because implementation is small and product action still wins if Analytics fails,
 - if UX is affected, replace or supplement this with asynchronous local emission, for example an in-process/background queue or a local durable cache/outbox that drains to Analytics later.
 
-### 11.8 Jobs and Web Core performance timing (issues #22 and #28)
+### 11.8 Performance diagnostics (Jobs, Web Core, Enrichers, Gateway; issues #22 and #28)
 
-Jobs HTTP routes, including ping, send a `Server-Timing` response header with:
-- `app`: time inside the route handler, in milliseconds;
-- `dbconn`: total time spent getting SQL connections;
-- `sql`: total time in SQL cursor execute, executemany, and fetch calls;
-- `sql_count`: number of execute or executemany calls.
+Diagnostics use response `Server-Timing` headers. They do not change domain response
+bodies, make new network requests, or store historical measurements. Each process
+owns its collector; there is no cross-service runtime dependency. Jobs, Enrichers,
+and Azure Gateway use request-local Python `ContextVar` collectors. Web Core and
+Cloud Run Gateway use request-local Flask data; the Gateway's shared dispatch
+handler records Service Bus stages for both runtime types.
 
-These times describe client-side driver calls, not SQL Server CPU or the full Azure
-Functions host startup. Jobs uses one request-local collector. It does not write
-metrics to SQL, Blob storage, or Analytics. The response JSON does not change.
+- **Jobs:** `app`, `sql`, `dbconn`, `sql_count`, plus `step_*` fields. GET
+  `/jobs/{id}` measures `job_row`, `legacy_locations`, `catalog_load`,
+  `locations_v2`, `work_time`, and `serialize`. The uncached v2 loader measures
+  `catalog_parse` and `catalog_index`. `catalog_cache` is `hit` or `miss`.
+  GET `/jobs` and POST `/jobs/open/query` measure parsing, query construction,
+  count/page queries, catalog use, and selected location hydration/serialization.
+- **Web Core:** `core`, `identity`, `jobs_http`, `enrichers_http`, Jobs and
+  Enrichers handler/stage fields prefixed with their service name, `cache`,
+  `retry_wait`, `sanitize`, `json_parse`, and existing `analytics` timing.
+  `jobs_unattributed` and `enrichers_unattributed` are the non-negative
+  differences between the HTTP attempt and a reported upstream handler time.
+- **Enrichers:** `app` and `step_*` fields for run creation, analytics,
+  Jobs/CV snapshot requests, snapshot validation, Blob upload, snapshot path
+  update, Gateway dispatch, queued-status update, and run readback. The
+  Gateway response contributes `gateway_http`, `gateway_app`, selected
+  `gateway_step_*` values, and `gateway_unattributed`.
+- **Gateway:** `app`, `step_servicebus_dispatch`, `step_servicebus_client`,
+  `step_servicebus_sender`, and `step_servicebus_send`. Its timings include
+  Service Bus client setup and context-manager teardown as marked by stages.
+- **Cold-start hints:** `process_age` in milliseconds since module import and
+  `process_first` with `desc="1"` on the first instrumented request in a
+  process. Health checks can be first requests. Neither field proves a cold
+  start. A downstream `*_unattributed` value includes network, routing, host
+  startup, and other time outside the handler, and is **not** cold-start time.
 
-Web Core sends `core;dur` on HTTP responses. It measures outgoing Jobs calls as
-`jobs_http`, reads numeric Jobs `Server-Timing` values into `jobs_app`, `jobs_sql`,
-and `jobs_dbconn`, and reports the Jobs HTTP call count as `attempts`. A cached
-job-detail response has `cache;desc="hit"` and no new Jobs call. Detail view
-Analytics time is `analytics`. Child times can overlap with parent times: do not
-add `jobs_app` to `jobs_http` or `core`. A missing Jobs field means the upstream
-did not provide it. Unhandled Functions host failures might omit timing headers.
+Stages can include other timed stages and SQL. Do **not** add parent and child
+measurements. The `sql` metric measures Python driver execute/fetch calls, not
+SQL Server CPU. Unhandled host failures and transport errors can omit upstream
+handler fields; the caller still measures HTTP elapsed time. Missing fields
+mean unmeasured or inapplicable, not zero. Reused Enrichers runs skip snapshot
+and dispatch stages; no zero-valued placeholders are created. A Gateway call
+that times out has HTTP duration but no Gateway handler duration.
 
-The job detail page loads `static/js/job-intents.js` to measure browser use cases.
-The `job.details.load` intent starts at navigation and finishes when the first
-HTML, user identity, details, status, history, and compatibility loads have all
-settled. Valid empty results count as success. Other errors produce `partial`
-or `failed` states. `job.status.change` and `job.compatibility.run` are separate
-intents and can overlap the page load. The compatibility run ends after queue
-confirmation and visible feedback, not after LLM processing. Later refreshes do
-not extend first-load measurements. The browser keeps up to 50 records in memory
-only and does not emit analytics events for timing.
+The job detail browser records `job.details.load`, `job.status.change`, and
+`job.compatibility.run` as independent intents. The page load completes when
+initial HTML, identity, details, status, history, and compatibility have settled.
+Its timing is not a sum of parallel tasks. Compatibility run timing ends after
+queue submission and visible feedback, not after worker execution. The frontend
+keeps the existing flat numeric `server` fields and adds `server.labels` and
+`server.services` with nested stage measurements. `ehPerf.snapshot()` returns
+all records in memory (up to 50); `ehPerf.table()` displays each intent and
+its slowest collected service stages. History fetches now also capture their
+server response timing through the existing retry helper.
 
-Inspect the browser data from the job page DevTools Console with
-`ehPerf.snapshot()` or `ehPerf.table()`. See DevTools Network for per-response
-`Server-Timing` and waterfall data. Browser history is lost on navigation or
-reload; persistent time series and Users API timing are separate work.
+Use browser DevTools Network timing and `ehPerf.snapshot()` together: the client
+can see host startup only as part of request elapsed time, while the server can
+measure work after handler entry. Metrics are ephemeral, not published to
+Analytics or Mixpanel. Do not add job or user information to labels. See
+[`docs/performance-diagnostics.md`](performance-diagnostics.md) for inspection
+examples, known gaps, and deployment verification steps.
 
 ---
 
