@@ -282,3 +282,52 @@ def test_list_country_and_bulk_timing_fields_are_forwarded():
         "step_bulk_query": 6,
     }
     assert labels == {"country_lookup_source": "index"}
+
+
+def test_core_forwards_bounded_jobs_startup_measurements():
+    from helpers.timing import jobs_call
+
+    class StartResponse:
+        headers = {"Server-Timing": (
+            'app;dur=150, process_first;desc="1", process_tag;desc="abcdef12", '
+            'startup_azure;dur=80, startup_routes;dur=200, '
+            'startup_register;dur=15, startup_total;dur=295, '
+            'unknown_metric;dur=1000'
+        )}
+
+    app = Flask(__name__)
+    app.before_request(begin_request)
+    app.after_request(finish_request)
+
+    @app.get('/startup')
+    def route():
+        jobs_call(lambda: StartResponse())
+        jobs_call(lambda: StartResponse())
+        return {'ok': True}
+
+    header = app.test_client().get('/startup').headers['Server-Timing']
+    assert 'jobs_startup_total;dur=295.00' in header  # Process value, not sum of attempts.
+    assert 'jobs_startup_azure;dur=80.00' in header
+    assert 'jobs_startup_routes;dur=200.00' in header
+    assert 'jobs_startup_register;dur=15.00' in header
+    assert 'jobs_process_tag;desc="abcdef12"' in header
+    assert 'jobs_process_first;desc="1"' in header
+    assert 'unknown_metric' not in header
+
+
+def test_core_rejects_invalid_process_tag():
+    from helpers.timing import jobs_call
+
+    class Invalid:
+        headers = {'Server-Timing': 'app;dur=1, process_tag;desc="brokenid123456"'}
+
+    app = Flask(__name__)
+    app.before_request(begin_request)
+    app.after_request(finish_request)
+
+    @app.get('/bad-tag')
+    def route():
+        jobs_call(lambda: Invalid())
+        return {'ok': True}
+
+    assert 'jobs_process_tag' not in app.test_client().get('/bad-tag').headers['Server-Timing']

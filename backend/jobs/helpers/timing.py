@@ -5,12 +5,28 @@ from contextlib import contextmanager
 from threading import Lock
 from functools import wraps
 from time import perf_counter
+from secrets import token_hex
 
 
 _current = ContextVar("jobs_request_timing", default=None)
 _process_started = perf_counter()
 _first_lock = Lock()
 _seen_request = False
+# Random, process-local correlation tag. It is not an Azure instance ID.
+_process_tag = token_hex(4)
+_startup_values = {}
+
+
+def configure_startup(*, azure_ms, routes_ms, register_ms):
+    """Store module-load timings after function_app registers its routes."""
+    global _startup_values
+    _startup_values = {
+        "startup_azure": azure_ms,
+        "startup_routes": routes_ms,
+        "startup_register": register_ms,
+        "startup_total": azure_ms + routes_ms + register_ms,
+    }
+
 
 # Fixed names only. Do not put request data in response headers.
 STEPS = frozenset({
@@ -65,7 +81,9 @@ class Measurements:
             f"process_age;dur={self.process_age_ms:.2f}",
             f'sql_count;desc="{self.sql_count}"',
             f'process_first;desc="{int(self.process_first)}"',
+            f'process_tag;desc="{_process_tag}"',
         ]
+        parts.extend(f"{key};dur={value:.2f}" for key, value in _startup_values.items())
         parts.extend(f"{key};dur={value:.2f}" for key, value in self.steps.items())
         parts.extend(f'{key};desc="{value}"' for key, value in self.labels.items())
         return ", ".join(parts)

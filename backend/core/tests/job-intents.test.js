@@ -141,3 +141,15 @@ test('enrichers nested Users timing does not replace CV snapshot stage', () => {
   assert.equal(server.services.enrichers.users.steps.blob_download, 280);
   assert.equal(server.services.enrichers.users.process_first, '1');
 });
+
+test('details metrics retain Jobs startup fields', () => {
+  const { perf } = setup();
+  perf.pageStart('details');
+  perf.pageResponse('details', { headers: { get: () => (
+    'jobs_startup_total;dur=52, jobs_process_tag;desc="cafefeed", jobs_process_first;desc="1"'
+  ) } });
+  perf.pageFinish('details', 'ok');
+  const jobs = perf.snapshot().intents[0].operations.details.server.services.jobs;
+  assert.equal(jobs.startup_total, 52);
+  assert.equal(jobs.process_tag, 'cafefeed');
+});

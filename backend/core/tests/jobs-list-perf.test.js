@@ -54,3 +54,21 @@ test('new list request abandons the earlier record', () => {
   assert.equal(intents[0].state, 'abandoned');
   assert.equal(intents[1].state, 'failed');
 });
+
+test('list metrics retain process startup and correlation fields', () => {
+  const { perf } = setup();
+  const run = perf.listStart('my');
+  run.start('locations');
+  run.response('locations', { headers: { get: () => (
+    'core;dur=1800, jobs_http;dur=1790, jobs_unattributed;dur=1590, ' +
+    'jobs_startup_azure;dur=90, jobs_startup_routes;dur=100, ' +
+    'jobs_startup_register;dur=15, jobs_startup_total;dur=205, ' +
+    'jobs_process_tag;desc="deadbeef", jobs_process_first;desc="1"'
+  ) } });
+  run.finish('locations', 'ok');
+  run.close();
+  const server = perf.snapshot().intents[0].operations.locations.server;
+  assert.equal(server.services.jobs.startup_total, 205);
+  assert.equal(server.services.jobs.process_tag, 'deadbeef');
+  assert.equal(server.services.jobs.unattributed, 1590);
+});

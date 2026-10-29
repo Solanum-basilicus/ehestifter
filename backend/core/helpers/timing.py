@@ -19,7 +19,8 @@ _JOBS_NUMBERS = frozenset({
     "step_work_time", "step_serialize", "step_parse", "step_query_build",
     "step_count_query", "step_page_query", "step_location_hydration", "step_location_v2_hydration",
     "step_country_lookup", "step_location_v2_query", "step_bulk_parse", "step_bulk_query",
-    "step_bulk_format",
+    "step_bulk_format", "startup_azure", "startup_routes",
+    "startup_register", "startup_total",
 })
 _ENRICHERS_NUMBERS = frozenset({
     "app", "process_age", "step_run_create", "step_run_readback", "step_analytics",
@@ -39,7 +40,7 @@ _USERS_NUMBERS = frozenset({
     "step_cv_batch_download", "step_readiness", "step_analytics",
     "step_serialize", "step_user_lookup",
 })
-_LABELS = frozenset({"process_first", "catalog_cache", "sql_count", "location_display", "country_lookup_source"})
+_LABELS = frozenset({"process_first", "catalog_cache", "sql_count", "location_display", "country_lookup_source", "process_tag"})
 _ENRICHERS_LABELS = frozenset({
     "process_first", "gateway_process_first", "users_process_first", "users_sql_count",
 })
@@ -98,6 +99,8 @@ def _read_upstream(header, numbers, labels):
                 continue
             if key in ("location_display", "country_lookup_source") and value not in ("index", "fallback", "stored"):
                 continue
+            if key == "process_tag" and (len(value) != 8 or any(ch not in "0123456789abcdef" for ch in value)):
+                continue
             texts[key] = value
     return values, texts
 
@@ -120,7 +123,8 @@ def downstream_call(service, callback):
         if has_request_context() and hasattr(g, "timing_values"):
             for name, value in parsed.items():
                 key = service + "_" + name
-                if name in ("process_age", "gateway_process_age", "users_process_age"):
+                if name in ("process_age", "gateway_process_age", "users_process_age") or name.startswith("startup_"):
+                    # Startup values are process observations, not request totals.
                     # Process age is one observation, not a duration to add.
                     g.timing_values[key] = value
                 else:

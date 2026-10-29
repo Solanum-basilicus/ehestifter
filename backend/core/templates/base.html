@@ -80,11 +80,11 @@
       inited = true;
       const initial = firstUserLoad;
       firstUserLoad = false;
-      if (initial) window.ehPerf?.pageStart("user");
+      if (initial) window.ehPerf?.pageStart?.("user");
       let succeeded = false;
       try {
         const data = await window.fetchWithRetry('/ui/users/me', 4, 750, {},
-          initial ? (response) => window.ehPerf?.pageResponse('user', response) : null);
+          initial ? (response) => window.ehPerf?.pageResponse?.('user', response) : null);
         if (data && !data.error) {
           const username = data.name || data.preferred_username || data.username || data.email || 'me';
           setUser('To profile: ' + username, "{{ url_for('me') }}");
@@ -109,7 +109,7 @@
       } finally {
         // allow manual retry even after first pass
         inited = false;
-        if (initial) window.ehPerf?.pageFinish("user", succeeded ? "ok" : "error");
+        if (initial) window.ehPerf?.pageFinish?.("user", succeeded ? "ok" : "error");
       }
     }
 

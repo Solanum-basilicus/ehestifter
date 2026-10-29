@@ -189,3 +189,54 @@ endpoints from the development node. Run them according to each service's
 existing test procedure after deployment. They must not require timing values
 that are stable across runs. A regression in the request body or status code
 is a release blocker.
+
+## Experimental Jobs startup probe (issue #40 follow-up)
+
+The Jobs `function_app.py` records three module-initialization intervals:
+
+- `startup_azure`: import of `azure.functions` and `logging` after the first
+  timer starts.
+- `startup_routes`: import of the Jobs route registry and timing helper.
+- `startup_register`: create the FunctionApp, define `ping`, and register routes.
+
+`startup_total` is the sum of these three intervals. They are **one-time
+process observations**, not stages within an HTTP request. Core passes them
+through as `jobs_startup_azure`, `jobs_startup_routes`,
+`jobs_startup_register`, and `jobs_startup_total` in `Server-Timing`. The
+`jobs_process_tag` label is a random eight-character hexadecimal tag generated
+once in the Python worker. Use the same tag across responses to identify the
+same Jobs Python process. It is not an Azure host instance ID, request ID,
+user ID, or stable identity across restarts. A Core retry records the last
+reported process tag and startup values; it retains `jobs_process_first=1` if
+any attempt was first. For a clean comparison, use requests with `attempts=1`.
+
+The timer **does not** include Azure platform allocation, Functions host
+startup, Python worker startup before `function_app.py`, HTTP routing, TLS,
+network transport, or Core's own startup. `jobs_unattributed` is still the
+nonnegative difference between Core-observed Jobs HTTP duration and Jobs
+handler duration; it is not an exact cold-start measurement. Do **not** subtract
+`startup_total` from `jobs_unattributed` and label the remainder platform
+startup: module import can occur before the HTTP request, or overlap other
+work. The probe cannot observe a startup that fails before Python route entry.
+
+### Suggested experiment
+
+1. Keep `EHESTIFTER_JOBS_LIST_CACHE_ENABLED=false` in Core for the test only.
+2. After Jobs is idle, open My Jobs and save the full `ehPerf.snapshot()`.
+   Look at `operations.locations.server.services.jobs`, including `http`,
+   `app`, `unattributed`, `process_first`, `process_tag`, `process_age`, and
+   `startup_*`. The first measured request can be another route, such as ping.
+3. Open another list without an idle period and compare. Check that the tag
+   remains the same if the same Python worker handled both requests. Different
+   tags mean different observed Python processes, not necessarily scale-to-zero.
+4. Repeat across several cold and warm intervals. Compare the three import
+   stages with the observed HTTP gap. Use Azure Functions host/Application
+   Insights telemetry around the same time for platform-side evidence, and
+   check for missing measurements due to telemetry sampling.
+5. If module import is negligible compared with the gap, do not reorganize
+   the routes only to address cold starts. If one import stage dominates,
+   profile it separately before making an architectural change.
+
+This scaffold adds no network calls, database writes, dependencies, or
+persistent logs. Remove the `startup_*` fields and the process tag after
+analysis if they do not help; they are not part of the stable API contract.
