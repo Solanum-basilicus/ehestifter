@@ -105,3 +105,36 @@ def test_jobs_list_does_not_retry_connection_failures(monkeypatch, client, error
     assert len(calls) == 1
     assert not saved
     assert not events
+
+
+def test_list_cache_can_be_disabled_without_changing_source(monkeypatch, client):
+    web_client, saved, events = client
+    cache_reads = []
+    calls = []
+    monkeypatch.setenv("EHESTIFTER_JOBS_LIST_CACHE_ENABLED", "false")
+    monkeypatch.setattr(proxy, "memo_get", lambda *args, **kwargs: cache_reads.append(1))
+    monkeypatch.setattr(proxy, "fx_get_json_safe", lambda *args, **kwargs: (
+        calls.append(1) or FakeResponse(), {"items": [], "total": 0}
+    ))
+
+    for _ in range(2):
+        response = web_client.get("/ui/jobs?category=my")
+        assert response.status_code == 200
+
+    assert not cache_reads
+    assert not saved
+    assert len(calls) == 2
+    assert len(events) == 2
+
+
+def test_list_cache_stays_enabled_by_default(monkeypatch, client):
+    web_client, saved, _ = client
+    monkeypatch.delenv("EHESTIFTER_JOBS_LIST_CACHE_ENABLED", raising=False)
+    monkeypatch.setattr(proxy, "memo_get", lambda *args, **kwargs: {"items": [], "total": 3})
+    monkeypatch.setattr(proxy, "fx_get_json_safe", lambda *args, **kwargs: (
+        __import__("pytest").fail("Cache hit must not call Jobs")
+    ))
+
+    response = web_client.get("/ui/jobs")
+    assert response.get_json()["total"] == 3
+    assert not saved

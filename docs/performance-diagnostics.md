@@ -45,6 +45,54 @@ operation with several browser retries. Core measures each Jobs attempt it
 makes; its `attempts` and `retry_wait` help identify retry overhead. Client
 network or browser DOM time is outside Core `core` duration.
 
+## Inspect job lists (issue #40)
+
+1. Open **My Jobs**, **All Jobs**, or **Open Opportunities**. In browser
+   DevTools, run `ehPerf.snapshot()` after the status changes to **Ready**.
+   Each category/filter/page change creates a new `job.list.load` intent.
+2. Inspect `operations.list.server.services.jobs.steps`. In Jobs, `count_query`
+   and `page_query` are separate SQL operations. The Open Opportunities list also
+   has `location_hydration`, `location_v2_query`, and `location_lookup`.
+   Country filters add `country_lookup` and `country_lookup_source=index`.
+3. Inspect `operations.status`, `operations.compatibility`, and
+   `operations.locations` for their own Core and Jobs server metrics. Location
+   hydration is skipped on Open Opportunities, which includes locations in the
+   list response. An empty list skips all three bulk requests.
+4. In Core, inspect `identity`, `cache_get`, `cache_put`, `analytics`,
+   `response_build`, `jobs_http`, and `jobs_unattributed`. Bulk requests also
+   report `body_parse` and `identity`. `jobs_app`, `jobs_sql`, and `jobs_dbconn`
+   are Jobs measurements, not additional Core work.
+5. To bypass only the Core **job-list** memo cache during an experiment, set
+   `EHESTIFTER_JOBS_LIST_CACHE_ENABLED=false` in the Web Core environment, then
+   restart or redeploy Core to apply the setting. `cache=bypass` and
+   `list_cache_enabled=0` appear on responses. Unset the variable or set it to
+   `true` to restore the default 30-second cache. This does not disable the
+   Jobs catalog/index cache or the Users session cache.
+
+The list first renders cards, then reads status, compatibility, and (for My/All)
+locations. **Ready** appears after those bulk requests settle and the UI has
+applied their data or fallback states. Browser elapsed time includes retries
+and rendering. Use it for request order, not as a substitute for the service
+step durations. A browser retry can replace the previous `Server-Timing` sample
+for that operation. `job.list.load` records are bounded and stored only in the
+current browser page; no new logging or analytics events are sent.
+
+The Jobs indexed presentation uses the same packaged SQLite index as job
+GET-by-ID. It looks up canonical IDs, leaves missing IDs stored, and preserves
+stored catalog versions and SQL row order. A new generated table contains the
+exact country aliases used by the list filter. Rebuild the index using
+`python tools/build_locations_v2_catalog.py --index-only` for this change.
+An old index without the new table uses the full catalog fallback for country
+filters. No canonical write validation is changed. `location_display=fallback`
+and `country_lookup_source=fallback` indicate an index failure. A fallback may
+reintroduce multi-second catalog parsing, so treat repeated fallbacks as a
+problem to fix, not as acceptable warm performance.
+
+The COUNT query remains part of the list endpoint. Moving it to a later
+request is a separate design decision because it changes pagination and total
+count behavior. Page changes keep the previous cards visible during loading,
+but hide the old pagination controls and count until the new list arrives.
+
 ## Inspect compatibility-run submission
 
 1. Click **Run compatibility** on a job details page.

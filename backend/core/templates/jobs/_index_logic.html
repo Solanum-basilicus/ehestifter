@@ -22,7 +22,7 @@
     return dfDMY.format(d);
   }
 
-  async function postWithRetry(url, body, attempts = 4) {
+  async function postWithRetry(url, body, attempts = 4, onResponse = null) {
     let delay = 500;
     for (let i = 1; i <= attempts; i++) {
       try {
@@ -32,6 +32,7 @@
           credentials: 'same-origin',
           body: JSON.stringify(body),
         });
+        if (typeof onResponse === 'function') onResponse(resp);
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         return await resp.json();
       } catch (err) {
@@ -434,6 +435,16 @@
     });
   }
 
+  function markPaginationPending() {
+    // Do not show the old page total while a new filter or page is loading.
+    const line = paginationEl.querySelector('#pageline');
+    if (line) line.textContent = 'Updating totals…';
+    for (const link of paginationEl.querySelectorAll('.page-link')) {
+      link.style.visibility = 'hidden';
+      link.setAttribute('aria-disabled', 'true');
+    }
+  }
+
   function renderEmptyMyOnboard() {
     listEl.innerHTML = `
       <div class="card" style="padding:16px;">
@@ -619,11 +630,12 @@
     renderStatusOptions();
   }
 
-  async function loadStatusesFor(ids, generation) {
+  async function loadStatusesFor(ids, generation, perf = null) {
     if (!ids || !ids.length) return;
 
     try {
-      const data = await postWithRetry('/ui/jobs/status', { jobIds: ids }, 4);
+      const data = await postWithRetry('/ui/jobs/status', { jobIds: ids }, 4,
+        response => perf?.response('status', response));
       if (generation !== listLoadGeneration) return;
       const map = (data && data.statuses) || {};
 
@@ -635,6 +647,7 @@
         el.textContent = raw || 'Unset';
         el.dataset.k = window.Status.statusKey(raw);
       }
+      perf?.finish('status', 'ok');
     } catch (_) {
       if (generation !== listLoadGeneration) return;
       for (const id of ids) {
@@ -643,6 +656,7 @@
         el.textContent = 'unavailable';
         el.dataset.k = 'unset';
       }
+      perf?.finish('status', 'error');
     }
   }
 
@@ -668,13 +682,14 @@
     });
   }
 
-  async function loadLocationsFor(items, generation) {
+  async function loadLocationsFor(items, generation, perf = null) {
     if (!items || !items.length) return;
     const ids = items.map(item => item.Id).filter(Boolean);
     if (!ids.length) return;
 
     try {
-      const data = await postWithRetry('/ui/jobs/locations', { jobIds: ids }, 4);
+      const data = await postWithRetry('/ui/jobs/locations', { jobIds: ids }, 4,
+        response => perf?.response('locations', response));
       if (generation !== listLoadGeneration) return;
 
       const locationModel = data?.activeLocationModel === 'v2' ? 'v2' : 'v1';
@@ -691,10 +706,12 @@
           locationsV2: locationsV2[id] ?? locationsV2[key] ?? [],
         }, locationModel);
       }
+      perf?.finish('locations', 'ok');
     } catch (error) {
       if (generation !== listLoadGeneration) return;
       console.warn('Location hydration failed', error);
       for (const item of items) renderLocationStateFor(item, 'unavailable');
+      perf?.finish('locations', 'error');
     }
   }
 
@@ -739,11 +756,12 @@
     wrap.classList.remove('hidden');
   }
 
-  async function loadCompatibilitiesFor(ids, generation) {
+  async function loadCompatibilitiesFor(ids, generation, perf = null) {
     if (!ids || !ids.length) return;
 
     try {
-      const data = await postWithRetry('/ui/jobs/compatibility', { jobIds: ids }, 4);
+      const data = await postWithRetry('/ui/jobs/compatibility', { jobIds: ids }, 4,
+        response => perf?.response('compatibility', response));
       if (generation !== listLoadGeneration) return;
       const map = (data && data.compatibility) || {};
 
@@ -751,9 +769,11 @@
         const compat = map[id] ?? map[id?.toLowerCase?.()] ?? null;
         renderCompatibilityFor(id, compat);
       }
+      perf?.finish('compatibility', 'ok');
     } catch (_) {
       if (generation !== listLoadGeneration) return;
       for (const id of ids) hideCompatibilityFor(id);
+      perf?.finish('compatibility', 'error');
     }
   }
 
@@ -765,20 +785,25 @@
     }
     const generation = ++listLoadGeneration;
     const loadCategory = currentCategory;
+    const perf = window.ehPerf?.listStart(loadCategory);
     const requestedScore = scoreAttempt ? scoreAttempt.value : appliedScore;
     setLoading(true, `Loading page ${page}…`);
+    markPaginationPending();
+    perf?.start('list');
     prepareOpenLoader(generation, loadCategory);
 
     try {
       const url = buildApiUrl(requestedScore);
       syncUrl();
 
-      const data = await window.Net.fetchJsonOnce(url);
+      const data = await window.Net.fetchJsonOnce(url, {},
+        response => perf?.response('list', response));
       if (generation !== listLoadGeneration) return;
 
       if (!data || data.error) {
         throw new Error((data && data.message) || 'Jobs service is warming up');
       }
+      perf?.finish('list', 'ok');
 
       if (loadCategory === 'open') {
         const confirmedScore = window.ScoreThreshold.validScore(data.minCompatibilityScore);
@@ -815,25 +840,36 @@
         if (currentCategory === 'my' && defaultFilters) renderEmptyMyOnboard();
         else renderEmptyGeneric();
 
-        setStatus('Ready', { ephemeral: true });
         renderPagination();
         afterStateChangedRender();
+        perf?.finish('status', 'skipped');
+        perf?.finish('compatibility', 'skipped');
+        perf?.finish('locations', 'skipped');
+        setStatus('Ready', { ephemeral: true });
         return;
       }
 
       renderCards(items);
       afterStateChangedRender();
       renderPagination();
-      setStatus('Ready', { ephemeral: true });
 
       const jobIds = items.map(x => x.Id).filter(Boolean);
-      loadStatusesFor(jobIds, generation);
-      loadCompatibilitiesFor(jobIds, generation);
-      if (loadCategory !== 'open') loadLocationsFor(items, generation);
+      perf?.start('status');
+      perf?.start('compatibility');
+      if (loadCategory !== 'open') perf?.start('locations');
+      else perf?.finish('locations', 'skipped');
+      await Promise.all([
+        loadStatusesFor(jobIds, generation, perf),
+        loadCompatibilitiesFor(jobIds, generation, perf),
+        ...(loadCategory === 'open' ? [] : [loadLocationsFor(items, generation, perf)]),
+      ]);
+      if (generation !== listLoadGeneration) return;
+      setStatus('Ready', { ephemeral: true });
 
     } catch (e) {
       if (generation !== listLoadGeneration) return;
       console.error('loadPage error', e);
+      perf?.finish('list', 'error');
       if (scoreAttempt && pendingScoreApply === scoreAttempt) {
         pendingScoreApply = null;
         page = scoreAttempt.previousPage;
@@ -853,6 +889,9 @@
       });
       setStatus('Failed to load', { error: true, ephemeral: false });
     } finally {
+      if (generation === listLoadGeneration) {
+        perf?.close();
+      }
       finishListLoad(generation);
     }
   }

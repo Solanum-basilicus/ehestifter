@@ -686,6 +686,11 @@ def _write_search_index(path: Path, catalog: dict) -> None:
                 location_id TEXT NOT NULL,
                 PRIMARY KEY (search_name, location_id)
             ) WITHOUT ROWID;
+            CREATE TABLE country_aliases (
+                alias_key TEXT NOT NULL,
+                location_id TEXT NOT NULL,
+                PRIMARY KEY (alias_key, location_id)
+            ) WITHOUT ROWID;
             CREATE TABLE country_regions (
                 country_id TEXT NOT NULL,
                 region_id TEXT NOT NULL,
@@ -701,6 +706,7 @@ def _write_search_index(path: Path, catalog: dict) -> None:
 
         location_rows = []
         name_rows = []
+        country_alias_rows = []
         country_region_rows = []
         for item in by_id.values():
             (
@@ -742,6 +748,14 @@ def _write_search_index(path: Path, catalog: dict) -> None:
             )
             name_rows.extend((name, item["id"]) for name in search_names)
             if item["kind"] == "country":
+                exact_names = {
+                    re.sub(r"\s+", " ", str(raw or "").strip()).casefold()
+                    for raw in [item.get("name"), *item.get("aliases", [])]
+                }
+                country_alias_rows.extend(
+                    (name, item["id"]) for name in exact_names if name
+                )
+            if item["kind"] == "country":
                 for ancestor_id in item.get("ancestors", []):
                     ancestor = by_id.get(ancestor_id)
                     if not ancestor or ancestor.get("kind") != "globalRegion":
@@ -761,6 +775,10 @@ def _write_search_index(path: Path, catalog: dict) -> None:
         cursor.executemany(
             "INSERT INTO names VALUES (?, ?)",
             name_rows,
+        )
+        cursor.executemany(
+            "INSERT INTO country_aliases VALUES (?, ?)",
+            country_alias_rows,
         )
         cursor.executemany(
             "INSERT INTO country_regions VALUES (?, ?, ?)",
@@ -831,6 +849,8 @@ def _verify_search_index(path: Path, catalog: dict) -> None:
             )
         if conn.execute("SELECT COUNT(*) FROM names").fetchone()[0] < expected_count:
             raise ValueError("Locations v2 search index is missing search names")
+        if conn.execute("SELECT COUNT(*) FROM country_aliases").fetchone()[0] < len(catalog["countries"]):
+            raise ValueError("Locations v2 search index is missing exact country aliases")
 
 
 def _build_index_from_catalog(

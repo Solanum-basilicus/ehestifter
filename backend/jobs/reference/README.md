@@ -5,8 +5,7 @@
 reference year. Keep both files in Git as one release.
 
 `locations-v2.search.sqlite3` is a generated, read-only selector index. It is not
-tracked by Git. It contains search and presentation data, and country-to-region
-relationships. It is not an independent geography source.
+tracked by Git. It contains search and presentation data, country-to-region relationships, and exact country aliases for the list filter. It is not an independent geography source.
 
 From the repository root, build the index before local Jobs tests or a manual
 deployment:

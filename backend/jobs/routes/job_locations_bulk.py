@@ -2,6 +2,7 @@
 
 import json
 import logging
+import sqlite3
 
 import azure.functions as func
 
@@ -9,7 +10,13 @@ from helpers.db import get_connection
 from helpers.ids import is_guid, normalize_guid
 from helpers.location_mode import active_location_model
 from helpers.locations_v2 import load_locations_v2_catalog
-from helpers.locations_v2_store import fetch_locations_v2_map
+from helpers.locations_v2_store import (
+    fetch_locations_v2_map,
+    present_locations_v2_map_from_catalog,
+    present_locations_v2_map_from_index,
+)
+from helpers.locations_search_index import load_locations_search_index
+from helpers.timing import step, catalog_call, set_label
 
 
 MAX_JOB_IDS = 500
@@ -81,8 +88,10 @@ def register(app: func.FunctionApp):
     @app.route(route="jobs/locations", methods=["POST"])
     def post_job_locations(req: func.HttpRequest) -> func.HttpResponse:
         logging.info("POST /jobs/locations")
+        conn = None
         try:
-            job_ids, error = _parse_job_ids(req)
+            with step("bulk_parse"):
+                job_ids, error = _parse_job_ids(req)
             if error:
                 return func.HttpResponse(error, status_code=400)
 
@@ -93,22 +102,45 @@ def register(app: func.FunctionApp):
             if job_ids:
                 conn = get_connection()
                 cur = conn.cursor()
-                if location_model == "v2":
-                    catalog = load_locations_v2_catalog()
-                    locations_v2 = fetch_locations_v2_map(cur, job_ids, catalog=catalog)
+                with step("bulk_query"):
+                    if location_model == "v2":
+                        locations_v2 = fetch_locations_v2_map(cur, job_ids)
+                    else:
+                        locations = _fetch_locations_v1_map(cur, job_ids)
+                if location_model == "v2" and any(locations_v2.values()):
+                    try:
+                        with step("location_lookup"):
+                            index = load_locations_search_index()
+                            locations_v2 = present_locations_v2_map_from_index(locations_v2, index)
+                        set_label("location_display", "index")
+                    except (FileNotFoundError, OSError, ValueError, sqlite3.Error):
+                        logging.warning("Bulk location index failed; using catalog", exc_info=True)
+                        catalog = catalog_call(load_locations_v2_catalog)
+                        locations_v2 = present_locations_v2_map_from_catalog(locations_v2, catalog)
+                        set_label("location_display", "fallback")
                 else:
-                    locations = _fetch_locations_v1_map(cur, job_ids)
+                    set_label("location_display", "stored")
+            else:
+                set_label("location_display", "stored")
 
-            payload = {
-                "activeLocationModel": location_model,
-                "locations": locations,
-                "locationsV2": locations_v2,
-            }
-            return func.HttpResponse(
-                json.dumps(payload),
-                mimetype="application/json",
-                status_code=200,
-            )
+            with step("serialize"):
+                payload = {
+                    "activeLocationModel": location_model,
+                    "locations": locations,
+                    "locationsV2": locations_v2,
+                }
+                response = func.HttpResponse(
+                    json.dumps(payload),
+                    mimetype="application/json",
+                    status_code=200,
+                )
+            return response
         except Exception as exc:
             logging.exception("POST /jobs/locations error")
             return func.HttpResponse(f"Error: {str(exc)}", status_code=500)
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    logging.exception("POST /jobs/locations could not close SQL connection")

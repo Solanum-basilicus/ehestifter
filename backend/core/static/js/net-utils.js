@@ -18,8 +18,9 @@
   }
 
   // Job lists must not repeat failed requests. A second request can load SQL again.
-  async function fetchJsonOnce(url, init = {}) {
+  async function fetchJsonOnce(url, init = {}, onResponse = null) {
     const response = await fetch(url, Object.assign({ credentials: 'same-origin' }, init));
+    if (typeof onResponse === 'function') onResponse(response);
     let data;
     try {
       data = await response.json();

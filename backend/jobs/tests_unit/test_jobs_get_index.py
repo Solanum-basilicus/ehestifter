@@ -246,3 +246,43 @@ def test_get_job_closes_connection_if_cursor_creation_fails(monkeypatch):
     response = invoke(monkeypatch, connection)
     assert response.status_code == 500
     assert connection.close_count == 1
+
+
+def test_index_country_filters_match_catalog_rules(index):
+    catalog = LocationsV2Catalog(CATALOG)
+    values = [
+        ("GB", None), ("CA", None), (None, "United Kingdom"),
+        (None, "U.K"), (None, "Reino Unido"), (None, "Canada"),
+        (None, "eu"), (None, "European Union"), (None, "worldwide"),
+        (None, "not a country"), ("XX", None),
+    ]
+    for country_code, country_name in values:
+        expected = catalog.resolve_country(country_code, country_name)
+        result = index.resolve_country(country_code, country_name)
+        assert (result and (result["kind"], result["locationId"])) == (
+            expected and (expected["kind"], expected["id"])
+        )
+
+
+def test_index_present_location_map_keeps_rows_and_versions(index):
+    from helpers.locations_v2_store import present_locations_v2_map_from_index
+
+    original = {"job-a": [STORED[0], STORED[4], STORED[0]], "job-b": [STORED[1]], "job-c": []}
+    presented = present_locations_v2_map_from_index(original, index)
+    assert list(presented) == list(original)
+    assert presented["job-c"] == []
+    assert presented["job-a"] == present_locations_v2_from_index(original["job-a"], index)
+    assert presented["job-b"] == present_locations_v2_from_index(original["job-b"], index)
+
+
+def test_index_country_filter_rejects_ambiguous_alias(tmp_path):
+    from tools.build_locations_v2_catalog import _write_search_index
+
+    import copy
+    catalog = copy.deepcopy(CATALOG)
+    catalog["countries"][0]["aliases"].append("Shared Country")
+    catalog["countries"][1]["aliases"].append("Shared Country")
+    path = tmp_path / "index.sqlite3"
+    _write_search_index(path, catalog)
+    idx = LocationsSearchIndex(path, catalog["catalogVersion"])
+    assert idx.resolve_country(None, "Shared Country") is None

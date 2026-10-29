@@ -266,3 +266,19 @@ def test_untrusted_users_timing_is_rejected():
     assert "users_process_first" not in header
     assert "users_sql_count" not in header
     assert "email" not in header and "not_allowed" not in header
+
+
+def test_list_country_and_bulk_timing_fields_are_forwarded():
+    from helpers.timing import _read_upstream, _JOBS_NUMBERS, _LABELS
+
+    values, labels = _read_upstream(
+        'step_country_lookup;dur=2.5, step_location_v2_query;dur=3, '
+        'step_bulk_query;dur=6, country_lookup_source;desc="index"',
+        _JOBS_NUMBERS, _LABELS,
+    )
+    assert values == {
+        "step_country_lookup": 2.5,
+        "step_location_v2_query": 3,
+        "step_bulk_query": 6,
+    }
+    assert labels == {"country_lookup_source": "index"}

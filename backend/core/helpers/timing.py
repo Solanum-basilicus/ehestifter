@@ -18,6 +18,8 @@ _JOBS_NUMBERS = frozenset({
     "step_location_lookup",
     "step_work_time", "step_serialize", "step_parse", "step_query_build",
     "step_count_query", "step_page_query", "step_location_hydration", "step_location_v2_hydration",
+    "step_country_lookup", "step_location_v2_query", "step_bulk_parse", "step_bulk_query",
+    "step_bulk_format",
 })
 _ENRICHERS_NUMBERS = frozenset({
     "app", "process_age", "step_run_create", "step_run_readback", "step_analytics",
@@ -37,7 +39,7 @@ _USERS_NUMBERS = frozenset({
     "step_cv_batch_download", "step_readiness", "step_analytics",
     "step_serialize", "step_user_lookup",
 })
-_LABELS = frozenset({"process_first", "catalog_cache", "sql_count", "location_display"})
+_LABELS = frozenset({"process_first", "catalog_cache", "sql_count", "location_display", "country_lookup_source"})
 _ENRICHERS_LABELS = frozenset({
     "process_first", "gateway_process_first", "users_process_first", "users_sql_count",
 })
@@ -94,7 +96,7 @@ def _read_upstream(header, numbers, labels):
                 continue
             if key == "catalog_cache" and value not in ("hit", "miss"):
                 continue
-            if key == "location_display" and value not in ("index", "fallback", "stored"):
+            if key in ("location_display", "country_lookup_source") and value not in ("index", "fallback", "stored"):
                 continue
             texts[key] = value
     return values, texts

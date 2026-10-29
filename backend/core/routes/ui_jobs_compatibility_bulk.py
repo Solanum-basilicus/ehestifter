@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify
 from helpers.http import jobs_base, jobs_fx_headers, fx_post_json
 from helpers.users import get_in_app_user_id
+from helpers.timing import measure_call
 
 
 def create_blueprint(auth):
@@ -9,7 +10,7 @@ def create_blueprint(auth):
     @bp.route("/ui/jobs/compatibility", methods=["POST"])
     @auth.login_required
     def ui_jobs_compatibility_bulk(*, context):
-        body = request.get_json(silent=True) or {}
+        body = measure_call("body_parse", lambda: request.get_json(silent=True)) or {}
         job_ids = body.get("jobIds") or []
         job_ids = [str(x).strip() for x in job_ids if x]
         job_ids = list(dict.fromkeys(job_ids))
@@ -18,7 +19,7 @@ def create_blueprint(auth):
             return jsonify({"error": "bad_request", "message": "jobIds required"}), 400
 
         try:
-            uid = get_in_app_user_id(context)
+            uid = measure_call("identity", lambda: get_in_app_user_id(context))
             headers = jobs_fx_headers(context={"userId": uid})
         except Exception:
             headers = jobs_fx_headers()
@@ -29,6 +30,8 @@ def create_blueprint(auth):
             json_body={"jobIds": job_ids},
         )
         ctype = r.headers.get("Content-Type", "application/json")
-        return r.text, r.status_code, {"Content-Type": ctype}
+        return measure_call("response_build", lambda: (
+            r.text, r.status_code, {"Content-Type": ctype}
+        ))
 
     return bp

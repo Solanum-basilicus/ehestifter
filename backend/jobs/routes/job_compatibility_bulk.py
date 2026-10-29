@@ -3,6 +3,7 @@ import logging
 import azure.functions as func
 
 from helpers.db import get_connection
+from helpers.timing import step
 from helpers.auth import UnauthorizedError, get_current_user_id
 from helpers.ids import normalize_guid, is_guid
 from helpers.history import DatetimeEncoder
@@ -12,11 +13,13 @@ def register(app: func.FunctionApp):
 
     @app.route(route="jobs/compatibility", methods=["POST"])
     def post_job_compatibility(req: func.HttpRequest) -> func.HttpResponse:
+        conn = None
         try:
             user_id = get_current_user_id(req)
 
             try:
-                body = req.get_json()
+                with step("bulk_parse"):
+                    body = req.get_json()
             except ValueError:
                 return func.HttpResponse("Invalid JSON", status_code=400)
 
@@ -54,28 +57,28 @@ def register(app: func.FunctionApp):
             placeholders = ",".join(["?"] * len(job_ids))
             params = [user_id] + job_ids
 
-            cur.execute(f"""
-                SELECT JobOfferingId, Score, CalculatedAt
-                FROM dbo.CompatibilityScores
-                WHERE UserId = ?
-                  AND JobOfferingId IN ({placeholders})
-            """, params)
-
-            found = {}
-            for job_offering_id, score, calculated_at in cur.fetchall():
-                jid = normalize_guid(str(job_offering_id))
-                found[jid] = {
-                    "score": float(score) if score is not None else None,
-                    "calculatedAt": calculated_at,
-                }
-
-            result = {normalize_guid(jid): found.get(normalize_guid(jid), None) for jid in job_ids}
-
-            return func.HttpResponse(
-                json.dumps({"userId": user_id, "compatibility": result}, cls=DatetimeEncoder),
-                mimetype="application/json",
-                status_code=200
-            )
+            with step("bulk_query"):
+                cur.execute(f"""
+                    SELECT JobOfferingId, Score, CalculatedAt
+                    FROM dbo.CompatibilityScores
+                    WHERE UserId = ?
+                      AND JobOfferingId IN ({placeholders})
+                """, params)
+                rows = cur.fetchall()
+            with step("bulk_format"):
+                found = {}
+                for job_offering_id, score, calculated_at in rows:
+                    jid = normalize_guid(str(job_offering_id))
+                    found[jid] = {
+                        "score": float(score) if score is not None else None,
+                        "calculatedAt": calculated_at,
+                    }
+                result = {jid: found.get(jid) for jid in job_ids}
+                response = func.HttpResponse(
+                    json.dumps({"userId": user_id, "compatibility": result}, cls=DatetimeEncoder),
+                    mimetype="application/json", status_code=200,
+                )
+            return response
 
         except UnauthorizedError as ue:
             return func.HttpResponse(str(ue), status_code=401)
@@ -83,3 +86,9 @@ def register(app: func.FunctionApp):
         except Exception as e:
             logging.exception("POST job compatibility error")
             return func.HttpResponse(f"Error: {str(e)}", status_code=500)
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    logging.exception("Could not close Jobs bulk SQL connection")

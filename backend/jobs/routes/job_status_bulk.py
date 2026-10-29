@@ -2,6 +2,7 @@ import json
 import logging
 import azure.functions as func
 from helpers.db import get_connection
+from helpers.timing import step
 from helpers.auth import UnauthorizedError, get_current_user_id
 from helpers.ids import normalize_guid, is_guid
 
@@ -9,10 +10,12 @@ def register(app: func.FunctionApp):
 
     @app.route(route="jobs/status", methods=["POST"])
     def post_job_statuses(req: func.HttpRequest) -> func.HttpResponse:
+        conn = None
         try:
             user_id = get_current_user_id(req)
             try:
-                body = req.get_json()
+                with step("bulk_parse"):
+                    body = req.get_json()
             except ValueError:
                 return func.HttpResponse("Invalid JSON", status_code=400)
 
@@ -44,21 +47,33 @@ def register(app: func.FunctionApp):
             cur = conn.cursor()
             placeholders = ",".join(["?"] * len(job_ids))
             params = [user_id] + job_ids
-            cur.execute(
-                f"""
-                SELECT JobOfferingId, Status
-                FROM dbo.UserJobStatus
-                WHERE UserId = ? AND JobOfferingId IN ({placeholders})
-                """,
-                params
-            )
-            found = { normalize_guid(str(r[0])): r[1] for r in cur.fetchall() }
-            result = { normalize_guid(jid): found.get(normalize_guid(jid), "Unset") for jid in job_ids }
-
-            return func.HttpResponse(json.dumps({"userId": user_id, "statuses": result}),
-                                     mimetype="application/json", status_code=200)
+            with step("bulk_query"):
+                cur.execute(
+                    f"""
+                    SELECT JobOfferingId, Status
+                    FROM dbo.UserJobStatus
+                    WHERE UserId = ? AND JobOfferingId IN ({placeholders})
+                    """,
+                    params,
+                )
+                rows = cur.fetchall()
+            with step("bulk_format"):
+                found = {normalize_guid(str(r[0])): r[1] for r in rows}
+                result = {jid: found.get(jid, "Unset") for jid in job_ids}
+                response = func.HttpResponse(
+                    json.dumps({"userId": user_id, "statuses": result}),
+                    mimetype="application/json", status_code=200,
+                )
+            return response
         except UnauthorizedError as ue:
             return func.HttpResponse(str(ue), status_code=401)
         except Exception as e:
             logging.exception("POST job statuses error")
             return func.HttpResponse(f"Error: {str(e)}", status_code=500)
+
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    logging.exception("Could not close Jobs bulk SQL connection")

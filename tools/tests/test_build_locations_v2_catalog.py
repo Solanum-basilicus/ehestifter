@@ -135,6 +135,12 @@ def test_search_index_contains_country_region_relationships(tmp_path):
         conn.close()
 
     assert rows == [("m49:001", 0), ("m49:150", 1), ("m49:155", 0)]
+    with sqlite3.connect(path) as conn:
+        matches = conn.execute(
+            """SELECT location_id FROM country_aliases
+               WHERE alias_key = 'germany'"""
+        ).fetchall()
+    assert matches == [("iso3166:DE",)]
 
 
 def _write_index_only_fixture(tmp_path):

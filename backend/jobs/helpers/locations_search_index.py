@@ -13,7 +13,10 @@ import sqlite3
 from functools import lru_cache
 from pathlib import Path
 
-from helpers.locations_v2 import SUPPORTED_KINDS
+from helpers.locations_v2 import (
+    SUPPORTED_KINDS, LEGACY_COUNTRY_NAME_TO_CODE, LEGACY_WORLD_NAMES,
+    _clean as catalog_clean, _key as catalog_key,
+)
 
 
 DEFAULT_INDEX_PATH = (
@@ -205,6 +208,52 @@ class LocationsSearchIndex:
 
         ordered = sorted(ranked.values(), key=lambda value: value[:4])[:limit]
         return [_presentation(value[4], self.catalog_version) for value in ordered]
+
+    def resolve_country(self, country_code: str | None, country_name: str | None) -> dict | None:
+        """Use the catalog's exact country rules on the generated index."""
+        code = catalog_clean(country_code).upper()
+        name = catalog_clean(country_name)
+        key = catalog_key(name)
+
+        if code == "EU" or key in {"eu", "european union"}:
+            target = "m49:150"
+        elif key in LEGACY_WORLD_NAMES:
+            target = "m49:001"
+        else:
+            target = None
+
+        with self._connect() as conn:
+            if target:
+                row = conn.execute(
+                    "SELECT * FROM locations WHERE location_id = ?", (target,)
+                ).fetchone()
+                return _presentation(row, self.catalog_version) if row else None
+
+            def find_code(value):
+                if len(value) != 2:
+                    return None
+                return conn.execute(
+                    "SELECT * FROM locations WHERE kind = 'country' AND country_code = ?",
+                    (value,),
+                ).fetchone()
+
+            row = find_code(code) or find_code(name.upper())
+            if row is None:
+                compact = re.sub(r"[^A-Z]", "", name.upper())
+                mapped = LEGACY_COUNTRY_NAME_TO_CODE.get(compact.casefold())
+                if mapped is None:
+                    mapped = LEGACY_COUNTRY_NAME_TO_CODE.get(key)
+                if mapped:
+                    row = find_code(mapped)
+            if row is None and key:
+                # Match only one canonical country. Ambiguous names do not select one.
+                rows = list(conn.execute(
+                    """SELECT l.* FROM country_aliases a
+                       JOIN locations l ON l.location_id = a.location_id
+                       WHERE a.alias_key = ? LIMIT 2""", (key,)
+                ))
+                row = rows[0] if len(rows) == 1 else None
+            return _presentation(row, self.catalog_version) if row else None
 
     def lookup(self, selectors: list[tuple[str, str]]) -> tuple[list[dict], list[dict]]:
         items = []

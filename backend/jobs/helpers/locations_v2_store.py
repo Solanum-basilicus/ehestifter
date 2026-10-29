@@ -210,6 +210,24 @@ def present_locations_v2_from_index(locations: list[dict], index) -> list[dict]:
     return result
 
 
+def present_locations_v2_map_from_index(locations_map: dict, index) -> dict:
+    """Present every location with one SQLite lookup, without changing row order."""
+    locations = [location for rows in locations_map.values() for location in rows]
+    presented = iter(present_locations_v2_from_index(locations, index))
+    return {
+        job_id: [next(presented) for _ in rows]
+        for job_id, rows in locations_map.items()
+    }
+
+
+def present_locations_v2_map_from_catalog(locations_map: dict, catalog) -> dict:
+    """Keep the old presentation when the packaged index is unavailable."""
+    return {
+        job_id: present_locations_v2_from_catalog(rows, catalog)
+        for job_id, rows in locations_map.items()
+    }
+
+
 def fetch_locations_v2(cur, job_id: str, catalog=None) -> list[dict]:
     cur.execute(
         """

@@ -17,7 +17,8 @@ STEPS = frozenset({
     "job_row", "legacy_locations", "catalog_load", "catalog_parse",
     "catalog_index", "locations_v2", "location_lookup", "work_time", "serialize",
     "parse", "query_build", "count_query", "page_query",
-    "location_hydration", "location_v2_hydration",
+    "location_hydration", "location_v2_hydration", "location_v2_query",
+    "country_lookup", "bulk_parse", "bulk_query", "bulk_format",
 })
 
 
@@ -26,6 +27,7 @@ def set_label(name, value):
     allowed = {
         "catalog_cache": ("hit", "miss"),
         "location_display": ("index", "fallback", "stored"),
+        "country_lookup_source": ("index", "fallback"),
     }
     if measurements is not None and value in allowed.get(name, ()):
         measurements.labels[name] = value

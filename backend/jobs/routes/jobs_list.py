@@ -1,10 +1,11 @@
 import json
 import logging
+import sqlite3
 import pyodbc
 import azure.functions as func
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, parse_qs
-from helpers.timing import step, catalog_call, record_elapsed
+from helpers.timing import step, catalog_call, record_elapsed, set_label
 from time import perf_counter
 from helpers.db import get_connection
 from helpers.history import DatetimeEncoder
@@ -14,7 +15,12 @@ from helpers.status_normalize import status_key, status_key_case_sql
 from helpers.compatibility_threshold import parse_min_compatibility_score
 from helpers.location_mode import active_location_model
 from helpers.locations_v2 import load_locations_v2_catalog
-from helpers.locations_v2_store import fetch_locations_v2_map
+from helpers.locations_v2_store import (
+    fetch_locations_v2_map,
+    present_locations_v2_map_from_catalog,
+    present_locations_v2_map_from_index,
+)
+from helpers.locations_search_index import load_locations_search_index
 
 
 REMOTE_MAP = {
@@ -74,6 +80,27 @@ def _require_user_if_needed(
 
 def _likeify(s: str) -> str:
     return f"%{s}%"
+
+
+def _country_selectors(countries, resolver, *, index=False):
+    """Resolve country filters without selecting one of several matching aliases."""
+    selectors = []
+    seen = set()
+    for value in countries:
+        text = value.strip()
+        country = resolver(
+            text.upper() if len(text) == 2 else None,
+            None if len(text) == 2 else text,
+        )
+        if country is None:
+            continue
+        selector = (
+            country["kind"], country["locationId"] if index else country["id"]
+        )
+        if selector not in seen:
+            seen.add(selector)
+            selectors.append(selector)
+    return selectors
 
 
 def register(app: func.FunctionApp):
@@ -309,21 +336,16 @@ def register(app: func.FunctionApp):
 
             if countries:
                 if location_model == "v2":
-                    catalog = catalog_call(load_locations_v2_catalog)
-                    selectors = []
-                    seen_selectors = set()
-                    for value in countries:
-                        text = value.strip()
-                        country = catalog.resolve_country(
-                            text.upper() if len(text) == 2 else None,
-                            None if len(text) == 2 else text,
-                        )
-                        if country is None:
-                            continue
-                        key = (country["kind"], country["id"])
-                        if key not in seen_selectors:
-                            seen_selectors.add(key)
-                            selectors.append(key)
+                    with step("country_lookup"):
+                        try:
+                            lookup = load_locations_search_index().resolve_country
+                            selectors = _country_selectors(countries, lookup, index=True)
+                            set_label("country_lookup_source", "index")
+                        except (FileNotFoundError, OSError, ValueError, sqlite3.Error):
+                            logging.warning("Country index lookup failed; using catalog", exc_info=True)
+                            catalog = catalog_call(load_locations_v2_catalog)
+                            selectors = _country_selectors(countries, catalog.resolve_country)
+                            set_label("country_lookup_source", "fallback")
 
                     if selectors:
                         selector_sql = " OR ".join(
@@ -550,9 +572,22 @@ def register(app: func.FunctionApp):
                         })
 
                 record_elapsed("location_hydration", location_start)
-                catalog = catalog_call(load_locations_v2_catalog) if location_model == "v2" else None
                 with step("location_v2_hydration"):
-                    loc_v2_map = fetch_locations_v2_map(cur, norm_ids, catalog=catalog)
+                    with step("location_v2_query"):
+                        loc_v2_map = fetch_locations_v2_map(cur, norm_ids)
+                    if location_model == "v2" and any(loc_v2_map.values()):
+                        try:
+                            with step("location_lookup"):
+                                index = load_locations_search_index()
+                                loc_v2_map = present_locations_v2_map_from_index(loc_v2_map, index)
+                            set_label("location_display", "index")
+                        except (FileNotFoundError, OSError, ValueError, sqlite3.Error):
+                            logging.warning("List location index failed; using catalog", exc_info=True)
+                            catalog = catalog_call(load_locations_v2_catalog)
+                            loc_v2_map = present_locations_v2_map_from_catalog(loc_v2_map, catalog)
+                            set_label("location_display", "fallback")
+                    else:
+                        set_label("location_display", "stored")
 
             for j in jobs:
                 j["locations"] = loc_map.get(j["Id"], [])

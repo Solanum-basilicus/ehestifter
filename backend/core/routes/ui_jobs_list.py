@@ -2,6 +2,7 @@ from flask import Blueprint, request, jsonify
 from urllib.parse import urlencode
 import hashlib
 import logging
+import os
 
 import requests
 
@@ -9,6 +10,7 @@ from helpers.analytics import emit_core_event
 from helpers.cache import memo_get, memo_put
 from helpers.http import jobs_base, jobs_fx_headers, fx_get_json_safe
 from helpers.users import get_in_app_user_id
+from helpers.timing import measure_call, set_label
 
 
 _SEARCH_PARAM_NAMES = {
@@ -22,6 +24,13 @@ _SEARCH_PARAM_NAMES = {
 
 def _has_search_term(params: dict) -> bool:
     return any(bool((params.get(name) or "").strip()) for name in _SEARCH_PARAM_NAMES)
+
+
+def _cache_enabled():
+    """Disable the list memo cache by an explicit Core environment setting."""
+    return os.getenv("EHESTIFTER_JOBS_LIST_CACHE_ENABLED", "true").strip().lower() not in {
+        "false", "0", "no", "off"
+    }
 
 
 def create_blueprint(auth):
@@ -42,7 +51,7 @@ def create_blueprint(auth):
             offset = 0
 
         try:
-            uid = get_in_app_user_id(context)
+            uid = measure_call("identity", lambda: get_in_app_user_id(context))
         except Exception:
             uid = "anon"
 
@@ -84,10 +93,14 @@ def create_blueprint(auth):
                 )
 
         cache_key = f"jobs:{uid}:{filter_key}:{limit}:{offset}"
-        cached = memo_get(cache_key, ttl=30)
-        if cached:
-            emit_success_events()
-            return jsonify(cached), 200
+        cache_enabled = _cache_enabled()
+        set_label("list_cache_enabled", "1" if cache_enabled else "0")
+        cached = measure_call("cache_get", lambda: memo_get(cache_key, ttl=30)) if cache_enabled else None
+        if cached is not None:
+            set_label("cache", "hit")
+            measure_call("analytics", emit_success_events)
+            return measure_call("response_build", lambda: jsonify(cached)), 200
+        set_label("cache", "miss" if cache_enabled else "bypass")
 
         params = {"limit": str(limit), "offset": str(offset), **forward_params}
         headers = jobs_fx_headers(context={"userId": uid}) if uid != "anon" else jobs_fx_headers()
@@ -137,8 +150,9 @@ def create_blueprint(auth):
 
         data.setdefault("limit", limit)
         data.setdefault("offset", offset)
-        memo_put(cache_key, data)
-        emit_success_events()
-        return jsonify(data), 200
+        if cache_enabled:
+            measure_call("cache_put", lambda: memo_put(cache_key, data))
+        measure_call("analytics", emit_success_events)
+        return measure_call("response_build", lambda: jsonify(data)), 200
 
     return bp
