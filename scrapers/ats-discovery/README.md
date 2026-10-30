@@ -164,29 +164,47 @@ The Users response supplies discovery preferences, profile metadata, and an auth
 
 For a retained candidate:
 
-1. scan the ATS target once;
-2. match all eligible user profiles by title;
-3. retain title matches up to `scan.maxTitleCandidatesBeforeGeography`;
-4. ask Jobs for canonical identity and fetch bounded detail when needed;
-5. normalize Locations v2 and apply each user's geography rules;
-6. apply the final fair `scan.maxCandidatesPerRun` cap after geography;
-7. create the shared job once through Jobs with native `locationsV2` geography and no legacy `locations`;
-8. request compatibility for each matched user when needed;
-9. never create or change application status.
+1. Scan the ATS target once and match eligible user profiles by title.
+2. Normalize listing geography and reject only definite mismatches for all matched users.
+3. Check Jobs for canonical identity and fetch missing details. Detail requests use provider pacing, concurrency, retries, and 429 backoff. They have no global count cap.
+4. Normalize Locations v2 with full detail evidence and apply each user's geography rules.
+5. Import missing jobs using per-user sponsorship slots and the shared stretch pool.
+6. Request compatibility for every distinct eligible job-user pair. Enrichment Core controls its queue.
+7. Never create or change application status.
+
+`imports.maxCreatesPerUserPerRun` defaults to 64. Each enabled user can sponsor
+up to this number of *new-job create attempts* per run. A shared job uses one
+sponsor's slot, is created once, and remains eligible for compatibility for all
+matched users. Existing jobs do not use slots. After ordinary slots are used,
+`imports.sharedCreatesPerRun` (default 64) can admit additional new jobs that
+match at least two enabled users. The shared pool is disabled when fewer than
+two users are enabled. Import selection uses round-robin user queues and FIFO
+candidate order. Failed create attempts still consume slots; invalid payloads,
+missing details, and existing jobs do not.
+
+The scanner has no active title-candidate cap, final-candidate cap, description
+fetch count cap, or compatibility pair/request count cap. Provider acquisition
+limits and request pacing remain in `discovery-policy.yml`. Jobs preflight and
+compatibility HTTP submissions retain configured concurrency and retry behavior.
+The scanner waits for submissions, not for compatibility execution to finish.
+An unsuccessful submission remains an error in run artifacts and requires
+safe replay. Check the expected downstream load before enabling the new policy.
+
+`summary.json` includes preliminary geography counts, import slot use by user,
+shared-slot use, quota skips, and resource samples (RSS, peak RSS in KiB on Linux,
+and elapsed time). Only a bounded sample of preliminary location records is
+written. The full rejection journal remains available for failures.
 
 The v2-only create contract applies only to the Jobs write payload. Provider
 and detail observations can still use the internal `locations` field. ATS keeps
 these observations, raw text, and normalization diagnostics in run artifacts.
 `workTimeConstraintsV2` remains independent from geography.
 
-Run diagnostics keep readiness blockers separate. `summary.json` reports `discoveryUsersDisabledNoUsableCv`, `discoveryUsersDisabledNoPositiveTitle`, and `discoveryUsersDisabledInvalidPreferences`. One user can contribute to more than one blocker count, but contributes only once to `discoveryUsersFailingClosed`.
-
-`scan.maxCandidatesPerRun` is therefore the normal downstream candidate cap in
-multi-user preflight/import runs. `scan.maxTitleCandidatesBeforeGeography` is a
-separate safety ceiling for the broader title-matched set that must reach
-location normalization. It defaults to five times `maxCandidatesPerRun` and
-must not be smaller than the final cap. This avoids letting title-only volume
-consume the final cap before geography while still bounding Jobs preflight work.
+Run diagnostics keep readiness blockers separate. `summary.json` reports
+`discoveryUsersDisabledNoUsableCv`, `discoveryUsersDisabledNoPositiveTitle`,
+and `discoveryUsersDisabledInvalidPreferences`. One user can contribute to more
+than one blocker count, but contributes only once to
+`discoveryUsersFailingClosed`.
 
 ## Product identity and attribution
 
@@ -238,11 +256,12 @@ The `*.example.*` files are committed templates. The active files without
 `.example` are operator-owned local configuration and should not contain secrets
 that are committed to Git.
 
-For scheduled import, `dailyDiscovery.scannerArgs --max-create` in
-`scheduler.local.json` is the requested per-run create budget, while
-`imports.maxCreatesPerRun` in `scanner.local.json` is the scanner safety ceiling.
-The requested value must be less than or equal to the ceiling. The scanner checks
-this before provider work and publishes a prerequisite-failure run when they disagree.
+For scheduled import, remove `--max-create` from
+`dailyDiscovery.scannerArgs` in `scheduler.local.json`. Set import quotas only
+in `scanner.local.json` under `imports`. The retired candidate, detail-count,
+compatibility-count, and global create-count keys cause validation errors.
+Migrate those keys before the next run. The sample configurations show the
+new fields and defaults.
 
 ### After changing scanner or discovery configuration
 
@@ -731,11 +750,11 @@ compiled catalog-count ceiling.
 Use this after offline evidence looks correct and before the first import for a
 new target or major filter change.
 
-### `--import` — bounded write mode
+### `--import` — per-user bounded write mode
 
 ```bash
 ./ops/scheduler/ats-ops scanner -- \
-  scan tracked --import --max-create 1 --catalog-targets 23
+  scan tracked --import --catalog-targets 23
 ```
 
 New ATS imports are v2-only for geography. They send `locationsV2` even when
@@ -748,8 +767,8 @@ rows for this rollback.
 Import mode performs the preflight/detail/location stages and then:
 
 - creates only Jobs-missing candidates through the Jobs API;
-- stops at the mandatory `--max-create N` command-line cap and the lower/equal
-  configured import ceiling;
+- creates jobs within configured user sponsorship slots and shared pool;
+- does not count existing jobs against the import quota;
 - reconciles ambiguous create responses;
 - skips `detail.status = "unavailable"` as
   `import.status = "skipped_detail_unavailable"` before the missing-description
@@ -758,8 +777,8 @@ Import mode performs the preflight/detail/location stages and then:
   is enabled;
 - never creates or changes application status.
 
-This is the third and only write mode. Keep the create cap small until the
-preceding run artifacts have been inspected.
+This is the third and only write mode. Inspect a bounded live run before
+raising provider budgets or the per-user create quota.
 
 ### Catalog refresh is a separate command
 

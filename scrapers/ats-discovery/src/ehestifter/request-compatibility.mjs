@@ -68,24 +68,12 @@ export async function requestCompatibilityForMatches({
   onResult = null,
 }) {
   const allPairs = buildCompatibilityPairs(importResults, discoveryUsers);
-  const pairs = allPairs.slice(0, config.maxPairsPerRun);
-  const omittedPairs = allPairs.length - pairs.length;
-
-  // Enrichment Core owns the decision to create, reuse, or suppress a run.
-  const requestSet = new Set(
-    pairs.slice(0, config.maxRequestsPerRun).map(
-      (pair) => `${pair.jobId.toLowerCase()}:${pair.userId.toLowerCase()}`,
-    ),
-  );
+  const pairs = allPairs;
 
   const results = await mapLimit(
     pairs,
     config.concurrency,
     async (item) => {
-      const key = `${item.jobId.toLowerCase()}:${item.userId.toLowerCase()}`;
-      if (!requestSet.has(key)) {
-        return { ...item, status: 'skipped_request_limit' };
-      }
       try {
         const run = await client.createRun(
           item.jobId,
@@ -123,8 +111,7 @@ export async function requestCompatibilityForMatches({
     enricherType: config.enricherType,
     totalPairs: allPairs.length,
     evaluatedPairs: pairs.length,
-    omittedPairs,
-    requestLimit: config.maxRequestsPerRun,
+    omittedPairs: 0,
     results,
   };
 }

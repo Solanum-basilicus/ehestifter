@@ -122,7 +122,7 @@ class SchedulerTests(unittest.TestCase):
         self.assertIn("arguments after -- are passed unchanged", output)
         self.assertIn("scan tracked --offline", output)
         self.assertIn("scan tracked --preflight [--catalog-targets N]", output)
-        self.assertIn("scan tracked --import --max-create N", output)
+        self.assertIn("scan tracked --import [--catalog-targets N]", output)
         self.assertIn("catalog sync <provider|all>", output)
         self.assertIn("scanner -- --help", output)
 

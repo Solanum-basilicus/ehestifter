@@ -98,7 +98,7 @@ async function scan(targets, options = {}) {
     providers: new Map([['ashby', targets[0]?._provider ?? { id: 'ashby' }]]),
     policy: options.policy ?? policy(),
     concurrency: options.concurrency ?? 3,
-    maxCandidates: options.maxCandidates ?? 100,
+
     upstreamRef: 'upstream-ref',
     nowMs: Date.parse('2026-07-20T00:00:00.000Z'),
     monotonicNow: () => { tick += 5; return tick; },
@@ -249,16 +249,15 @@ test('cheap filters remain active for planned targets', async () => {
   });
 });
 
-test('candidate cap remains global across targets', async () => {
+test('scan retains all title-matched candidates without a global cap', async () => {
   const result = await scan([
     target({ sequence: 0, tenant: 'one', jobs: [job({ id: '1' }), job({ id: '2' })] }),
     target({ sequence: 1, tenant: 'two', jobs: [job({ id: '3' }), job({ id: '4' })] }),
-  ], { maxCandidates: 3 });
-  assert.equal(result.candidates.length, 3);
+  ]);
+  assert.equal(result.candidates.length, 4);
   assert.equal(result.providerResults.reduce((sum, item) => sum + item.candidatesMatched, 0), 4);
-  assert.equal(result.providerResults.reduce((sum, item) => sum + item.candidatesRetained, 0), 3);
-  assert.equal(result.providerResults.reduce((sum, item) => sum + item.candidatesDroppedByCap, 0), 1);
-  assert.equal(result.rejected.some((item) => item.reason === 'candidate_cap'), true);
+  assert.equal(result.providerResults.reduce((sum, item) => sum + item.candidatesRetained, 0), 4);
+  assert.equal(result.rejected.some((item) => item.reason === 'candidate_cap'), false);
 });
 
 test('duplicate URLs are retained once across targets', async () => {

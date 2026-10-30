@@ -9,7 +9,7 @@ export function usageText() {
   node src/cli.mjs repair lever-description <lever-job-url> [--apply]
   node src/cli.mjs scan tracked --offline [--no-progress]
   node src/cli.mjs scan tracked --preflight [--catalog-targets N] [--no-progress]
-  node src/cli.mjs scan tracked --import --max-create N [--catalog-targets N] [--no-progress]
+  node src/cli.mjs scan tracked --import [--catalog-targets N] [--no-progress]
 `;
 }
 
@@ -78,7 +78,6 @@ export function parseArgs(argv) {
 
   const flags = [providerOrValue, ...rest].filter((value) => value != null);
   let mode = null;
-  let maxCreate = null;
   let catalogTargets = null;
   let noProgress = false;
 
@@ -91,9 +90,7 @@ export function parseArgs(argv) {
     }
 
     if (flag === '--max-create') {
-      maxCreate = parsePositiveInteger(flags[index + 1], '--max-create');
-      index += 1;
-      continue;
+      throw new Error('--max-create is retired; set imports.maxCreatesPerUserPerRun in scanner config');
     }
 
     if (flag === '--catalog-targets') {
@@ -117,12 +114,6 @@ export function parseArgs(argv) {
   if (mode === null) {
     throw new Error('Choose one of --offline, --preflight, or --import');
   }
-  if (mode === 'import' && maxCreate === null) {
-    throw new Error('Import mode requires --max-create N');
-  }
-  if (mode !== 'import' && maxCreate !== null) {
-    throw new Error('--max-create is valid only with --import');
-  }
   if (mode === 'offline' && catalogTargets !== null) {
     throw new Error(
       '--catalog-targets is valid only with --preflight or --import; '
@@ -134,7 +125,6 @@ export function parseArgs(argv) {
     command: 'scan',
     source: 'tracked',
     mode,
-    maxCreate,
     catalogTargets,
     noProgress,
   };

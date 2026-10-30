@@ -19,19 +19,17 @@
   "scan": {
     "providerConcurrency": 3,
     "jobsApiConcurrency": 3,
-    "maxCandidatesPerRun": 100,
-    "maxTitleCandidatesBeforeGeography": 500,
     "requireDescriptionForCreate": true,
     "description": {
       "fetchMissing": true,
-      "maxFetchesPerRun": 50,
       "concurrency": 2,
       "timeoutMs": 30000
     }
   },
   "imports": {
     "enabled": false,
-    "maxCreatesPerRun": 5
+    "maxCreatesPerUserPerRun": 64,
+    "sharedCreatesPerRun": 64
   },
   "liveCatalog": {
     "enabled": false,
@@ -55,9 +53,7 @@
     "compatibility": {
       "enabled": false,
       "enricherType": "compatibility.v1",
-      "concurrency": 2,
-      "maxPairsPerRun": 100,
-      "maxRequestsPerRun": 20
+      "concurrency": 2
     }
   }
 }

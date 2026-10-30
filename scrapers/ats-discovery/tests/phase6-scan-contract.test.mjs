@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { parseDiscoveryPolicy } from '../src/policy/discovery-policy.mjs';
-import { admitCandidatesFairly, runTrackedScan } from '../src/scan/tracked-source.mjs';
+import { runTrackedScan } from '../src/scan/tracked-source.mjs';
 
 function policy() {
   return parseDiscoveryPolicy({
@@ -53,7 +53,7 @@ function job(id) {
   };
 }
 
-test('user matching happens before the global candidate cap', async () => {
+test('user matching happens before downstream work', async () => {
   const target = makeTarget([job(1), job(2), job(3)]);
   const result = await runTrackedScan({
     portalConfig: {
@@ -65,7 +65,7 @@ test('user matching happens before the global candidate cap', async () => {
     providers: new Map([['ashby', target._provider]]),
     policy: policy(),
     concurrency: 1,
-    maxCandidates: 1,
+
     upstreamRef: 'ref',
     nowMs: Date.parse('2026-07-24T12:00:00Z'),
     monotonicNow: (() => { let tick = 0; return () => ++tick; })(),
@@ -99,7 +99,7 @@ test('candidate matcher errors reject one candidate without aborting the provide
     providers: new Map([['ashby', target._provider]]),
     policy: policy(),
     concurrency: 1,
-    maxCandidates: 10,
+
     upstreamRef: 'ref',
     nowMs: Date.parse('2026-07-24T12:00:00Z'),
     monotonicNow: (() => { let tick = 0; return () => ++tick; })(),
@@ -150,7 +150,7 @@ test('multi-user mode bypasses all legacy portal preference filters but preserve
     providers: new Map([['ashby', target._provider]]),
     policy: policy(),
     concurrency: 1,
-    maxCandidates: 10,
+
     upstreamRef: 'ref',
     nowMs: Date.parse('2026-07-24T12:00:00Z'),
     monotonicNow: (() => { let tick = 0; return () => ++tick; })(),
@@ -196,7 +196,7 @@ test('portal candidate filter switch is strictly boolean', async () => {
       providers: new Map([['ashby', target._provider]]),
       policy: policy(),
       concurrency: 1,
-      maxCandidates: 10,
+
       upstreamRef: 'ref',
       applyPortalCandidateFilters: 'no',
     }),
@@ -204,63 +204,6 @@ test('portal candidate filter switch is strictly boolean', async () => {
   );
 });
 
-
-test('fair admission prevents one broad user from consuming all candidate slots', () => {
-  const A = '11111111-1111-4111-8111-111111111111';
-  const B = '22222222-2222-4222-8222-222222222222';
-  const C = '33333333-3333-4333-8333-333333333333';
-  const candidates = [
-    ...Array.from({ length: 10 }, (_, index) => ({ url: `a${index}`, sourceMode: 'catalog', matchedUserIds: [A] })),
-    { url: 'b', sourceMode: 'catalog', matchedUserIds: [B] },
-    { url: 'c', sourceMode: 'catalog', matchedUserIds: [C] },
-  ];
-  const result = admitCandidatesFairly(candidates, 3, { fairnessSeed: 'run' });
-  const served = new Set(result.retained.flatMap((item) => item.matchedUserIds));
-  assert.deepEqual(served, new Set([A, B, C]));
-  assert.equal(result.stats.usersStarvedByCandidateCap, 0);
-});
-
-test('fair admission prefers priority candidates inside each user queue', () => {
-  const A = '11111111-1111-4111-8111-111111111111';
-  const B = '22222222-2222-4222-8222-222222222222';
-  const candidates = [
-    { url: 'a-catalog', sourceMode: 'catalog', matchedUserIds: [A] },
-    { url: 'a-priority', sourceMode: 'priority', matchedUserIds: [A] },
-    { url: 'b', sourceMode: 'catalog', matchedUserIds: [B] },
-  ];
-  const result = admitCandidatesFairly(candidates, 2, { fairnessSeed: 'run' });
-  assert.equal(result.retained.some((item) => item.url === 'a-priority'), true);
-  assert.equal(result.retained.some((item) => item.url === 'b'), true);
-});
-
-test('fair admission order is kept for downstream create limits', () => {
-  const A = '11111111-1111-4111-8111-111111111111';
-  const B = '22222222-2222-4222-8222-222222222222';
-  const C = '33333333-3333-4333-8333-333333333333';
-  const candidates = [
-    ...Array.from({ length: 5 }, (_, index) => ({ url: `a${index}`, sourceMode: 'catalog', matchedUserIds: [A] })),
-    { url: 'b', sourceMode: 'catalog', matchedUserIds: [B] },
-    { url: 'c', sourceMode: 'catalog', matchedUserIds: [C] },
-  ];
-  const result = admitCandidatesFairly(candidates, 3, { fairnessSeed: 'run' });
-  assert.deepEqual(
-    new Set(result.retained.slice(0, 3).flatMap((item) => item.matchedUserIds)),
-    new Set([A, B, C]),
-  );
-});
-
-test('shared candidate serves all matched users in the same fairness round', () => {
-  const A = '11111111-1111-4111-8111-111111111111';
-  const B = '22222222-2222-4222-8222-222222222222';
-  const candidates = [
-    { url: 'shared', sourceMode: 'priority', matchedUserIds: [A, B] },
-    { url: 'a-only', sourceMode: 'catalog', matchedUserIds: [A] },
-    { url: 'b-only', sourceMode: 'catalog', matchedUserIds: [B] },
-  ];
-  const result = admitCandidatesFairly(candidates, 2, { fairnessSeed: 'run' });
-  assert.equal(result.retained[0].url, 'shared');
-  assert.equal(result.retained.length, 2);
-});
 
 test('scan can stream rejections without retaining them in memory', async () => {
   const target = makeTarget([job(1), job(2), job(3)]);
@@ -271,7 +214,7 @@ test('scan can stream rejections without retaining them in memory', async () => 
     providers: new Map([['ashby', target._provider]]),
     policy: policy(),
     concurrency: 1,
-    maxCandidates: 10,
+
     upstreamRef: 'ref',
     nowMs: Date.parse('2026-07-24T12:00:00Z'),
     monotonicNow: (() => { let tick = 0; return () => ++tick; })(),

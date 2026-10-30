@@ -78,7 +78,7 @@ test('cheap location-scope hardening rejects explicit US/Canada-only remote jobs
     providers: new Map([['ashby', provider]]),
     policy: policy(),
     concurrency: 2,
-    maxCandidates: 10,
+
     upstreamRef: 'test-ref',
   });
 
@@ -108,7 +108,7 @@ test('location-scope filtering preserves compatible mixed geography', async () =
     providers: new Map([['ashby', provider]]),
     policy: policy(),
     concurrency: 1,
-    maxCandidates: 10,
+
     upstreamRef: 'test-ref',
   });
   assert.equal(result.candidates.length, 1);

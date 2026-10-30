@@ -32,8 +32,6 @@
       "scan",
       "tracked",
       "--import",
-      "--max-create",
-      "1",
       "--catalog-targets",
       "23"
     ]

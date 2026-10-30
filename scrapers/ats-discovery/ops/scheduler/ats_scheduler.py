@@ -1232,8 +1232,8 @@ Scanner command forms (arguments after -- are passed unchanged):
   scan tracked --preflight [--catalog-targets N] [--no-progress]
       Run Jobs identity preflight; optionally add a bounded catalog shard.
 
-  scan tracked --import --max-create N [--catalog-targets N] [--no-progress]
-      Preflight and import, bounded by both --max-create and runtime config.
+  scan tracked --import [--catalog-targets N] [--no-progress]
+      Preflight and import within configured per-user and shared create quotas.
 
   catalog sync <provider|all>
       Refresh one machine-managed provider catalog, or all catalogs.

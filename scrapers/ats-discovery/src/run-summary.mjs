@@ -25,6 +25,29 @@ function countBy(items, keyFor) {
   );
 }
 
+function importTenantDiagnostics(candidates) {
+  const creates = candidates.filter((item) => ['user', 'shared'].includes(item.import?.admissionPool));
+  const counts = new Map();
+  for (const item of creates) {
+    const provider = item.sourceProvider ?? 'unknown';
+    const tenant = item.sourceTenant ?? 'unknown';
+    const key = `${provider}\u0000${tenant}`;
+    const group = counts.get(key) ?? { provider, tenant, attempts: 0 };
+    group.attempts += 1;
+    counts.set(key, group);
+  }
+  const ordered = [...counts.values()].sort((a, b) => (
+    b.attempts - a.attempts
+    || a.provider.localeCompare(b.provider)
+    || a.tenant.localeCompare(b.tenant)
+  ));
+  return {
+    uniqueTenants: counts.size,
+    largestTenantShare: ratio(ordered[0]?.attempts ?? 0, creates.length),
+    topTenants: ordered.slice(0, 10),
+  };
+}
+
 function rejectionCount(scanResult, reason) {
   if (scanResult?.rejectionCounts && Object.hasOwn(scanResult.rejectionCounts, reason)) {
     return scanResult.rejectionCounts[reason] ?? 0;
@@ -241,7 +264,8 @@ export function buildRunSummary({
   locationResults = null,
   tenantStateChanges = null,
   rateObservations = null,
-  requestedMaxCreates = null,
+  importQuota = null,
+  resourceMeasurements = null,
   canaryResults = null,
   policy,
   discoveryUsers = null,
@@ -529,7 +553,9 @@ export function buildRunSummary({
       ?? null
     ),
     titleCandidatesRetainedBeforeGeography: (
-      scanResult.titleCandidateAdmission?.candidatesRetained ?? null
+      scanResult.titleCandidateAdmission?.candidatesRetained
+      ?? scanResult.preliminaryDiscoveryEligibility?.candidatesRetained
+      ?? scanResult.candidateAdmission?.candidatesRetained ?? null
     ),
     titleCandidatesDroppedByPreGeographyCap: (
       scanResult.titleCandidateAdmission?.candidatesDroppedByCap ?? 0
@@ -537,7 +563,9 @@ export function buildRunSummary({
     preGeographyCapReached: (
       scanResult.titleCandidateAdmission?.candidateCapReached ?? false
     ),
-    candidatesBeforeFinalCap: scanResult.discoveryEligibility?.candidatesBeforeFinalCap ?? null,
+    candidatesBeforeFinalCap: scanResult.discoveryEligibility?.candidatesBeforeFinalCap
+      ?? scanResult.discoveryEligibility?.candidatesAfterGeography ?? null,
+    candidatesAfterPreliminaryGeography: scanResult.preliminaryDiscoveryEligibility?.candidatesRetained ?? null,
     candidatesDroppedByCap: scanResult.candidateAdmission?.candidatesDroppedByCap ?? null,
     usersAffectedByCandidateCap: scanResult.candidateAdmission?.usersAffectedByCandidateCap ?? null,
     usersStarvedByCandidateCap: scanResult.candidateAdmission?.usersStarvedByCandidateCap ?? null,
@@ -561,7 +589,10 @@ export function buildRunSummary({
           titleCandidatesRetainedBeforeGeography: titleAdmission?.candidatesRetainedByCap ?? 0,
           titleCandidatesDroppedByPreGeographyCap: titleAdmission?.candidatesDroppedByCap ?? 0,
           candidatesAfterGeography: scanResult.discoveryEligibility?.userCounts?.[user.userId] ?? 0,
-          candidatesRetainedByCap: finalAdmission?.candidatesRetainedByCap ?? 0,
+          candidatesRetainedByCap: scanResult.candidateAdmission?.candidateCapReached
+            ? (finalAdmission?.candidatesRetainedByCap ?? 0)
+            : (scanResult.discoveryEligibility?.userCounts?.[user.userId]
+              ?? finalAdmission?.candidatesRetainedByCap ?? 0),
           candidatesDroppedByCap: finalAdmission?.candidatesDroppedByCap ?? 0,
         };
       })
@@ -661,7 +692,27 @@ export function buildRunSummary({
         ),
     ),
 
-    importCreateLimit: requestedMaxCreates,
+    importQuotaPerUser: importQuota?.maxCreatesPerUserPerRun ?? null,
+    importSharedPoolLimit: importQuota?.sharedCreatesPerRun ?? null,
+    importCreateAttempts: count(
+      evaluated,
+      (job) => ['user', 'shared'].includes(job.import?.admissionPool),
+    ),
+    importTenantConcentration: importTenantDiagnostics(evaluated),
+    importSharedPoolUsed: count(
+      evaluated,
+      (job) => job.import?.admissionPool === 'shared',
+    ),
+    importUserSlotsUsed: Object.fromEntries(
+      [...new Set(evaluated.map((job) => job.import?.sponsoredByUserId).filter(Boolean))]
+        .sort().map((userId) => [userId, count(
+          evaluated, (job) => job.import?.sponsoredByUserId === userId,
+        )]),
+    ),
+    importSkippedUserQuota: count(
+      evaluated, (job) => job.import?.status === 'skipped_user_quota',
+    ),
+    resourceMeasurements,
     importExisting: count(
       evaluated,
       (job) => job.import?.status === 'existing_preflight',

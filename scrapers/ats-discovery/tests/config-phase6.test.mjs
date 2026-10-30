@@ -110,11 +110,11 @@ test('compatibility requests are import-only and require the Enrichment key', as
       },
     });
     assert.equal(imported.enrichmentApi.functionKey, 'enrichers-secret');
-    assert.equal(imported.multiUser.compatibility.maxRequestsPerRun, 20);
+    assert.equal(imported.multiUser.compatibility.concurrency, 2);
   });
 });
 
-test('Phase 6 workload ceilings are operator-owned positive integers', async () => {
+test('compatibility concurrency and user limits remain configurable', async () => {
   await withConfig({
     usersApi: { baseUrl: 'https://users.example/api', maxUsersPerRun: 5000 },
     multiUser: {
@@ -122,8 +122,6 @@ test('Phase 6 workload ceilings are operator-owned positive integers', async () 
       compatibility: {
         enabled: true,
         concurrency: 12,
-        maxPairsPerRun: 5000,
-        maxRequestsPerRun: 3000,
       },
     },
   }, async (configPath) => {
@@ -135,8 +133,6 @@ test('Phase 6 workload ceilings are operator-owned positive integers', async () 
     });
     assert.equal(config.usersApi.maxUsersPerRun, 5000);
     assert.equal(config.multiUser.compatibility.concurrency, 12);
-    assert.equal(config.multiUser.compatibility.maxPairsPerRun, 5000);
-    assert.equal(config.multiUser.compatibility.maxRequestsPerRun, 3000);
   });
   await withConfig({
     usersApi: { baseUrl: 'https://users.example/api', maxUsersPerRun: 0 },

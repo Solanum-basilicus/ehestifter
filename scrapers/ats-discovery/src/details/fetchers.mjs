@@ -1113,7 +1113,6 @@ export async function enrichCandidateDetails(
   candidates,
   {
     concurrency,
-    maxFetches,
     timeoutMs,
     fetchImpl = fetch,
     policy = null,
@@ -1156,16 +1155,7 @@ export async function enrichCandidateDetails(
     return { ...candidate, detail: { status: 'skipped_existing' } };
   });
 
-  const geographyPriority = { matched: 0, unknown: 1, mismatch: 2 };
-  const prioritizedEligibleIndices = [...eligibleIndices].sort((left, right) => {
-    const leftPriority = geographyPriority[output[left].preliminaryGeography?.status] ?? 1;
-    const rightPriority = geographyPriority[output[right].preliminaryGeography?.status] ?? 1;
-    return leftPriority - rightPriority || left - right;
-  });
-  const selectedIndices = prioritizedEligibleIndices.slice(0, maxFetches);
-  for (const index of prioritizedEligibleIndices.slice(maxFetches)) {
-    output[index] = { ...output[index], detail: { status: 'skipped_limit' } };
-  }
+  const selectedIndices = eligibleIndices;
 
   const fetched = await executeDetailRequests({
     items: selectedIndices.map((index) => ({ index, candidate: output[index] })),

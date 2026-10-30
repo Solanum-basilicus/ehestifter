@@ -36,7 +36,6 @@ test('parses offline and preflight scans', () => {
     command: 'scan',
     source: 'tracked',
     mode: 'offline',
-    maxCreate: null,
     catalogTargets: null,
     noProgress: false,
   });
@@ -44,7 +43,6 @@ test('parses offline and preflight scans', () => {
     command: 'scan',
     source: 'tracked',
     mode: 'preflight',
-    maxCreate: null,
     catalogTargets: null,
     noProgress: false,
   });
@@ -52,12 +50,11 @@ test('parses offline and preflight scans', () => {
 
 test('parses bounded import scan', () => {
   assert.deepEqual(
-    parseArgs(['scan', 'tracked', '--import', '--max-create', '3']),
+    parseArgs(['scan', 'tracked', '--import']),
     {
       command: 'scan',
       source: 'tracked',
       mode: 'import',
-      maxCreate: 3,
       catalogTargets: null,
       noProgress: false,
     },
@@ -75,22 +72,11 @@ test('requires exactly one scan mode', () => {
   );
 });
 
-test('requires max-create only for import', () => {
-  assert.throws(
-    () => parseArgs(['scan', 'tracked', '--import']),
-    /requires --max-create/,
-  );
-  assert.throws(
-    () => parseArgs(['scan', 'tracked', '--offline', '--max-create', '1']),
-    /valid only with --import/,
-  );
-});
-
-test('validates max-create strictly', () => {
-  for (const value of ['0', '-1', '1.5', '01', 'nope']) {
+test('retired create argument fails before the scan', () => {
+  for (const mode of ['--import', '--offline']) {
     assert.throws(
-      () => parseArgs(['scan', 'tracked', '--import', '--max-create', value]),
-      /positive integer/,
+      () => parseArgs(['scan', 'tracked', mode, '--max-create', '3']),
+      /max-create is retired/,
     );
   }
 });
@@ -99,7 +85,7 @@ test('help is recognized without entering scan or sync orchestration', () => {
   assert.deepEqual(parseArgs(['--help']), { command: 'help' });
   assert.deepEqual(parseArgs(['scan', 'tracked', '-h']), { command: 'help' });
   assert.match(usageText(), /catalog sync ashby/);
-  assert.match(usageText(), /scan tracked --import --max-create N/);
+  assert.match(usageText(), /scan tracked --import/);
 });
 
 test('unknown top-level command fails clearly', () => {
@@ -120,21 +106,19 @@ test('parses explicit live catalog targets and no-progress', () => {
       command: 'scan',
       source: 'tracked',
       mode: 'preflight',
-      maxCreate: null,
-      catalogTargets: 25,
+        catalogTargets: 25,
       noProgress: true,
     },
   );
   assert.deepEqual(
     parseArgs([
-      'scan', 'tracked', '--import', '--max-create', '2',
+      'scan', 'tracked', '--import',
       '--catalog-targets', '100',
     ]),
     {
       command: 'scan',
       source: 'tracked',
       mode: 'import',
-      maxCreate: 2,
       catalogTargets: 100,
       noProgress: false,
     },

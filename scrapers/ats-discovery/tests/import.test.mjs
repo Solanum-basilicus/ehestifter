@@ -121,7 +121,7 @@ test('import creates a valid v2 job even when legacy location evidence is invali
     })],
     client,
     {
-      maxCreates: 1,
+      maxCreatesPerUser: 1,
       requireDescription: true,
     },
   );
@@ -270,7 +270,7 @@ test('importCandidates enforces the create cap', async () => {
     ],
     client,
     {
-      maxCreates: 1,
+      maxCreatesPerUser: 1,
       requireDescription: true,
     },
   );
@@ -282,7 +282,7 @@ test('importCandidates enforces the create cap', async () => {
   );
   assert.equal(
     results[1].import.status,
-    'skipped_create_limit',
+    'skipped_user_quota',
   );
 });
 
@@ -310,7 +310,7 @@ test('importCandidates safely skips detail-unavailable postings before descripti
     })],
     client,
     {
-      maxCreates: 1,
+      maxCreatesPerUser: 1,
       requireDescription: true,
     },
   );
@@ -381,7 +381,7 @@ test('importCandidates passes Jobs canonical identity for create reconciliation'
   };
 
   await importCandidates([candidate()], client, {
-    maxCreates: 1,
+    maxCreatesPerUser: 1,
     requireDescription: true,
   });
 

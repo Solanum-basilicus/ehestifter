@@ -76,7 +76,7 @@ test('CLI publishes retryable prerequisite abort before provider state changes',
       state: path.join(dataPath, 'state'),
       data: dataPath,
     },
-    scan: { providerConcurrency: 1, maxCandidatesPerRun: 10 },
+    scan: { providerConcurrency: 1, jobsApiConcurrency: 1 },
     jobsApi: {},
     imports: {},
     usersApi: {

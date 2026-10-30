@@ -21,7 +21,7 @@ function requireString(value, name) {
 
 function positiveInteger(value, fallback, name, { max = Number.MAX_SAFE_INTEGER } = {}) {
   if (value == null) return fallback;
-  if (!Number.isInteger(value) || value <= 0 || value > max) {
+  if (!Number.isSafeInteger(value) || value <= 0 || value > max) {
     throw new Error(
       `${name} must be a positive integer no greater than ${max}`,
     );
@@ -31,7 +31,7 @@ function positiveInteger(value, fallback, name, { max = Number.MAX_SAFE_INTEGER 
 
 function nonNegativeInteger(value, fallback, name) {
   if (value == null) return fallback;
-  if (!Number.isInteger(value) || value < 0) {
+  if (!Number.isSafeInteger(value) || value < 0) {
     throw new Error(`${name} must be a non-negative integer`);
   }
   return value;
@@ -155,21 +155,19 @@ export async function loadRuntimeConfig({
   const statePath = typeof paths.state === 'string' && paths.state.trim()
     ? paths.state.trim()
     : path.join(dataPath, 'state');
-  const maxCandidatesPerRun = positiveInteger(
-    scan.maxCandidatesPerRun,
-    100,
-    'scan.maxCandidatesPerRun',
-  );
-  const maxTitleCandidatesBeforeGeography = positiveInteger(
-    scan.maxTitleCandidatesBeforeGeography,
-    maxCandidatesPerRun * 5,
-    'scan.maxTitleCandidatesBeforeGeography',
-  );
-  if (maxTitleCandidatesBeforeGeography < maxCandidatesPerRun) {
-    throw new Error(
-      'scan.maxTitleCandidatesBeforeGeography must be greater than or equal to '
-      + 'scan.maxCandidatesPerRun',
-    );
+  // Retired count limits must not silently override the import policy.
+  const retired = [
+    [scan, 'maxCandidatesPerRun', 'scan'],
+    [scan, 'maxTitleCandidatesBeforeGeography', 'scan'],
+    [description, 'maxFetchesPerRun', 'scan.description'],
+    [imports, 'maxCreatesPerRun', 'imports'],
+    [compatibility, 'maxPairsPerRun', 'multiUser.compatibility'],
+    [compatibility, 'maxRequestsPerRun', 'multiUser.compatibility'],
+  ];
+  for (const [section, key, prefix] of retired) {
+    if (Object.hasOwn(section, key)) {
+      throw new Error(`${prefix}.${key} is retired; use imports.maxCreatesPerUserPerRun and imports.sharedCreatesPerRun`);
+    }
   }
 
   const config = {
@@ -211,8 +209,6 @@ export async function loadRuntimeConfig({
         3,
         'scan.jobsApiConcurrency',
       ),
-      maxCandidatesPerRun,
-      maxTitleCandidatesBeforeGeography,
       requireDescriptionForCreate: booleanValue(
         scan.requireDescriptionForCreate,
         true,
@@ -223,11 +219,6 @@ export async function loadRuntimeConfig({
           description.fetchMissing,
           true,
           'scan.description.fetchMissing',
-        ),
-        maxFetchesPerRun: positiveInteger(
-          description.maxFetchesPerRun,
-          50,
-          'scan.description.maxFetchesPerRun',
         ),
         concurrency: positiveInteger(
           description.concurrency,
@@ -317,16 +308,6 @@ export async function loadRuntimeConfig({
           2,
           'multiUser.compatibility.concurrency',
         ),
-        maxPairsPerRun: positiveInteger(
-          compatibility.maxPairsPerRun,
-          100,
-          'multiUser.compatibility.maxPairsPerRun',
-        ),
-        maxRequestsPerRun: positiveInteger(
-          compatibility.maxRequestsPerRun,
-          20,
-          'multiUser.compatibility.maxRequestsPerRun',
-        ),
       },
     },
     careerOps: {
@@ -354,10 +335,15 @@ export async function loadRuntimeConfig({
     },
     imports: {
       enabled: booleanValue(imports.enabled, false, 'imports.enabled'),
-      maxCreatesPerRun: positiveInteger(
-        imports.maxCreatesPerRun,
-        5,
-        'imports.maxCreatesPerRun',
+      maxCreatesPerUserPerRun: positiveInteger(
+        imports.maxCreatesPerUserPerRun,
+        64,
+        'imports.maxCreatesPerUserPerRun',
+      ),
+      sharedCreatesPerRun: nonNegativeInteger(
+        imports.sharedCreatesPerRun,
+        64,
+        'imports.sharedCreatesPerRun',
       ),
     },
   };

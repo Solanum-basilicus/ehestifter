@@ -165,94 +165,27 @@ function targetSinceMs(target, portalConfig, nowMs) {
 }
 
 
-function stableHash(value) {
-  let hash = 2166136261;
-  for (const char of String(value)) {
-    hash ^= char.codePointAt(0);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
-
-export function admitCandidatesFairly(candidates, maxCandidates, {
-  enabled = true,
-  fairnessSeed = '',
-} = {}) {
-  if (!enabled || candidates.length <= maxCandidates) {
-    return {
-      retained: candidates.slice(0, maxCandidates),
-      dropped: candidates.slice(maxCandidates),
-      stats: buildAdmissionStats(candidates, candidates.slice(0, maxCandidates)),
-    };
-  }
-
-  const users = [...new Set(candidates.flatMap((candidate) => candidate.matchedUserIds ?? []))]
-    .sort((left, right) => (
-      stableHash(`${fairnessSeed}\u0000${left}`) - stableHash(`${fairnessSeed}\u0000${right}`)
-      || left.localeCompare(right)
-    ));
-  const candidateOrder = new Map(candidates.map((candidate, index) => [candidate, index]));
-  const queues = new Map(users.map((userId) => [
-    userId,
-    candidates
-      .filter((candidate) => (candidate.matchedUserIds ?? []).includes(userId))
-      .sort((left, right) => (
-        (left.sourceMode === 'priority' ? 0 : 1) - (right.sourceMode === 'priority' ? 0 : 1)
-        || candidateOrder.get(left) - candidateOrder.get(right)
-      )),
-  ]));
-
-  const selected = new Set();
-  const retained = [];
-  while (selected.size < maxCandidates) {
-    const servedThisRound = new Set();
-    let progressed = false;
-    for (const userId of users) {
-      if (selected.size >= maxCandidates) break;
-      if (servedThisRound.has(userId)) continue;
-      const queue = queues.get(userId) ?? [];
-      const candidate = queue.find((item) => !selected.has(item));
-      if (!candidate) continue;
-      selected.add(candidate);
-      retained.push(candidate);
-      progressed = true;
-      for (const matchedUserId of candidate.matchedUserIds ?? []) {
-        servedThisRound.add(matchedUserId);
-      }
-    }
-    if (!progressed) break;
-  }
-
-  // Keep the fair admission order for preflight and import so later global
-  // create limits cannot undo the per-user distribution.
-  const retainedSet = new Set(retained);
-  const dropped = candidates.filter((candidate) => !retainedSet.has(candidate));
-  return { retained, dropped, stats: buildAdmissionStats(candidates, retained) };
-}
-
-function buildAdmissionStats(candidates, retained) {
-  const retainedSet = new Set(retained);
-  const userIds = [...new Set(candidates.flatMap((candidate) => candidate.matchedUserIds ?? []))].sort();
-  const users = userIds.map((userId) => {
-    const matches = candidates.filter((candidate) => (candidate.matchedUserIds ?? []).includes(userId));
-    const kept = matches.filter((candidate) => retainedSet.has(candidate));
-    return {
-      userId,
-      titleCandidatesMatched: matches.length,
-      priorityTitleCandidatesMatched: matches.filter((candidate) => candidate.sourceMode === 'priority').length,
-      catalogTitleCandidatesMatched: matches.filter((candidate) => candidate.sourceMode === 'catalog').length,
-      candidatesRetainedByCap: kept.length,
-      candidatesDroppedByCap: matches.length - kept.length,
-    };
-  });
+function buildAdmissionStats(candidates, titleMatchesBeforePreliminary, userCounts, userSources) {
+  const users = [...userCounts.entries()].sort(([a], [b]) => a.localeCompare(b))
+    .map(([userId, titleCandidatesMatched]) => {
+      const matches = candidates.filter((candidate) => (candidate.matchedUserIds ?? []).includes(userId));
+      return {
+        userId,
+        titleCandidatesMatched,
+        priorityTitleCandidatesMatched: userSources.get(userId)?.priority ?? 0,
+        catalogTitleCandidatesMatched: userSources.get(userId)?.catalog ?? 0,
+        candidatesRetainedByCap: matches.length,
+        candidatesDroppedByCap: 0,
+      };
+    });
   return {
-    titleMatchedCandidatesBeforeCap: candidates.length,
-    userCandidateMatchesBeforeCap: users.reduce((sum, item) => sum + item.titleCandidatesMatched, 0),
-    candidatesRetained: retained.length,
-    candidatesDroppedByCap: candidates.length - retained.length,
-    usersAffectedByCandidateCap: users.filter((item) => item.candidatesDroppedByCap > 0).length,
-    usersStarvedByCandidateCap: users.filter((item) => item.titleCandidatesMatched > 0 && item.candidatesRetainedByCap === 0).length,
-    candidateCapReached: candidates.length > retained.length,
+    titleMatchedCandidatesBeforeCap: titleMatchesBeforePreliminary,
+    userCandidateMatchesBeforeCap: [...userCounts.values()].reduce((sum, count) => sum + count, 0),
+    candidatesRetained: candidates.length,
+    candidatesDroppedByCap: 0,
+    usersAffectedByCandidateCap: 0,
+    usersStarvedByCandidateCap: 0,
+    candidateCapReached: false,
     users,
   };
 }
@@ -263,7 +196,6 @@ export async function runTrackedScan({
   providers,
   policy,
   concurrency,
-  maxCandidates,
   upstreamRef,
   nowMs = Date.now(),
   monotonicNow,
@@ -275,7 +207,7 @@ export async function runTrackedScan({
   retainRejected = true,
   candidateMatcher = null,
   applyPortalCandidateFilters = true,
-  fairnessSeed = '',
+  preliminaryEvaluator = null,
 }) {
   if (!portalConfig || typeof portalConfig !== 'object' || Array.isArray(portalConfig)) {
     throw new Error('portalConfig must be an object');
@@ -285,8 +217,8 @@ export async function runTrackedScan({
   if (!policy || policy.schemaVersion !== 1) {
     throw new Error('parsed discovery policy is required');
   }
-  if (!Number.isInteger(maxCandidates) || maxCandidates <= 0) {
-    throw new Error('maxCandidates must be a positive integer');
+  if (preliminaryEvaluator != null && typeof preliminaryEvaluator !== 'function') {
+    throw new Error('preliminaryEvaluator must be a function');
   }
   if (typeof applyPortalCandidateFilters !== 'boolean') {
     throw new Error('applyPortalCandidateFilters must be a boolean');
@@ -355,6 +287,14 @@ export async function runTrackedScan({
   const rejectionCounts = {};
   let rejectedCount = 0;
   const seenUrls = new Set();
+  const preliminaryCounts = { matched: 0, unknown: 0, mismatch: 0 };
+  const preliminarySample = [];
+  const preliminarySampleCounts = { matched: 0, unknown: 0, mismatch: 0 };
+  const preliminaryWarnings = new Map();
+  const preliminaryUserTitleCounts = new Map();
+  const preliminaryUserSourceCounts = new Map();
+  let titleMatchesBeforePreliminary = 0;
+  let preliminaryRejected = 0;
 
   async function emitRejected(items) {
     if (items.length === 0) return;
@@ -423,7 +363,7 @@ export async function runTrackedScan({
     }
 
     for (const job of batch.jobs) {
-      const candidate = candidateFromJob(job, batch.target, upstreamRef);
+      let candidate = candidateFromJob(job, batch.target, upstreamRef);
       if (!candidate.title) {
         batchRejected.push(reject('missing_title', candidate));
         continue;
@@ -520,35 +460,61 @@ export async function runTrackedScan({
 
       const providerResult = resultBySequence.get(batch.target.sequence);
       providerResult.candidatesMatched += 1;
+      titleMatchesBeforePreliminary += 1;
+      for (const userId of candidate.matchedUserIds ?? []) {
+        preliminaryUserTitleCounts.set(userId, (preliminaryUserTitleCounts.get(userId) ?? 0) + 1);
+        const sourceCounts = preliminaryUserSourceCounts.get(userId) ?? { priority: 0, catalog: 0 };
+        sourceCounts[candidate.sourceMode] += 1;
+        preliminaryUserSourceCounts.set(userId, sourceCounts);
+      }
+      if (preliminaryEvaluator) {
+        // Run the safe listing-only check before later work and admission.
+        const result = preliminaryEvaluator(candidate);
+        candidate = result.candidate;
+        const status = candidate.preliminaryGeography?.status ?? 'unknown';
+        preliminaryCounts[status] = (preliminaryCounts[status] ?? 0) + 1;
+        // Keep up to 20 examples per result class for bounded diagnostics.
+        if ((preliminarySampleCounts[status] ?? 0) < 20) {
+          preliminarySample.push(candidate);
+          preliminarySampleCounts[status] = (preliminarySampleCounts[status] ?? 0) + 1;
+        }
+        for (const warning of result.warnings ?? []) {
+          const key = JSON.stringify(warning);
+          if (!preliminaryWarnings.has(key)) preliminaryWarnings.set(key, warning);
+        }
+        if (result.reject === true) {
+          preliminaryRejected += 1;
+          batchRejected.push(reject('no_user_location_match', candidate,
+            result.rejectionDetails ?? {
+              phase: 'preliminary',
+              status: candidate.preliminaryGeography?.status ?? null,
+            }));
+          continue;
+        }
+      }
+      providerResult.candidatesRetained += 1;
       candidates.push(candidate);
     }
     await emitRejected(batchRejected);
   }
 
-  const admission = admitCandidatesFairly(candidates, maxCandidates, {
-    enabled: candidateMatcher != null,
-    fairnessSeed,
-  });
-  for (const candidate of admission.retained) {
-    const result = resultBySequence.get(candidate.provenance?.targetSequence);
-    if (result) result.candidatesRetained += 1;
-  }
-  const admissionRejected = [];
-  for (const candidate of admission.dropped) {
-    const result = resultBySequence.get(candidate.provenance?.targetSequence);
-    if (result) result.candidatesDroppedByCap += 1;
-    admissionRejected.push(reject('candidate_cap', null, {
-      provider: candidate.sourceProvider,
-      tenant: candidate.sourceTenant,
-      url: candidate.url,
-      matchedUserIds: candidate.matchedUserIds ?? [],
-    }));
-  }
-  await emitRejected(admissionRejected);
+  const admissionStats = buildAdmissionStats(
+    candidates, titleMatchesBeforePreliminary, preliminaryUserTitleCounts,
+    preliminaryUserSourceCounts,
+  );
 
   return {
-    candidates: admission.retained,
-    candidateAdmission: admission.stats,
+    candidates,
+    candidateAdmission: admissionStats,
+    preliminarySample,
+    preliminaryDiscoveryEligibility: preliminaryEvaluator ? {
+      counts: preliminaryCounts,
+      warnings: [...preliminaryWarnings.values()],
+      rejectedBeforeDetail: preliminaryRejected,
+      candidatesBeforeCheck: titleMatchesBeforePreliminary,
+      candidatesRetained: candidates.length,
+      sampleCounts: preliminarySampleCounts,
+    } : null,
     canaryCandidates,
     rejected,
     rejectedCount,

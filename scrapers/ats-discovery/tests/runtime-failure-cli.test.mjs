@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import {
   mkdtemp,
-  readFile,
   rm,
   writeFile,
 } from 'node:fs/promises';
@@ -33,7 +32,7 @@ function runNode(args, { env = {} } = {}) {
   });
 }
 
-test('import cap mismatch fails before scanning and publishes a partial run', async (t) => {
+test('invalid import quota stops before scanner initialization', async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'cli-runtime-failure-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
 
@@ -73,11 +72,9 @@ test('import cap mismatch fails before scanning and publishes a partial run', as
     scan: {
       providerConcurrency: 1,
       jobsApiConcurrency: 1,
-      maxCandidatesPerRun: 10,
       requireDescriptionForCreate: true,
       description: {
         fetchMissing: true,
-        maxFetchesPerRun: 10,
         concurrency: 1,
         timeoutMs: 1000,
       },
@@ -87,7 +84,7 @@ test('import cap mismatch fails before scanning and publishes a partial run', as
       timeoutMs: 1000,
       retryCount: 0,
     },
-    imports: { enabled: true, maxCreatesPerRun: 1 },
+    imports: { enabled: true, maxCreatesPerUserPerRun: -1, sharedCreatesPerRun: 0 },
     liveCatalog: {
       enabled: false,
       maxPreflightTargetsPerRun: 10,
@@ -112,7 +109,7 @@ test('import cap mismatch fails before scanning and publishes a partial run', as
   }));
 
   const result = await runNode(
-    [cliPath, 'scan', 'tracked', '--import', '--max-create', '2', '--no-progress'],
+    [cliPath, 'scan', 'tracked', '--import', '--no-progress'],
     {
       env: {
         SCANNER_CONFIG_PATH: configPath,
@@ -121,14 +118,7 @@ test('import cap mismatch fails before scanning and publishes a partial run', as
     },
   );
 
-  assert.equal(result.code, 64, result.stderr);
-  const output = JSON.parse(result.stdout);
-  const failure = JSON.parse(await readFile(path.join(output.runPath, 'failure.json'), 'utf8'));
-  const metadata = JSON.parse(await readFile(path.join(output.runPath, 'metadata.json'), 'utf8'));
-  assert.equal(failure.stage, 'runtime_config_validation');
-  assert.equal(failure.retryable, false);
-  assert.match(failure.error.message, /max-create 2.*maxCreatesPerRun 1/u);
-  assert.equal(metadata.partial, true);
-  await assert.rejects(readFile(path.join(output.runPath, 'target-plan.json'), 'utf8'), { code: 'ENOENT' });
-  await assert.rejects(readFile(path.join(output.runPath, 'provider-results.json'), 'utf8'), { code: 'ENOENT' });
+  assert.equal(result.code, 1, result.stderr);
+  assert.match(result.stderr, /imports.maxCreatesPerUserPerRun must be a positive integer/u);
+  assert.equal(result.stdout, '');
 });

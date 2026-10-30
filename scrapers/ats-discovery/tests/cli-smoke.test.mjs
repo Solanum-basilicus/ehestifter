@@ -154,7 +154,7 @@ test('CLI offline branch publishes Phase 3 artifacts and scanner-owned state wit
         state: path.join(dataPath, 'state'),
         data: dataPath,
       },
-      scan: { providerConcurrency: 3, maxCandidatesPerRun: 100 },
+      scan: { providerConcurrency: 3 },
       jobsApi: {},
       imports: {},
     }));
@@ -274,7 +274,7 @@ test('CLI enforces mode-specific live catalog target ceilings', async () => {
         maxPreflightTargetsPerRun: 5,
         maxImportTargetsPerRun: 3,
       },
-      imports: { enabled: true, maxCreatesPerRun: 1 },
+      imports: { enabled: true, maxCreatesPerUserPerRun: 1, sharedCreatesPerRun: 0 },
     }));
 
     const preflight = await runNode([
@@ -289,8 +289,7 @@ test('CLI enforces mode-specific live catalog target ceilings', async () => {
     assert.match(preflight.stderr, /exceeds preflight ceiling 5/);
 
     const importing = await runNode([
-      cliPath, 'scan', 'tracked', '--import', '--max-create', '1',
-      '--catalog-targets', '4',
+      cliPath, 'scan', 'tracked', '--import',       '--catalog-targets', '4',
     ], {
       env: {
         SCANNER_CONFIG_PATH: configPath,

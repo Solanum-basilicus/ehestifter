@@ -104,7 +104,6 @@ test('detail progress counts only actual selected detail fetches', async () => {
     }),
   ], {
     concurrency: 2,
-    maxFetches: 10,
     timeoutMs: 1000,
     onProgress: (event) => events.push(event),
   });
@@ -113,7 +112,7 @@ test('detail progress counts only actual selected detail fetches', async () => {
   assert.deepEqual(events, [{ stage: 'details', current: 1, total: 1 }]);
 });
 
-test('import progress covers every evaluated candidate while create cap remains enforced', async () => {
+test('import progress covers all candidates and respects user slots', async () => {
   const events = [];
   let creates = 0;
   const result = await importCandidates([
@@ -138,13 +137,13 @@ test('import progress covers every evaluated candidate while create cap remains 
       };
     },
   }, {
-    maxCreates: 1,
+    maxCreatesPerUser: 1,
     requireDescription: true,
     onProgress: (event) => events.push(event),
   });
   assert.equal(creates, 1);
   assert.equal(result[0].import.status, 'submitted');
-  assert.equal(result[1].import.status, 'skipped_create_limit');
+  assert.equal(result[1].import.status, 'skipped_user_quota');
   assert.deepEqual(events.map((event) => event.current), [1, 2]);
 });
 

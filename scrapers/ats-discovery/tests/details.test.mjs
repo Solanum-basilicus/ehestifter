@@ -345,7 +345,7 @@ test('Paylocity details keep JobPosting JSON-LD as the primary source', async ()
   assert.equal(result.description, 'Primary JSON-LD description.');
 });
 
-test('detail budget prioritizes preliminary geography matches before mismatches', async () => {
+test('all eligible details are evaluated without a count limit', async () => {
   const base = {
     preflight: { status: 'ok', exists: false },
     description: '',
@@ -368,11 +368,10 @@ test('detail budget prioritizes preliminary geography matches before mismatches'
     },
   ], {
     concurrency: 1,
-    maxFetches: 1,
     timeoutMs: 1000,
   });
 
-  assert.equal(results[0].detail.status, 'skipped_limit');
+  assert.equal(results[0].detail.status, 'unsupported_provider');
   assert.equal(results[1].detail.status, 'unsupported_provider');
 });
 

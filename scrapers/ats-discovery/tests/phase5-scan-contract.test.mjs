@@ -125,7 +125,7 @@ test('health-only canary bypasses candidate filters and preserves partial jobs f
     providers: new Map([['successfactors', provider]]),
     policy,
     concurrency: 1,
-    maxCandidates: 10,
+
     upstreamRef: 'legacy-ref',
     httpContextFactory: () => ({}),
   });
@@ -197,7 +197,7 @@ test('tracked target can share one fetch with an attached canary', async () => {
     providers: new Map([['successfactors', provider]]),
     policy,
     concurrency: 1,
-    maxCandidates: 10,
+
     upstreamRef: 'legacy-ref',
     httpContextFactory: () => ({}),
   });

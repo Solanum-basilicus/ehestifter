@@ -53,7 +53,7 @@ test('decisively ineligible candidates are skipped without consuming create cap'
       },
       locationEligibility: { status: 'unclear' },
     }),
-  ], client, { maxCreates: 1, requireDescription: true });
+  ], client, { maxCreatesPerUser: 1, requireDescription: true });
 
   assert.equal(results[0].import.status, 'skipped_location_ineligible');
   assert.equal(results[1].import.status, 'submitted');
@@ -68,7 +68,7 @@ test('existing records are returned before the location gate', async () => {
       locationEligibility: { status: 'ineligible' },
     }),
   ], { createJob: async () => assert.fail('must not create') }, {
-    maxCreates: 1,
+    maxCreatesPerUser: 1,
     requireDescription: true,
   });
   assert.equal(result.import.status, 'existing_preflight');
@@ -95,7 +95,7 @@ test('unresolved Hybrid location remains importable while inference matures', as
         responseStatus: 201,
       };
     },
-  }, { maxCreates: 1, requireDescription: true });
+  }, { maxCreatesPerUser: 1, requireDescription: true });
 
   assert.equal(result.import.status, 'submitted');
   assert.equal(calls.length, 1);

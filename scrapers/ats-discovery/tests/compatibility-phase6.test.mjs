@@ -31,8 +31,6 @@ function imported(overrides = {}) {
 const baseConfig = {
   enricherType: 'compatibility.v1',
   concurrency: 2,
-  maxPairsPerRun: 100,
-  maxRequestsPerRun: 20,
 };
 
 test('builds one deterministic pair per job and matched user', () => {
@@ -84,22 +82,25 @@ test('permanent failures are suppressed by Enrichment Core', async () => {
   ]);
 });
 
-test('pair and request limits remain deterministic', async () => {
+test('all distinct compatibility pairs are submitted without a count limit', async () => {
+  const calls = [];
   const result = await requestCompatibilityForMatches({
     importResults: [
       imported(),
       imported({ import: { status: 'submitted', jobId: JOB_B } }),
     ],
     discoveryUsers: users,
-    client: { createRun: async () => ({ runId: 'new', status: 'Queued', decision: 'created' }) },
-    config: { ...baseConfig, maxPairsPerRun: 3, maxRequestsPerRun: 1 },
+    client: { createRun: async (job, user) => {
+      calls.push([job, user]);
+      return { runId: 'new', status: 'Queued', decision: 'created' };
+    } },
+    config: baseConfig,
   });
   assert.equal(result.totalPairs, 4);
-  assert.equal(result.evaluatedPairs, 3);
-  assert.equal(result.omittedPairs, 1);
-  assert.deepEqual(result.results.map((item) => item.status), [
-    'requested', 'skipped_request_limit', 'skipped_request_limit',
-  ]);
+  assert.equal(result.evaluatedPairs, 4);
+  assert.equal(result.omittedPairs, 0);
+  assert.equal(calls.length, 4);
+  assert.ok(result.results.every((item) => item.status === 'requested'));
 });
 
 test('create failures remain local to each pair', async () => {
