@@ -208,6 +208,7 @@ export async function runTrackedScan({
   candidateMatcher = null,
   applyPortalCandidateFilters = true,
   preliminaryEvaluator = null,
+  onBatchProcessed = null,
 }) {
   if (!portalConfig || typeof portalConfig !== 'object' || Array.isArray(portalConfig)) {
     throw new Error('portalConfig must be an object');
@@ -229,6 +230,9 @@ export async function runTrackedScan({
   if (onProviderResult != null && typeof onProviderResult !== 'function') {
     throw new Error('onProviderResult must be a function');
   }
+  if (onBatchProcessed != null && typeof onBatchProcessed !== 'function') {
+    throw new Error('onBatchProcessed must be a function');
+  }
 
   const titleEvaluator = buildTitleEvaluator(portalConfig.title_filter);
   const locationFilter = buildLocationFilter(portalConfig.location_filter);
@@ -242,6 +246,242 @@ export async function runTrackedScan({
   const salaryFilter = buildSalaryFilter(portalConfig.salary_filter);
   const contentFilter = buildContentFilter(portalConfig.content_filter);
 
+  // Provider results are compact metadata. Raw job arrays must be released
+  // after each ordered batch, not retained for the complete catalog scan.
+  const providerResults = [];
+  const candidates = [];
+  const canaryCandidates = [];
+  const rejected = [];
+  const rejectionCounts = {};
+  let rejectedCount = 0;
+  const seenUrls = new Set();
+  const preliminaryCounts = { matched: 0, unknown: 0, mismatch: 0 };
+  const preliminarySample = [];
+  const preliminarySampleCounts = { matched: 0, unknown: 0, mismatch: 0 };
+  const preliminaryWarnings = new Map();
+  const preliminaryUserTitleCounts = new Map();
+  const preliminaryUserSourceCounts = new Map();
+  let titleMatchesBeforePreliminary = 0;
+  let preliminaryRejected = 0;
+  let batchesProcessed = 0;
+  let rawJobsProcessed = 0;
+
+  async function emitRejected(items) {
+    if (items.length === 0) return;
+    rejectedCount += items.length;
+    for (const item of items) {
+      const reason = item?.reason ?? 'unknown';
+      rejectionCounts[reason] = (rejectionCounts[reason] ?? 0) + 1;
+    }
+    if (retainRejected) rejected.push(...items);
+    if (onRejected) await onRejected(items);
+  }
+
+  async function processBatch(batch) {
+    // Do not retain the provider's raw jobs in the result metadata.
+    providerResults.push(batch.providerResult);
+    batchesProcessed += 1;
+    rawJobsProcessed += batch.jobs.length;
+    try {
+      const batchRejected = [];
+      if (batch.providerResult.status === 'skipped') return;
+
+      if (batch.target.canary != null && batch.jobs.length > 0) {
+        const sampleSize = batch.target.canary.detailSampleSize ?? 0;
+        for (const job of batch.jobs.slice(0, sampleSize)) {
+          const candidate = candidateFromJob(job, batch.target, upstreamRef);
+          if (!candidate.title || !candidate.hiringCompanyName || !validHttpUrl(candidate.url)) {
+            continue;
+          }
+          canaryCandidates.push({
+            ...candidate,
+            preflight: { status: 'ok', exists: false, source: 'provider_canary' },
+            canary: {
+              minimumJobs: batch.target.canary.minimumJobs ?? 1,
+              minimumDetailSuccesses:
+                batch.target.canary.minimumDetailSuccesses ?? 0,
+            },
+          });
+        }
+      }
+
+      if (batch.target.healthOnly) {
+        if (batch.error && batch.jobs.length === 0) {
+          batchRejected.push(reject('provider_fetch_failed', null, {
+            company: batch.target.name,
+            provider: batch.target.provider,
+            providerVariant: batch.target.providerVariant ?? null,
+            healthPartition: batch.target.healthPartition ?? batch.target.provider,
+            tenant: batch.target.tenant,
+            errorClass: batch.providerResult.errorClass,
+            httpStatus: batch.providerResult.httpStatus,
+            error: providerErrorMessage(batch.error),
+          }));
+        }
+        await emitRejected(batchRejected);
+        return;
+      }
+
+      if (batch.error && batch.jobs.length === 0) {
+        batchRejected.push(reject('provider_fetch_failed', null, {
+          company: batch.target.name,
+          provider: batch.target.provider,
+          providerVariant: batch.target.providerVariant ?? null,
+          healthPartition: batch.target.healthPartition ?? batch.target.provider,
+          tenant: batch.target.tenant,
+          errorClass: batch.providerResult.errorClass,
+          httpStatus: batch.providerResult.httpStatus,
+          error: providerErrorMessage(batch.error),
+        }));
+        await emitRejected(batchRejected);
+        return;
+      }
+
+      for (const job of batch.jobs) {
+        let candidate = candidateFromJob(job, batch.target, upstreamRef);
+        if (!candidate.title) {
+          batchRejected.push(reject('missing_title', candidate));
+          continue;
+        }
+        if (!candidate.hiringCompanyName) {
+          batchRejected.push(reject('missing_company', candidate));
+          continue;
+        }
+        if (!validHttpUrl(candidate.url)) {
+          batchRejected.push(reject('missing_or_invalid_url', candidate));
+          continue;
+        }
+        if (seenUrls.has(candidate.url)) {
+          batchRejected.push(reject('duplicate_url_in_run', candidate));
+          continue;
+        }
+        seenUrls.add(candidate.url);
+        let titleEvaluation = {
+          allowed: true,
+          positiveMatches: [],
+          negativeMatches: [],
+        };
+        if (applyPortalCandidateFilters) {
+          titleEvaluation = titleEvaluator(candidate.title);
+          if (!titleEvaluation.allowed) {
+            batchRejected.push(reject('title_filter', candidate, {
+              positiveMatches: titleEvaluation.positiveMatches,
+              negativeMatches: titleEvaluation.negativeMatches,
+            }));
+            continue;
+          }
+        }
+        if (applyPortalCandidateFilters) {
+          const locationScope = locationScopeFilter(candidate.rawLocation);
+          if (!locationScope.allowed) {
+            batchRejected.push(reject('location_scope_filter', candidate, {
+              reason: locationScope.reason,
+              allowedMatches: locationScope.allowedMatches,
+              blockedMatches: locationScope.blockedMatches,
+              markerMatches: locationScope.markerMatches ?? [],
+            }));
+            continue;
+          }
+        }
+        if (applyPortalCandidateFilters && !locationFilter(candidate.rawLocation)) {
+          batchRejected.push(reject('location_filter', candidate));
+          continue;
+        }
+        const postedAt = candidate.postedAtUtc
+          ? Date.parse(candidate.postedAtUtc)
+          : undefined;
+        if (!postingAgeFilter(postedAt)) {
+          batchRejected.push(reject('posting_age_filter', candidate));
+          continue;
+        }
+        if (applyPortalCandidateFilters && !salaryFilter(candidate.salary)) {
+          batchRejected.push(reject('salary_filter', candidate));
+          continue;
+        }
+        const matched = applyPortalCandidateFilters
+          ? matchedTitleKeywords(candidate.title, portalConfig.title_filter)
+          : [];
+        if (
+          applyPortalCandidateFilters
+          && !contentFilter(candidate.description, matched)
+        ) {
+          batchRejected.push(reject('content_filter', candidate));
+          continue;
+        }
+        if (candidateMatcher) {
+          let userMatch;
+          try {
+            userMatch = candidateMatcher(candidate);
+          } catch (error) {
+            batchRejected.push(reject('user_match_error', candidate, {
+              error: error instanceof Error ? error.message : String(error),
+            }));
+            continue;
+          }
+          if (!userMatch?.allowed) {
+            batchRejected.push(reject('no_user_match', candidate));
+            continue;
+          }
+          candidate.matchedUserIds = [...userMatch.matchedUserIds];
+          candidate.userMatch = {
+            matchedProfiles: Array.isArray(userMatch.matchedProfiles)
+              ? userMatch.matchedProfiles
+              : [],
+            matchedTitles: Array.isArray(userMatch.matchedTitles)
+              ? userMatch.matchedTitles
+              : [],
+          };
+        }
+
+        const providerResult = batch.providerResult;
+        providerResult.candidatesMatched += 1;
+        titleMatchesBeforePreliminary += 1;
+        for (const userId of candidate.matchedUserIds ?? []) {
+          preliminaryUserTitleCounts.set(userId, (preliminaryUserTitleCounts.get(userId) ?? 0) + 1);
+          const sourceCounts = preliminaryUserSourceCounts.get(userId) ?? { priority: 0, catalog: 0 };
+          sourceCounts[candidate.sourceMode] += 1;
+          preliminaryUserSourceCounts.set(userId, sourceCounts);
+        }
+        if (preliminaryEvaluator) {
+          // Run the safe listing-only check before later work and admission.
+          const result = preliminaryEvaluator(candidate);
+          candidate = result.candidate;
+          const status = candidate.preliminaryGeography?.status ?? 'unknown';
+          preliminaryCounts[status] = (preliminaryCounts[status] ?? 0) + 1;
+          // Keep up to 20 examples per result class for bounded diagnostics.
+          if ((preliminarySampleCounts[status] ?? 0) < 20) {
+            preliminarySample.push(candidate);
+            preliminarySampleCounts[status] = (preliminarySampleCounts[status] ?? 0) + 1;
+          }
+          for (const warning of result.warnings ?? []) {
+            const key = JSON.stringify(warning);
+            if (!preliminaryWarnings.has(key)) preliminaryWarnings.set(key, warning);
+          }
+          if (result.reject === true) {
+            preliminaryRejected += 1;
+            batchRejected.push(reject('no_user_location_match', candidate,
+              result.rejectionDetails ?? {
+                phase: 'preliminary',
+                status: candidate.preliminaryGeography?.status ?? null,
+              }));
+            continue;
+          }
+        }
+        providerResult.candidatesRetained += 1;
+        candidates.push(candidate);
+      }
+      await emitRejected(batchRejected);
+    } finally {
+      if (onBatchProcessed) await onBatchProcessed({
+        batchesProcessed,
+        rawJobsProcessed,
+        candidatesRetained: candidates.length,
+        rejectedCount,
+      });
+    }
+  }
+
+
   const execution = await executeProviderTargets({
     targets,
     policy,
@@ -250,6 +490,7 @@ export async function runTrackedScan({
     sleep,
     onProgress,
     onResult: onProviderResult,
+    onBatch: processBatch,
     fetchTarget: async (target) => {
       const sinceMs = targetSinceMs(target, portalConfig, nowMs);
       let telemetry = {};
@@ -277,227 +518,8 @@ export async function runTrackedScan({
     },
   });
 
-  const providerResults = execution.batches.map((batch) => batch.providerResult);
-  const resultBySequence = new Map(
-    providerResults.map((result) => [result.sequence, result]),
-  );
-  const candidates = [];
-  const canaryCandidates = [];
-  const rejected = [];
-  const rejectionCounts = {};
-  let rejectedCount = 0;
-  const seenUrls = new Set();
-  const preliminaryCounts = { matched: 0, unknown: 0, mismatch: 0 };
-  const preliminarySample = [];
-  const preliminarySampleCounts = { matched: 0, unknown: 0, mismatch: 0 };
-  const preliminaryWarnings = new Map();
-  const preliminaryUserTitleCounts = new Map();
-  const preliminaryUserSourceCounts = new Map();
-  let titleMatchesBeforePreliminary = 0;
-  let preliminaryRejected = 0;
 
-  async function emitRejected(items) {
-    if (items.length === 0) return;
-    rejectedCount += items.length;
-    for (const item of items) {
-      const reason = item?.reason ?? 'unknown';
-      rejectionCounts[reason] = (rejectionCounts[reason] ?? 0) + 1;
-    }
-    if (retainRejected) rejected.push(...items);
-    if (onRejected) await onRejected(items);
-  }
-
-  for (const batch of execution.batches) {
-    const batchRejected = [];
-    if (batch.providerResult.status === 'skipped') continue;
-
-    if (batch.target.canary != null && batch.jobs.length > 0) {
-      const sampleSize = batch.target.canary.detailSampleSize ?? 0;
-      for (const job of batch.jobs.slice(0, sampleSize)) {
-        const candidate = candidateFromJob(job, batch.target, upstreamRef);
-        if (!candidate.title || !candidate.hiringCompanyName || !validHttpUrl(candidate.url)) {
-          continue;
-        }
-        canaryCandidates.push({
-          ...candidate,
-          preflight: { status: 'ok', exists: false, source: 'provider_canary' },
-          canary: {
-            minimumJobs: batch.target.canary.minimumJobs ?? 1,
-            minimumDetailSuccesses:
-              batch.target.canary.minimumDetailSuccesses ?? 0,
-          },
-        });
-      }
-    }
-
-    if (batch.target.healthOnly) {
-      if (batch.error && batch.jobs.length === 0) {
-        batchRejected.push(reject('provider_fetch_failed', null, {
-          company: batch.target.name,
-          provider: batch.target.provider,
-          providerVariant: batch.target.providerVariant ?? null,
-          healthPartition: batch.target.healthPartition ?? batch.target.provider,
-          tenant: batch.target.tenant,
-          errorClass: batch.providerResult.errorClass,
-          httpStatus: batch.providerResult.httpStatus,
-          error: providerErrorMessage(batch.error),
-        }));
-      }
-      await emitRejected(batchRejected);
-      continue;
-    }
-
-    if (batch.error && batch.jobs.length === 0) {
-      batchRejected.push(reject('provider_fetch_failed', null, {
-        company: batch.target.name,
-        provider: batch.target.provider,
-        providerVariant: batch.target.providerVariant ?? null,
-        healthPartition: batch.target.healthPartition ?? batch.target.provider,
-        tenant: batch.target.tenant,
-        errorClass: batch.providerResult.errorClass,
-        httpStatus: batch.providerResult.httpStatus,
-        error: providerErrorMessage(batch.error),
-      }));
-      await emitRejected(batchRejected);
-      continue;
-    }
-
-    for (const job of batch.jobs) {
-      let candidate = candidateFromJob(job, batch.target, upstreamRef);
-      if (!candidate.title) {
-        batchRejected.push(reject('missing_title', candidate));
-        continue;
-      }
-      if (!candidate.hiringCompanyName) {
-        batchRejected.push(reject('missing_company', candidate));
-        continue;
-      }
-      if (!validHttpUrl(candidate.url)) {
-        batchRejected.push(reject('missing_or_invalid_url', candidate));
-        continue;
-      }
-      if (seenUrls.has(candidate.url)) {
-        batchRejected.push(reject('duplicate_url_in_run', candidate));
-        continue;
-      }
-      seenUrls.add(candidate.url);
-      let titleEvaluation = {
-        allowed: true,
-        positiveMatches: [],
-        negativeMatches: [],
-      };
-      if (applyPortalCandidateFilters) {
-        titleEvaluation = titleEvaluator(candidate.title);
-        if (!titleEvaluation.allowed) {
-          batchRejected.push(reject('title_filter', candidate, {
-            positiveMatches: titleEvaluation.positiveMatches,
-            negativeMatches: titleEvaluation.negativeMatches,
-          }));
-          continue;
-        }
-      }
-      if (applyPortalCandidateFilters) {
-        const locationScope = locationScopeFilter(candidate.rawLocation);
-        if (!locationScope.allowed) {
-          batchRejected.push(reject('location_scope_filter', candidate, {
-            reason: locationScope.reason,
-            allowedMatches: locationScope.allowedMatches,
-            blockedMatches: locationScope.blockedMatches,
-            markerMatches: locationScope.markerMatches ?? [],
-          }));
-          continue;
-        }
-      }
-      if (applyPortalCandidateFilters && !locationFilter(candidate.rawLocation)) {
-        batchRejected.push(reject('location_filter', candidate));
-        continue;
-      }
-      const postedAt = candidate.postedAtUtc
-        ? Date.parse(candidate.postedAtUtc)
-        : undefined;
-      if (!postingAgeFilter(postedAt)) {
-        batchRejected.push(reject('posting_age_filter', candidate));
-        continue;
-      }
-      if (applyPortalCandidateFilters && !salaryFilter(candidate.salary)) {
-        batchRejected.push(reject('salary_filter', candidate));
-        continue;
-      }
-      const matched = applyPortalCandidateFilters
-        ? matchedTitleKeywords(candidate.title, portalConfig.title_filter)
-        : [];
-      if (
-        applyPortalCandidateFilters
-        && !contentFilter(candidate.description, matched)
-      ) {
-        batchRejected.push(reject('content_filter', candidate));
-        continue;
-      }
-      if (candidateMatcher) {
-        let userMatch;
-        try {
-          userMatch = candidateMatcher(candidate);
-        } catch (error) {
-          batchRejected.push(reject('user_match_error', candidate, {
-            error: error instanceof Error ? error.message : String(error),
-          }));
-          continue;
-        }
-        if (!userMatch?.allowed) {
-          batchRejected.push(reject('no_user_match', candidate));
-          continue;
-        }
-        candidate.matchedUserIds = [...userMatch.matchedUserIds];
-        candidate.userMatch = {
-          matchedProfiles: Array.isArray(userMatch.matchedProfiles)
-            ? userMatch.matchedProfiles
-            : [],
-          matchedTitles: Array.isArray(userMatch.matchedTitles)
-            ? userMatch.matchedTitles
-            : [],
-        };
-      }
-
-      const providerResult = resultBySequence.get(batch.target.sequence);
-      providerResult.candidatesMatched += 1;
-      titleMatchesBeforePreliminary += 1;
-      for (const userId of candidate.matchedUserIds ?? []) {
-        preliminaryUserTitleCounts.set(userId, (preliminaryUserTitleCounts.get(userId) ?? 0) + 1);
-        const sourceCounts = preliminaryUserSourceCounts.get(userId) ?? { priority: 0, catalog: 0 };
-        sourceCounts[candidate.sourceMode] += 1;
-        preliminaryUserSourceCounts.set(userId, sourceCounts);
-      }
-      if (preliminaryEvaluator) {
-        // Run the safe listing-only check before later work and admission.
-        const result = preliminaryEvaluator(candidate);
-        candidate = result.candidate;
-        const status = candidate.preliminaryGeography?.status ?? 'unknown';
-        preliminaryCounts[status] = (preliminaryCounts[status] ?? 0) + 1;
-        // Keep up to 20 examples per result class for bounded diagnostics.
-        if ((preliminarySampleCounts[status] ?? 0) < 20) {
-          preliminarySample.push(candidate);
-          preliminarySampleCounts[status] = (preliminarySampleCounts[status] ?? 0) + 1;
-        }
-        for (const warning of result.warnings ?? []) {
-          const key = JSON.stringify(warning);
-          if (!preliminaryWarnings.has(key)) preliminaryWarnings.set(key, warning);
-        }
-        if (result.reject === true) {
-          preliminaryRejected += 1;
-          batchRejected.push(reject('no_user_location_match', candidate,
-            result.rejectionDetails ?? {
-              phase: 'preliminary',
-              status: candidate.preliminaryGeography?.status ?? null,
-            }));
-          continue;
-        }
-      }
-      providerResult.candidatesRetained += 1;
-      candidates.push(candidate);
-    }
-    await emitRejected(batchRejected);
-  }
-
+  providerResults.sort((left, right) => left.sequence - right.sequence);
   const admissionStats = buildAdmissionStats(
     candidates, titleMatchesBeforePreliminary, preliminaryUserTitleCounts,
     preliminaryUserSourceCounts,

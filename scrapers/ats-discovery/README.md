@@ -1144,3 +1144,32 @@ diagnostics and do not create extra Jobs API calls or change user matching.
 location fields, and selected Greenhouse application question labels. It
 contains no question answers or applicant information. See
 `LLM-LOCATION-REVIEW.md` for manual classification instructions.
+
+## Provider batch memory and live diagnostics
+
+The scanner processes provider listing results in target sequence order. It holds
+no more than two global-concurrency windows of completed or active target
+results. It waits for a prior result when later targets finish first. This
+limits the number of provider job arrays kept at the same time. It does not
+limit accepted jobs, detail requests, imports, or compatibility pairs.
+
+The window can delay some provider requests while a slow earlier target is
+active. Provider request intervals, concurrency, and circuit breakers still
+apply. Large responses from one target, the global duplicate URL set, the
+location catalog, and accepted candidate records still use memory. A future
+change can examine these remaining sources if memory is still too high.
+
+During a scan, `runs/<run-id>.partial/resource-progress.ndjson` records memory
+and progress every 30 seconds, and after every 100 processed target batches.
+Each record contains the UTC time, V8 heap used/total, RSS, external memory,
+completed provider fetches, processed batches, processed raw jobs, accepted
+candidates, and rejected jobs. The file uses synchronous small writes so it
+can survive a fatal V8 heap error. A successful run copies this file to
+`runs/<run-id>/resource-progress.ndjson`. Its sampled maximum values also
+appear under `resourceMeasurements.providerScanLive` in `summary.json`.
+These sampled maximum values are not guaranteed peak usage.
+
+The scanner waits for buffered rejection-journal writes after each 100 target
+batches. This prevents a large queue of pending journal writes. The partial
+trace and journal contain job and user data; keep them private. The scheduler
+retention policy must handle old partial directories.

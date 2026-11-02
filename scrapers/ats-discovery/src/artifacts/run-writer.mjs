@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  copyFile,
   mkdir,
   rename,
   rm,
@@ -169,6 +170,7 @@ export async function writeRunArtifacts({
   locationLlmInputs = null,
   importResults,
   summary,
+  resourceTracePath = null,
 }) {
   const runsPath = path.join(dataPath, 'runs');
   const runPath = path.join(runsPath, runId);
@@ -180,6 +182,12 @@ export async function writeRunArtifacts({
   await mkdir(stagingPath, { recursive: false });
   try {
     await writeJsonArtifact(stagingPath, 'metadata.json', metadata);
+    if (resourceTracePath) {
+      await writeArtifact(
+        stagingPath, 'resource-progress.ndjson',
+        (destination) => copyFile(resourceTracePath, destination),
+      );
+    }
     if (failure) {
       await writeJsonArtifact(stagingPath, 'failure.json', failure);
     }

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { startLiveScanMonitor } from './diagnostics/live-scan-monitor.mjs';
 import { compatibilityDegraded } from './ehestifter/compatibility-health.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -230,6 +231,8 @@ async function runScan(args) {
   let tenantStateChanges = null;
   let summary = null;
   let runJournal = null;
+  let scanMonitor = null;
+  let scanTraceAvailable = false;
   let runPublished = false;
   let publishedRunPath = null;
   const resourceMeasurements = {};
@@ -366,6 +369,8 @@ async function runScan(args) {
       total: executionTargets.length,
     });
     failureStage = 'provider_scan';
+    scanMonitor = startLiveScanMonitor({ journalPath: runJournal.path });
+    scanTraceAvailable = true;
     scanResult = await runTrackedScan({
       portalConfig: planning.portalConfig,
       targets: executionTargets,
@@ -393,16 +398,26 @@ async function runScan(args) {
           };
         }
         : null,
-      onProgress: (event) => progress.update({
-        ...event,
-        detail: progressDetail(event),
-      }),
+      onProgress: (event) => {
+        scanMonitor.update({ targetsFetched: event.current });
+        progress.update({ ...event, detail: progressDetail(event) });
+      },
       onProviderResult: (result) => runJournal.record('provider-results', result),
       onRejected: async (items) => {
-        runJournal.recordMany('rejected', items.map(rejectionForArtifact));
+        for (const item of items) runJournal.record('rejected', rejectionForArtifact(item));
+      },
+      onBatchProcessed: async (counters) => {
+        scanMonitor.update(counters);
+        if (counters.batchesProcessed % 100 === 0) {
+          scanMonitor.sample();
+          // Wait for disk writes before accepting another result window.
+          await runJournal.flush();
+        }
       },
       retainRejected: false,
     });
+    resourceMeasurements.providerScanLive = scanMonitor.stop();
+    scanMonitor = null;
     sampleResource('providerScan');
     runJournal.recordMany('candidates', scanResult.candidates);
     await runJournal.checkpoint('provider_scan_complete', {
@@ -811,6 +826,8 @@ async function runScan(args) {
       locationLlmInputs,
       importResults,
       summary,
+      resourceTracePath: scanTraceAvailable
+        ? path.join(runJournal.path, 'resource-progress.ndjson') : null,
     });
     runPublished = true;
     publishedRunPath = runPath;
@@ -848,6 +865,10 @@ async function runScan(args) {
       process.exitCode = 2;
     }
   } catch (error) {
+    if (scanMonitor) {
+      resourceMeasurements.providerScanLive = scanMonitor.stop();
+      scanMonitor = null;
+    }
     console.error(error instanceof Error ? error.stack : String(error));
     const failure = prerequisiteFailure
       ? classifyPrerequisiteFailure(error, failureStage)
@@ -911,6 +932,8 @@ async function runScan(args) {
             runStatus: failure.outcome,
             failureStage: failure.stage,
           } : null,
+          resourceTracePath: scanTraceAvailable
+            ? path.join(runJournal.path, 'resource-progress.ndjson') : null,
         });
         runPublished = true;
         publishedRunPath = runPath;
@@ -932,6 +955,7 @@ async function runScan(args) {
     }
     throw error;
   } finally {
+    if (scanMonitor) scanMonitor.stop();
     if (!progressCleared) progress.clear();
   }
 }

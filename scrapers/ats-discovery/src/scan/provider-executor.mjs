@@ -294,6 +294,7 @@ async function executeReadyGroup({
   fetchTarget,
   sleep,
   report,
+  onBatch = null,
 }) {
   if (!Number.isInteger(globalConcurrency) || globalConcurrency <= 0) {
     throw new Error('global provider concurrency must be a positive integer');
@@ -311,32 +312,39 @@ async function executeReadyGroup({
     queue.targets.sort((left, right) => left.sequence - right.sequence);
   }
 
+  // Keep at most two windows of target results live. A slow earlier target
+  // must not allow later completed job lists to accumulate without a limit.
+  const ordered = [...targets].sort((a, b) => a.sequence - b.sequence);
+  const orderIndex = new Map(ordered.map((target, index) => [target, index]));
   const results = [];
+  const completed = new Map();
   const active = new Set();
-  let pending = targets.length;
+  const maxOutstanding = onBatch ? globalConcurrency * 2 : Infinity;
+  let outstanding = 0;
+  let next = 0;
 
   function addResult(result) {
-    results.push(result);
-    pending -= 1;
+    completed.set(result.target, result);
     report(result);
   }
 
   function flushOpenCircuits() {
-    let changed = false;
     for (const queue of queues.values()) {
-      if (!queue.guard.open || queue.targets.length === 0) continue;
-      for (const target of queue.targets.splice(0)) {
+      if (!queue.guard.open) continue;
+      while (queue.targets.length > 0 && outstanding < maxOutstanding
+        && orderIndex.get(queue.targets[0]) < next + maxOutstanding) {
+        const target = queue.targets.shift();
+        outstanding += 1;
         addResult(skippedResult(target, 'provider_circuit_open'));
-        changed = true;
       }
     }
-    return changed;
   }
 
   function nextReadyQueue() {
     let selected = null;
     for (const queue of queues.values()) {
-      if (queue.targets.length === 0 || queue.guard.readyInMs() !== 0) continue;
+      if (queue.targets.length === 0 || queue.guard.readyInMs() !== 0
+        || orderIndex.get(queue.targets[0]) >= next + maxOutstanding) continue;
       if (!selected || queue.targets[0].sequence < selected.targets[0].sequence) {
         selected = queue;
       }
@@ -347,7 +355,8 @@ async function executeReadyGroup({
   function earliestWaitMs() {
     let waitMs = Infinity;
     for (const queue of queues.values()) {
-      if (queue.targets.length === 0) continue;
+      if (queue.targets.length === 0 || queue.guard.open
+        || orderIndex.get(queue.targets[0]) >= next + maxOutstanding) continue;
       waitMs = Math.min(waitMs, queue.guard.readyInMs());
     }
     return waitMs;
@@ -359,9 +368,10 @@ async function executeReadyGroup({
       queue.targets.unshift(target);
       return false;
     }
+    outstanding += 1;
     let task;
     task = queue.guard.executeReserved(target, fetchTarget)
-      .then((result) => addResult(result))
+      .then(addResult)
       .finally(() => {
         queue.guard.release();
         active.delete(task);
@@ -370,35 +380,58 @@ async function executeReadyGroup({
     return true;
   }
 
-  while (pending > 0) {
-    flushOpenCircuits();
-    let launched = false;
-    while (active.size < globalConcurrency) {
-      const queue = nextReadyQueue();
-      if (!queue) break;
-      launched = launch(queue) || launched;
-    }
-    if (pending === 0) break;
-    if (launched) continue;
-
-    const waitMs = earliestWaitMs();
-    if (active.size === 0) {
-      if (!Number.isFinite(waitMs)) {
-        throw new Error('provider scheduler stalled with pending targets');
-      }
-      if (waitMs > 0) await sleep(waitMs);
-      continue;
-    }
-
-    if (Number.isFinite(waitMs) && waitMs > 0 && active.size < globalConcurrency) {
-      await waitForActiveOrDelay(active, waitMs, sleep);
-    } else {
-      await Promise.race(active);
+  async function drainReady() {
+    while (next < ordered.length && completed.has(ordered[next])) {
+      const target = ordered[next];
+      const result = completed.get(target);
+      completed.delete(target);
+      if (onBatch) await onBatch(result);
+      else results.push(result);
+      next += 1;
+      outstanding -= 1;
     }
   }
 
-  await Promise.all(active);
-  return results.sort((left, right) => left.target.sequence - right.target.sequence);
+  try {
+    while (next < ordered.length) {
+      await drainReady();
+      flushOpenCircuits();
+      await drainReady();
+      if (next === ordered.length) break;
+
+      let launched = false;
+      while (active.size < globalConcurrency && outstanding < maxOutstanding) {
+        const queue = nextReadyQueue();
+        if (!queue) break;
+        launched = launch(queue) || launched;
+      }
+      if (launched) continue;
+
+      // A full window waits for its earliest pending result. This is
+      // backpressure, not a candidate admission limit.
+      if (outstanding >= maxOutstanding && active.size === 0) {
+        throw new Error('provider result window stalled');
+      }
+      const waitMs = earliestWaitMs();
+      if (active.size === 0) {
+        if (!Number.isFinite(waitMs)) {
+          throw new Error('provider scheduler stalled with pending targets');
+        }
+        if (waitMs > 0) await sleep(waitMs);
+      } else if (Number.isFinite(waitMs) && waitMs > 0 && active.size < globalConcurrency
+        && outstanding < maxOutstanding) {
+        await waitForActiveOrDelay(active, waitMs, sleep);
+      } else {
+        await Promise.race(active);
+      }
+    }
+  } finally {
+    // Do not leave unhandled tasks if processing fails between batches.
+    await Promise.allSettled(active);
+  }
+
+  return results;
+
 }
 
 export async function executeProviderTargets({
@@ -410,6 +443,7 @@ export async function executeProviderTargets({
   sleep = defaultSleep,
   onProgress = null,
   onResult = null,
+  onBatch = null,
 }) {
   if (!Array.isArray(targets)) throw new Error('targets must be an array');
   if (typeof fetchTarget !== 'function') throw new Error('fetchTarget must be a function');
@@ -418,6 +452,9 @@ export async function executeProviderTargets({
   }
   if (onResult != null && typeof onResult !== 'function') {
     throw new Error('onResult must be a function');
+  }
+  if (onBatch != null && typeof onBatch !== 'function') {
+    throw new Error('onBatch must be a function');
   }
   let completed = 0;
   function report(result) {
@@ -464,13 +501,14 @@ export async function executeProviderTargets({
       fetchTarget,
       sleep,
       report,
+      onBatch,
     });
   }
   const priority = targets.filter((target) => target.targetClass === 'priority');
   const normal = targets.filter((target) => target.targetClass !== 'priority');
   const priorityResults = await executeGroup(priority);
   const normalResults = await executeGroup(normal);
-  const batches = [...priorityResults, ...normalResults]
+  const batches = onBatch ? [] : [...priorityResults, ...normalResults]
     .sort((left, right) => left.target.sequence - right.target.sequence);
   const breakerEvents = [...guards.values()]
     .map((guard) => guard.breakerEvent)
