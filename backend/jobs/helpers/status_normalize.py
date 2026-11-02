@@ -64,3 +64,36 @@ def status_key_case_sql(col_sql: str) -> str:
       ELSE 'default'
     END
     """.strip()
+
+
+# Higher values appear first in the status progression sort.
+# Final outcomes other than Accepted Offer follow active interview stages.
+# Unknown and unset statuses appear before Applied.
+STATUS_PROGRESSION_RANKS = {
+    "accepted offer": 110,
+    "got offer": 100,
+    "more interviews done": 90,
+    "more interview done": 90,  # Legacy spelling.
+    "more interviews booked": 80,
+    "more interview booked": 80,  # Legacy spelling.
+    "hm interview done": 70,
+    "hm interview booked": 60,
+    "screening done": 50,
+    "screening booked": 40,
+    "rejected with filled": 30,
+    "rejected with unfortunately": 30,
+    "withdrew applications": 30,
+    "turned down offer": 30,
+    "ignored": 30,
+    "applied": 0,
+}
+
+
+def status_progression_order_sql(col_sql: str) -> str:
+    """Return the rank for a user status in a SQL ORDER BY expression."""
+    normalized = f"LOWER(LTRIM(RTRIM(COALESCE({col_sql}, ''))))"
+    cases = "\n".join(
+        f"WHEN '{status}' THEN {rank}"
+        for status, rank in STATUS_PROGRESSION_RANKS.items()
+    )
+    return f"CASE {normalized}\n{cases}\nELSE 20 END"

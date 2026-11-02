@@ -1145,6 +1145,19 @@ The detailed behavior and legacy-backfill limit are in `docs/locations-v2.md`.
 
 Current characteristics:
 - three tabs/categories,
+- My Jobs starts with `status_progression` sort. All Jobs and Open Opportunities
+  start with `created_desc`. A manual sort stays with its tab until the page
+  is reloaded. An explicit URL `sort` overrides only the URL's selected tab.
+  The Jobs API default stays `created_desc` for other clients,
+- Jobs owns the `status_progression` ranking. It puts Accepted Offer and Got
+  Offer above interview stages; within interview stages, Done is above Booked
+  and later stages are above earlier stages. Other final outcomes are below
+  the active stages. Unknown or unset statuses are above Applied, which is
+  last. Jobs uses the last update date and job ID to break equal ranks,
+- My Jobs cards show the user status update date when it exists, or First seen
+  when it does not. All Jobs and Open Opportunities show First seen. The
+  status update timestamp records a status write, even if the status value
+  did not change; it is not a next-action date,
 - filters,
 - search,
 - pagination,

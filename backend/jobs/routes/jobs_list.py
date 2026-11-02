@@ -11,7 +11,9 @@ from helpers.db import get_connection
 from helpers.history import DatetimeEncoder
 from helpers.ids import normalize_guid
 from helpers.domain_constants import FINAL_STATUSES
-from helpers.status_normalize import status_key, status_key_case_sql
+from helpers.status_normalize import (
+    status_key, status_key_case_sql, status_progression_order_sql,
+)
 from helpers.compatibility_threshold import parse_min_compatibility_score
 from helpers.location_mode import active_location_model
 from helpers.locations_v2 import load_locations_v2_catalog
@@ -461,17 +463,11 @@ def register(app: func.FunctionApp):
                         ) ASC, j.CreatedAt DESC
                     """
             elif sort == "status_progression":
+                rank_expr = status_progression_order_sql(user_status_expr)
                 order_sql = f"""
-                    ORDER BY
-                      CASE LOWER(COALESCE({user_status_expr}, ''))
-                        WHEN 'offer' THEN 6
-                        WHEN 'interview' THEN 5
-                        WHEN 'screening planned' THEN 4
-                        WHEN 'applied' THEN 3
-                        WHEN '' THEN 2
-                        ELSE 1
-                      END DESC,
-                      {last_update_expr} DESC
+                    ORDER BY {rank_expr} DESC,
+                             {last_update_expr} DESC,
+                             j.Id DESC
                 """
             else:
                 order_sql = "ORDER BY j.CreatedAt DESC"

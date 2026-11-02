@@ -148,8 +148,15 @@
 
   let page = 1;
   let total = 0;
+  const defaultSorts = Object.freeze({
+    my: 'status_progression',
+    all: 'created_desc',
+    open: 'created_desc',
+  });
+  // Keep the selected sort for each tab while this page is open.
+  const sortsByCategory = { ...defaultSorts };
   let currentCategory = 'my';
-  let currentSort = 'created_desc';
+  let currentSort = sortsByCategory[currentCategory];
   let searchField = 'title_company';
   let searchText = '';
   let activeLocationModel = 'v1';
@@ -205,6 +212,14 @@
   function syncUrl() {
     const p = paramsFromState();
     history.replaceState(null, '', `${location.pathname}?${p.toString()}`);
+  }
+
+  function selectCategory(cat) {
+    if (!Object.hasOwn(defaultSorts, cat)) return;
+    currentCategory = cat;
+    currentSort = sortsByCategory[cat];
+    sortSel.value = currentSort;
+    setActiveTab(cat);
   }
 
   function setActiveTab(cat) {
@@ -277,8 +292,14 @@
   function stateFromUrl() {
     const sp = new URLSearchParams(location.search);
 
-    currentCategory = sp.get('category') || currentCategory;
-    currentSort = sp.get('sort') || currentSort;
+    const requestedCategory = sp.get('category');
+    if (Object.hasOwn(defaultSorts, requestedCategory)) currentCategory = requestedCategory;
+    const requestedSort = sp.get('sort');
+    // An explicit URL sort applies only to the selected tab.
+    if (requestedSort && Array.from(sortSel.options).some(o => o.value === requestedSort)) {
+      sortsByCategory[currentCategory] = requestedSort;
+    }
+    currentSort = sortsByCategory[currentCategory];
 
     pageSize = Number(sp.get('limit') || pageSize);
     if (![10, 25, 50, 100].includes(pageSize)) pageSize = 25;
@@ -467,8 +488,7 @@
     if (browse) {
       browse.addEventListener('click', (e) => {
         e.preventDefault();
-        currentCategory = 'open';
-        setActiveTab('open');
+        selectCategory('open');
         page = 1;
         loadPage();
       });
@@ -545,7 +565,9 @@
       company && posting ? `<b>${company}</b>, through <b>${posting}</b>`
       : (`<b>${company}</b>` || (posting ? `through <b>${posting}</b>` : ''));
 
-    const firstSeen = row.FirstSeenAt || row.CreatedAt || row.LastUpdateAt || '';
+    const statusChanged = currentCategory === 'my' && row.UserStatusLastUpdated;
+    const dateLabel = statusChanged ? 'Status updated' : 'First seen';
+    const dateValue = statusChanged || row.FirstSeenAt || row.CreatedAt || row.LastUpdateAt || '';
     const via = (row.FoundOn || '').trim();
     const atsVendor = (row.AtsVendor || '').trim();
 
@@ -572,8 +594,8 @@
           </div>
 
           <div style="text-align:right;">
-            <div class="muted" style="font-size:11px; text-transform:uppercase; letter-spacing:.04em;">First seen</div>
-            <div style="font-size:14px;">${formatWhen(firstSeen)}</div>
+            <div class="muted" style="font-size:11px; text-transform:uppercase; letter-spacing:.04em;">${dateLabel}</div>
+            <div style="font-size:14px;">${formatWhen(dateValue)}</div>
           </div>
         </div>
 
@@ -898,8 +920,7 @@
 
   tabs.forEach(btn => {
     btn.addEventListener('click', () => {
-      currentCategory = btn.dataset.cat || 'all';
-      setActiveTab(currentCategory);
+      selectCategory(btn.dataset.cat);
       page = 1;
       loadPage();
     });
@@ -921,7 +942,8 @@
   });
 
   sortSel.addEventListener('change', () => {
-    currentSort = sortSel.value || 'created_desc';
+    currentSort = sortSel.value || defaultSorts[currentCategory];
+    sortsByCategory[currentCategory] = currentSort;
     page = 1;
     loadPage();
   });
