@@ -25,6 +25,59 @@ function countBy(items, keyFor) {
   );
 }
 
+function percentile(values, quantile) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  return Math.round(sorted[Math.ceil(quantile * sorted.length) - 1] * 100) / 100;
+}
+
+export function preflightHttpDiagnosticsSummary(results) {
+  if (results == null) return null;
+  const diagItems = results.map((item) => ({
+    status: item.preflight?.status,
+    request: item._jobsHttpDiagnostics ?? item.preflight?.requestDiagnostics ?? null,
+  })).filter((item) => item.request);
+  const attempts = diagItems.flatMap(({ status, request }) => [
+    ...(request.failedAttempts ?? []),
+    ...(status === 'ok' ? [{ httpStatus: request.httpStatus, category: 'http_success',
+      poolAction: request.poolAction }] : []),
+  ]);
+  const errors = results.filter((item) => item.preflight?.status === 'error');
+  const recovered = diagItems.filter(({ status, request }) => (
+    status === 'ok' && (request.failedAttempts?.length ?? 0) > 0
+  ));
+  const serverFailures = attempts.map((attempt) => attempt.serverFailure).filter(Boolean);
+  const timings = {};
+  for (const key of ['app', 'sql', 'dbconn', 'db_open', 'db_validate', 'db_pool_wait']) {
+    const values = diagItems.map(({ request }) => request.timingMs?.[key])
+      .filter((value) => Number.isFinite(value));
+    timings[key] = { count: values.length, p50Ms: percentile(values, 0.5),
+      p95Ms: percentile(values, 0.95) };
+  }
+  return {
+    path: '/jobs/exists',
+    requests: results.length,
+    requestsWithDiagnostics: diagItems.length,
+    httpAttempts: attempts.length,
+    finalFailures: errors.length,
+    finalFailureRate: ratio(errors.length, results.length),
+    recoveredRetryRequests: recovered.length,
+    httpAttemptsByStatus: countBy(attempts, (item) => (
+      item.httpStatus == null ? 'transport' : String(item.httpStatus)
+    )),
+    failedAttemptsByCategory: countBy(
+      attempts.filter((item) => item.category !== 'http_success'),
+      (item) => item.category,
+    ),
+    serverFailuresByStageAndCategory: countBy(
+      serverFailures, (item) => `${item.stage}:${item.category}`,
+    ),
+    sqlStateCounts: countBy(serverFailures, (item) => item.sqlState),
+    poolActions: countBy(attempts, (item) => item.poolAction),
+    successfulRequestTiming: timings,
+  };
+}
+
 export function compatibilityDiagnosticsSummary(compatibilityResults) {
   const items = compatibilityResults?.results ?? [];
   const measured = items.filter((item) => item.requestDiagnostics);
@@ -662,6 +715,7 @@ export function buildRunSummary({
     locationScopeRejected: rejectionCount(scanResult, 'location_scope_filter'),
     preliminaryGeography: scanResult.preliminaryDiscoveryEligibility?.counts ?? null,
 
+    preflightHttpDiagnostics: preflightHttpDiagnosticsSummary(preflightResults),
     preflightChecked: preflightOk,
     preflightExisting,
     preflightMissing,

@@ -217,3 +217,46 @@ If the selected Gateway returns a non-success response, the diagnostic also
 contains a fixed `gateway_http_4xx` or `gateway_http_5xx` category, a numeric
 upstream status, and `primary` or `alternative` as the target. The raw Gateway
 response body is not stored in an exception.
+
+## Jobs SQL checkout and preflight requests (issue #50)
+
+The Jobs Python worker keeps up to four exclusive SQL leases by default. On
+request end it rolls back any unfinished transaction and returns each lease.
+Idle checkout can validate a connection before a job SQL statement. The pool
+has a two-second checkout wait. Connection-opening timeout remains five
+seconds. These are starting values, not measured optimums.
+
+`Server-Timing` adds `db_open`, `db_pool_wait`, `db_validate`, and an allowlisted
+`db_pool` action. The old `dbconn` value now includes acquisition and pool wait
+rather than necessarily a new physical SQL connection. Normal HTTP responses
+create no new application logs or custom metrics. A Jobs HTTP 500 caused by a
+recorded SQL error has safe failure headers and one `jobs_request_failure` error
+trace with the request correlation UUID. Some older Jobs routes still emit
+exception logs on other error paths; this change does not remove all existing
+exception logging across the service.
+
+The scanner sends `x-correlation-id` for each Jobs HTTP attempt. Its
+`preflight-results` JSON keeps only failed or recovered attempt diagnostics,
+without response body, exception text, connection string, or secret. The new
+`summary.json.preflightHttpDiagnostics` includes status/category totals,
+SQLSTATE counts, pool actions, and connection/SQL latency p50/p95. Successful
+single-attempt detail stays in memory only while the summary is built; it is
+not written per candidate. Existing preflight error counters and behavior do
+not change. Other scanner artifacts still contain job URLs and identities.
+
+Match `preflight.requestDiagnostics.failedAttempts[].correlationId` to Jobs
+Application Insights:
+
+```kusto
+AppTraces
+| where TimeGenerated >= ago(7d)
+| where Message has "jobs_request_failure"
+| where Message has "00000000-0000-0000-0000-000000000000"
+| project TimeGenerated, SeverityLevel, Message, _ResourceId
+| order by TimeGenerated desc
+```
+
+If a failure has no server diagnostic fields, it may have occurred in the
+Functions gateway or before Python started. Do not infer its SQL cause.
+Do not compare different scanner populations as a controlled before-and-after
+measurement. See `backend/jobs/README.md` for settings and scope.

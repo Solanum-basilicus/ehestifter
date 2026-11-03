@@ -4,6 +4,7 @@ import logging
 import azure.functions as func
 
 from helpers.db import get_connection
+from helpers.timing import record_request_failure
 from helpers.ids import normalize_guid
 from helpers.url_helpers import deduce_from_url
 
@@ -102,9 +103,10 @@ def register(app: func.FunctionApp):
                 headers=headers,
             )
 
-        except Exception as e:
-            logging.exception("GET/HEAD /jobs/exists error")
-            return func.HttpResponse(f"Server error: {str(e)}", status_code=500)
+        except Exception:
+            # Keep one safe failure record. Do not include the request or SQL text.
+            record_request_failure("request_handler", "internal_error")
+            return func.HttpResponse("Server error", status_code=500)
         finally:
             try:
                 if conn:

@@ -6,6 +6,9 @@ from threading import Lock
 from functools import wraps
 from time import perf_counter
 from secrets import token_hex
+from uuid import UUID, uuid4
+import logging
+import re
 
 
 _current = ContextVar("jobs_request_timing", default=None)
@@ -68,6 +71,12 @@ class Measurements:
     def __init__(self):
         self.sql_ms = 0.0
         self.dbconn_ms = 0.0
+        self.db_open_ms = 0.0
+        self.db_validate_ms = 0.0
+        self.db_pool_wait_ms = 0.0
+        self.connections = []
+        self.failure = None
+        self.correlation_id = None
         self.sql_count = 0
         self.steps = {}
         self.labels = {}
@@ -78,6 +87,9 @@ class Measurements:
         parts = [
             f"app;dur={app_ms:.2f}", f"sql;dur={self.sql_ms:.2f}",
             f"dbconn;dur={self.dbconn_ms:.2f}",
+            f"db_open;dur={self.db_open_ms:.2f}",
+            f"db_validate;dur={self.db_validate_ms:.2f}",
+            f"db_pool_wait;dur={self.db_pool_wait_ms:.2f}",
             f"process_age;dur={self.process_age_ms:.2f}",
             f'sql_count;desc="{self.sql_count}"',
             f'process_first;desc="{int(self.process_first)}"',
@@ -93,25 +105,98 @@ def current():
     return _current.get()
 
 
+def _request_correlation_id(args, kwargs):
+    req = args[0] if args else kwargs.get("req")
+    raw = getattr(req, "headers", {}).get("x-correlation-id") if req else None
+    if isinstance(raw, str) and len(raw) == 36:
+        try:
+            parsed = UUID(raw)
+            if str(parsed) == raw.lower() and parsed.version == 4:
+                return str(parsed)
+        except ValueError:
+            pass
+    return str(uuid4())
+
+
+def sqlstate(error):
+    args = getattr(error, "args", ())
+    state = args[0] if args and isinstance(args[0], str) else None
+    return state if state is not None and re.fullmatch(r"[A-Z0-9]{5}", state) else None
+
+
+def _discard_broken(connection, error):
+    state = sqlstate(error)
+    if connection is not None and (state and (state.startswith("08") or state in ("HYT00", "HYT01"))):
+        connection.invalidate()
+
+
+def record_db_failure(stage, category, error):
+    """Keep a safe SQLSTATE, never an exception message or SQL text."""
+    measures = current()
+    if measures is None or measures.failure is not None:
+        return
+    state = sqlstate(error)
+    measures.failure = {
+        "stage": stage,
+        "category": category,
+        **({"sqlState": state} if state else {}),
+    }
+
+
+def record_request_failure(stage, category):
+    """Record a safe failure with no exception text."""
+    measures = current()
+    if measures is not None and measures.failure is None:
+        measures.failure = {"stage": stage, "category": category}
+
+
+def _finish_response(response, measure, started, route_name):
+    from azure.functions import HttpResponse
+    if not isinstance(response, HttpResponse):
+        return response
+    status = response.status_code
+    response.headers["Server-Timing"] = measure.header((perf_counter() - started) * 1000)
+    response.headers["x-correlation-id"] = measure.correlation_id
+    if status >= 500 and measure.failure:
+        failure = measure.failure
+        response.headers["x-jobs-failure-stage"] = failure["stage"]
+        response.headers["x-jobs-failure-category"] = failure["category"]
+        if failure.get("sqlState"):
+            response.headers["x-jobs-failure-sqlstate"] = failure["sqlState"]
+        # Log a single bounded record. Do not include request or SQL data.
+        logging.error(
+            "jobs_request_failure route=%s stage=%s category=%s sqlstate=%s correlation_id=%s",
+            route_name, failure["stage"], failure["category"],
+            failure.get("sqlState", "none"), measure.correlation_id,
+        )
+    return response
+
+
 def timed_handler(handler):
-    """Measure one invocation. Do not share measurements between requests."""
+    """Measure one invocation and release all SQL leases at request end."""
     @wraps(handler)
     def wrapped(*args, **kwargs):
         global _seen_request
         measure = Measurements()
+        measure.correlation_id = _request_correlation_id(args, kwargs)
         measure.process_age_ms = (perf_counter() - _process_started) * 1000
         with _first_lock:
             measure.process_first = not _seen_request
             _seen_request = True
         token = _current.set(measure)
-        start = perf_counter()
+        started = perf_counter()
         try:
             response = handler(*args, **kwargs)
-            from azure.functions import HttpResponse
-            if isinstance(response, HttpResponse):
-                response.headers["Server-Timing"] = measure.header((perf_counter() - start) * 1000)
-            return response
+            return _finish_response(response, measure, started, handler.__name__)
         finally:
+            # A route can return early and leave a connection open.
+            # Never return a transaction to another request without rollback.
+            for connection in reversed(measure.connections):
+                try:
+                    connection.close()
+                except Exception:
+                    # Return errors do not change a completed HTTP response.
+                    logging.error("Jobs SQL connection cleanup failed")
             _current.reset(token)
 
     return wrapped
@@ -134,15 +219,20 @@ class TimedRoutes:
 
 
 class TimedCursor:
-    def __init__(self, cursor, measures):
+    def __init__(self, cursor, measures, connection=None):
         object.__setattr__(self, "_cursor", cursor)
         object.__setattr__(self, "_measures", measures)
+        object.__setattr__(self, "_connection", connection)
 
     def _call(self, name, *args, **kwargs):
         start = perf_counter()
         try:
             result = getattr(self._cursor, name)(*args, **kwargs)
             return self if result is self._cursor else result
+        except Exception as exc:
+            record_db_failure("db_query", "db_query_failed", exc)
+            _discard_broken(self._connection, exc)
+            raise
         finally:
             self._measures.sql_ms += (perf_counter() - start) * 1000
             if name in ("execute", "executemany"):
@@ -189,7 +279,28 @@ class TimedConnection:
         object.__setattr__(self, "_measures", measures)
 
     def cursor(self):
-        return TimedCursor(self._connection.cursor(), self._measures)
+        try:
+            return TimedCursor(self._connection.cursor(), self._measures, self._connection)
+        except Exception as exc:
+            record_db_failure("db_query", "db_query_failed", exc)
+            _discard_broken(self._connection, exc)
+            raise
+
+    def commit(self):
+        try:
+            return self._connection.commit()
+        except Exception as exc:
+            record_db_failure("db_transaction", "db_transaction_failed", exc)
+            self._connection.invalidate()
+            raise
+
+    def rollback(self):
+        try:
+            return self._connection.rollback()
+        except Exception as exc:
+            record_db_failure("db_transaction", "db_transaction_failed", exc)
+            self._connection.invalidate()
+            raise
 
     def __enter__(self):
         self._connection.__enter__()

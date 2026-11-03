@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -17,38 +19,154 @@ function isRetryable(error, response) {
   return response.status === 429 || response.status >= 500;
 }
 
-async function getJsonWithRetry({
-  fetchImpl,
-  url,
-  headers,
-  timeoutMs,
-  retryCount,
-}) {
-  let lastError;
+const JOBS_STAGES = new Set(['db_acquire', 'db_query', 'db_transaction', 'request_handler']);
+const JOBS_CATEGORIES = new Set([
+  'pool_wait_timeout', 'db_connection_interface', 'db_connection_operational',
+  'db_connection_unexpected', 'db_query_failed', 'db_transaction_failed',
+  'internal_error',
+]);
+const JOBS_TIMINGS = new Set([
+  'app', 'sql', 'dbconn', 'db_open', 'db_validate', 'db_pool_wait', 'process_age',
+]);
+const TRANSPORT_CODES = new Set([
+  'ECONNRESET', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT',
+  'ENETUNREACH', 'EHOSTUNREACH', 'EPIPE', 'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+]);
+
+function elapsed(start) {
+  return Math.max(0, Math.round(performance.now() - start));
+}
+
+function safeServerMetadata(response) {
+  const stage = response.headers.get('x-jobs-failure-stage');
+  const category = response.headers.get('x-jobs-failure-category');
+  if (!JOBS_STAGES.has(stage) || !JOBS_CATEGORIES.has(category)) return null;
+  const sqlState = response.headers.get('x-jobs-failure-sqlstate');
+  return {
+    stage, category,
+    ...(sqlState && /^[A-Z0-9]{5}$/.test(sqlState) ? { sqlState } : {}),
+  };
+}
+
+function safeServerTiming(response) {
+  const header = response.headers.get('server-timing');
+  if (typeof header !== 'string' || header.length > 4096) return null;
+  const timingMs = {};
+  let poolAction = null;
+  let processFirst = null;
+  for (const part of header.split(',').slice(0, 64)) {
+    const value = part.trim();
+    const match = /^([a-z][a-z0-9_]*);dur=(\d+(?:\.\d{1,2})?)$/.exec(value);
+    if (match && JOBS_TIMINGS.has(match[1])) {
+      const duration = Number(match[2]);
+      if (Number.isFinite(duration) && duration <= 600000) timingMs[match[1]] = duration;
+    }
+    const pool = /^db_pool;desc="(hit|new|replaced|disabled)"$/.exec(value);
+    if (pool) poolAction = pool[1];
+    if (value === 'process_first;desc="1"') processFirst = true;
+    if (value === 'process_first;desc="0"') processFirst = false;
+  }
+  return {
+    timingMs,
+    ...(poolAction ? { poolAction } : {}),
+    ...(processFirst !== null ? { processFirst } : {}),
+  };
+}
+
+function transportCategory(error) {
+  const code = error?.cause?.code ?? error?.code;
+  const safeCode = TRANSPORT_CODES.has(code) ? code : null;
+  const timeout = ['AbortError', 'TimeoutError'].includes(error?.name)
+    || ['ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT'].includes(safeCode);
+  return { category: timeout ? 'transport_timeout' : 'transport_error',
+    ...(safeCode ? { transportCode: safeCode } : {}) };
+}
+
+async function discardBody(response) {
+  try { await response.body?.cancel(); } catch { /* Ignore failed cleanup. */ }
+}
+
+function safeRequestError(category, status, diagnostics, retriesExhausted) {
+  const error = new Error(`Jobs request failed: ${category}`);
+  error.category = category;
+  error.status = status;
+  error.attempts = diagnostics.attempts;
+  error.retriesExhausted = retriesExhausted;
+  error.requestDiagnostics = diagnostics;
+  return error;
+}
+
+async function getJsonWithRetry({ fetchImpl, url, headers, timeoutMs, retryCount, path }) {
+  const started = performance.now();
+  const failedAttempts = [];
   for (let attempt = 0; attempt <= retryCount; attempt += 1) {
+    const correlationId = randomUUID();
+    const attemptStarted = performance.now();
+    const attemptNumber = attempt + 1;
     let response;
     try {
-      response = await fetchWithTimeout(
-        fetchImpl,
-        url,
-        { method: 'GET', headers },
-        timeoutMs,
-      );
-      if (response.ok) return await response.json();
-      const body = await response.text().catch(() => '');
-      const error = new Error(
-        `Jobs API returned ${response.status}: ${body.slice(0, 500)}`,
-      );
-      error.status = response.status;
-      if (!isRetryable(null, response) || attempt === retryCount) throw error;
-      lastError = error;
+      response = await fetchWithTimeout(fetchImpl, url, {
+        method: 'GET', headers: { ...headers, 'x-correlation-id': correlationId },
+      }, timeoutMs);
     } catch (error) {
-      lastError = error;
-      if (attempt === retryCount || !isRetryable(error, response)) throw error;
+      const category = transportCategory(error);
+      failedAttempts.push({
+        attempt: attemptNumber, correlationId, httpStatus: null,
+        durationMs: elapsed(attemptStarted), ...category,
+      });
+      if (attempt === retryCount) {
+        throw safeRequestError(category.category, null, {
+          path, correlationId, attempts: attemptNumber, httpStatus: null,
+          durationMs: elapsed(started), failedAttempts,
+        }, true);
+      }
+      await sleep(Math.min(500 * 2 ** attempt, 4000));
+      continue;
+    }
+    const timing = safeServerTiming(response);
+    const serverFailure = safeServerMetadata(response);
+    if (response.ok) {
+      try {
+        const payload = await response.json();
+        return { payload, requestDiagnostics: {
+          path, correlationId, attempts: attemptNumber, httpStatus: response.status,
+          durationMs: elapsed(started), failedAttempts,
+          ...timing,
+        } };
+      } catch {
+        failedAttempts.push({
+          attempt: attemptNumber, correlationId, httpStatus: response.status,
+          category: 'invalid_response', durationMs: elapsed(attemptStarted),
+        });
+        if (attempt === retryCount) {
+          throw safeRequestError('invalid_response', response.status, {
+            path, correlationId, attempts: attemptNumber, httpStatus: response.status,
+            durationMs: elapsed(started), failedAttempts,
+          }, true);
+        }
+        await sleep(Math.min(500 * 2 ** attempt, 4000));
+        continue;
+      }
+    }
+    const category = response.status === 429 ? 'http_rate_limited'
+      : response.status >= 500 ? 'http_server_error' : 'http_client_error';
+    await discardBody(response);
+    failedAttempts.push({
+      attempt: attemptNumber, correlationId, httpStatus: response.status,
+      category, durationMs: elapsed(attemptStarted),
+      ...(serverFailure ? { serverFailure } : {}),
+      ...timing,
+    });
+    if (!isRetryable(null, response) || attempt === retryCount) {
+      throw safeRequestError(category, response.status, {
+        path, correlationId, attempts: attemptNumber, httpStatus: response.status,
+        durationMs: elapsed(started), failedAttempts,
+      }, attempt === retryCount);
     }
     await sleep(Math.min(500 * 2 ** attempt, 4000));
   }
-  throw lastError;
+  throw new Error('Unreachable Jobs retry state');
 }
 
 function validateIdentity(payload) {
@@ -90,14 +208,16 @@ export function createJobsClient(config, { fetchImpl = fetch } = {}) {
   async function existsByUrl(jobUrl) {
     const endpoint = new URL(`${config.baseUrl}/jobs/exists`);
     endpoint.searchParams.set('url', jobUrl);
-    const payload = await getJsonWithRetry({
+    const { payload, requestDiagnostics } = await getJsonWithRetry({
       fetchImpl,
       url: endpoint,
       headers,
       timeoutMs: config.timeoutMs,
       retryCount: config.retryCount,
+      path: '/jobs/exists',
     });
     return {
+      requestDiagnostics,
       exists: payload.exists === true,
       id: typeof payload.id === 'string' ? payload.id : null,
       identity: validateIdentity(payload),
@@ -122,14 +242,16 @@ export function createJobsClient(config, { fetchImpl = fetch } = {}) {
     endpoint.searchParams.set('provider', provider);
     endpoint.searchParams.set('providerTenant', providerTenant);
     endpoint.searchParams.set('externalId', externalId);
-    const payload = await getJsonWithRetry({
+    const { payload, requestDiagnostics } = await getJsonWithRetry({
       fetchImpl,
       url: endpoint,
       headers,
       timeoutMs: config.timeoutMs,
       retryCount: config.retryCount,
+      path: '/jobs/exists',
     });
     return {
+      requestDiagnostics,
       exists: payload.exists === true,
       id: typeof payload.id === 'string' ? payload.id : null,
       identity: validateIdentity(payload),
@@ -143,13 +265,12 @@ export function createJobsClient(config, { fetchImpl = fetch } = {}) {
     const endpoint = new URL(
       `${config.baseUrl}/jobs/${encodeURIComponent(normalizedId)}`,
     );
-    return getJsonWithRetry({
-      fetchImpl,
-      url: endpoint,
-      headers,
-      timeoutMs: config.timeoutMs,
-      retryCount: config.retryCount,
+    const { payload } = await getJsonWithRetry({
+      fetchImpl, url: endpoint, headers,
+      timeoutMs: config.timeoutMs, retryCount: config.retryCount,
+      path: '/jobs/{id}',
     });
+    return payload;
   }
 
   async function updateJobDescription(jobId, description) {
@@ -164,6 +285,7 @@ export function createJobsClient(config, { fetchImpl = fetch } = {}) {
     );
     let lastError = null;
     for (let attempt = 0; attempt <= config.retryCount; attempt += 1) {
+      const correlationId = randomUUID();
       let response = null;
       try {
         response = await fetchWithTimeout(
@@ -173,6 +295,7 @@ export function createJobsClient(config, { fetchImpl = fetch } = {}) {
             method: 'PUT',
             headers: {
               ...headers,
+              'x-correlation-id': correlationId,
               'content-type': 'application/json',
             },
             body: JSON.stringify({ description }),
@@ -180,17 +303,15 @@ export function createJobsClient(config, { fetchImpl = fetch } = {}) {
           config.timeoutMs,
         );
       } catch (error) {
-        lastError = error;
+        lastError = new Error(`Jobs request failed: ${transportCategory(error).category}`);
       }
 
       if (response?.ok) {
         return { responseStatus: response.status };
       }
       if (response) {
-        const body = await response.text().catch(() => '');
-        const error = new Error(
-          `Jobs API returned ${response.status}: ${body.slice(0, 500)}`,
-        );
+        await discardBody(response);
+        const error = new Error(`Jobs API returned ${response.status}`);
         error.status = response.status;
         lastError = error;
         if (!isRetryable(null, response)) throw error;
@@ -210,6 +331,7 @@ export function createJobsClient(config, { fetchImpl = fetch } = {}) {
     const endpoint = new URL(`${config.baseUrl}/jobs`);
     let lastError = null;
     for (let attempt = 0; attempt <= config.retryCount; attempt += 1) {
+      const correlationId = randomUUID();
       let response = null;
       try {
         response = await fetchWithTimeout(
@@ -219,6 +341,7 @@ export function createJobsClient(config, { fetchImpl = fetch } = {}) {
             method: 'POST',
             headers: {
               ...headers,
+              'x-correlation-id': correlationId,
               'content-type': 'application/json',
             },
             body: JSON.stringify(payload),
@@ -226,7 +349,7 @@ export function createJobsClient(config, { fetchImpl = fetch } = {}) {
           config.timeoutMs,
         );
       } catch (error) {
-        lastError = error;
+        lastError = new Error(`Jobs request failed: ${transportCategory(error).category}`);
       }
 
       if (response?.ok) {
@@ -242,13 +365,11 @@ export function createJobsClient(config, { fetchImpl = fetch } = {}) {
             responseStatus: response.status,
           };
         } catch (error) {
-          lastError = error;
+          lastError = new Error('Jobs create response is invalid');
         }
       } else if (response) {
-        const body = await response.text().catch(() => '');
-        const error = new Error(
-          `Jobs API returned ${response.status}: ${body.slice(0, 500)}`,
-        );
+        await discardBody(response);
+        const error = new Error(`Jobs API returned ${response.status}`);
         error.status = response.status;
         lastError = error;
         if (!isRetryable(null, response)) throw error;
@@ -328,6 +449,16 @@ async function mapLimit(items, limit, worker, onProgress, onResult = null) {
   return results;
 }
 
+function withPrivateDiagnostics(candidate, diagnostics) {
+  if (diagnostics) {
+    // Keep normal attempt details out of plaintext run artifacts.
+    Object.defineProperty(candidate, '_jobsHttpDiagnostics', {
+      value: diagnostics, enumerable: false,
+    });
+  }
+  return candidate;
+}
+
 export async function preflightCandidates(
   candidates,
   client,
@@ -342,7 +473,8 @@ export async function preflightCandidates(
         const result = candidate.explicitIdentity
           ? await client.existsByIdentity(candidate.explicitIdentity)
           : await client.existsByUrl(candidate.url);
-        return {
+        const diag = result.requestDiagnostics;
+        return withPrivateDiagnostics({
           ...candidate,
           canonicalIdentity: result.identity,
           urlInference: result.urlInference,
@@ -350,17 +482,20 @@ export async function preflightCandidates(
           preflight: {
             status: 'ok',
             exists: result.exists,
+            ...(diag?.failedAttempts?.length ? { requestDiagnostics: diag } : {}),
           },
-        };
+        }, diag);
       } catch (error) {
-        return {
+        const diag = error?.requestDiagnostics;
+        return withPrivateDiagnostics({
           ...candidate,
           preflight: {
             status: 'error',
             exists: null,
-            error: error instanceof Error ? error.message : String(error),
+            error: diag ? error.message : 'Jobs preflight failed',
+            ...(diag ? { requestDiagnostics: diag } : {}),
           },
-        };
+        }, diag);
       }
     },
     onProgress,

@@ -998,6 +998,15 @@ can leave a run Pending after an input or dispatch failure. See
 `docs/operational-telemetry.md` for the Enrichment log query. These artifacts
 are still private: other scanner files can contain user or job identifiers.
 
+Jobs preflight uses a separate `summary.preflightHttpDiagnostics` field.
+It counts actual HTTP attempts, recovered retries, failed requests,
+allowlisted SQLSTATEs, SQL pool actions, and p50/p95 timing values. A new
+correlation ID is sent for each attempt. Normal successful requests do not
+add per-attempt data to the plaintext run artifacts. Failed and recovered
+preflight attempts keep only bounded safe metadata, never raw Jobs response
+bodies or exception text. Jobs pool settings and log queries are described in
+`backend/jobs/README.md`.
+
 Historical runs are retained as evidence. Product renames must not rewrite existing run artifacts or historical job provenance.
 
 ## Scheduling semantics
