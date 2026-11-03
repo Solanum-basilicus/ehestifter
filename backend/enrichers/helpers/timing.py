@@ -31,6 +31,7 @@ class Measurements:
     def __init__(self):
         self.values = {}
         self.labels = {}
+        self.failed_stage = None
 
     def header(self, elapsed):
         values = {"app": elapsed, **self.values}
@@ -44,6 +45,17 @@ def current():
     return _current.get()
 
 
+def failed_stage(default):
+    measure = current()
+    return measure.failed_stage if measure is not None and measure.failed_stage else default
+
+
+def clear_failed_stage():
+    measure = current()
+    if measure is not None:
+        measure.failed_stage = None
+
+
 @contextmanager
 def step(name):
     if name not in STAGES:
@@ -52,6 +64,10 @@ def step(name):
     start = perf_counter()
     try:
         yield
+    except Exception:
+        if measure is not None and measure.failed_stage is None:
+            measure.failed_stage = name
+        raise
     finally:
         if measure is not None:
             key = "step_" + name

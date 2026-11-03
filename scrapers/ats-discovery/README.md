@@ -987,6 +987,17 @@ The same split is available for limit and unsupported outcomes through
 also distinguish `catalog_resolved` and `partially_resolved` final normalization
 states from unresolved input syntax.
 
+Compatibility requests use `compatibility-results.json` schema version 2.
+It keeps a stable SHA-256 pair key instead of raw job and user IDs, CV version,
+or candidate URL. For each HTTP submission it stores a correlation UUID and
+elapsed time. Failed attempts have separate correlation UUIDs, safe error
+categories, HTTP status, and bounded server timings. The new
+`summary.compatibilityHttpDiagnostics` field reports final error rate, recovered
+HTTP retries, and accepted requests with a server-side failure. A returned 201
+can leave a run Pending after an input or dispatch failure. See
+`docs/operational-telemetry.md` for the Enrichment log query. These artifacts
+are still private: other scanner files can contain user or job identifiers.
+
 Historical runs are retained as evidence. Product renames must not rewrite existing run artifacts or historical job provenance.
 
 ## Scheduling semantics

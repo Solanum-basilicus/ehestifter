@@ -163,3 +163,57 @@ Azure Functions documentation:
 
 Azure App Service:
 - [Monitor App Service, including Python autoinstrumentation](https://learn.microsoft.com/en-us/azure/app-service/monitor-app-service)
+
+## Compatibility request failures (issue #41)
+
+ATS Discovery sends a new UUID in `x-correlation-id` for each HTTP attempt to
+`POST /enrichment/runs`. Local `compatibility-results.json` uses schema version 2.
+Each pair has a stable SHA-256 `pairKey` from the lower-case job and user IDs.
+It does not contain the raw pair IDs, CV version, candidate URL, response body,
+or exception text. A hash is a link key, **not** anonymous data if the original
+IDs are available. Other scanner artifacts can still contain user identifiers
+or job data; keep the complete run directory private.
+
+Each request result includes `requestDiagnostics` with the final correlation ID,
+HTTP status, attempt count, and total elapsed milliseconds. `failedAttempts`
+contains only failed attempts and has one correlation ID per attempt. Server
+failure headers and bounded `Server-Timing` fields are copied through fixed
+allowlists. Normal successful requests do not store a full attempt trace.
+
+`summary.json` includes `compatibilityHttpDiagnostics`. It separates final
+request failures, retry recoveries, and HTTP 201 responses that had a server
+failure while the new run remained Pending. A successful submission **does not**
+mean the worker completed the compatibility run. A `mark_queued` HTTP 500 can
+occur **after** dispatch. Do not assume it is safe to send another request
+outside the existing automatic reuse and bounded retry rules.
+
+Enrichment Core sends fixed `x-enrichment-failure-stage` and
+`x-enrichment-failure-category` headers for failures in this route. When the
+SQL driver gives a valid SQLSTATE, it also sends `x-enrichment-failure-sqlstate`.
+It writes **one ERROR trace per caught failure**, with fixed path/stage/category,
+a safe SQLSTATE, the request correlation ID, and the Enrichment run ID if known.
+The normal route does not write a request-body or success trace. HTTP 201 with
+a snapshot or dispatch failure still has an error trace and diagnostic headers.
+No extra Application Insights SDK, log sink, or new Azure service is required.
+
+To find a failed attempt in Enrichers Application Insights, replace the UUID
+with the `failedAttempts[].correlationId` value in the local run artifact:
+
+```kusto
+AppTraces
+| where TimeGenerated >= ago(7d)
+| where Message has "enrichment_run_failure"
+| where Message has "00000000-0000-0000-0000-000000000000"
+| project TimeGenerated, SeverityLevel, Message, _ResourceId
+| order by TimeGenerated desc
+```
+
+This query does not recover errors that Azure rejects before the Python route
+runs. A missing trace does not prove that the request reached Enrichment Core.
+Keep `Host.Results=Error` and `Function=Warning` in normal operation. Check
+billable `AppTraces` after deployment as described above.
+
+If the selected Gateway returns a non-success response, the diagnostic also
+contains a fixed `gateway_http_4xx` or `gateway_http_5xx` category, a numeric
+upstream status, and `primary` or `alternative` as the target. The raw Gateway
+response body is not stored in an exception.

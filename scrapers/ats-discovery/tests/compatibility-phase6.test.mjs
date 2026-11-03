@@ -139,3 +139,30 @@ test('failed compatibility requests retain transport diagnostics', async () => {
   assert.equal(failure.attempts, 3);
   assert.equal(failure.retriesExhausted, true);
 });
+
+test('compatibility results keep a stable pair key without candidate or CV data', async () => {
+  const run = async () => requestCompatibilityForMatches({
+    importResults: [imported({
+      url: 'https://private.example/cv?token=SECRET',
+      matchedUserIds: [USER_A],
+    })],
+    discoveryUsers: users,
+    client: { createRun: async () => {
+      throw Object.assign(new Error('private CV data SECRET'), {
+        status: 500, category: 'http_server_error', attempts: 1,
+      });
+    } },
+    config: baseConfig,
+  });
+  const first = (await run()).results[0];
+  const second = (await run()).results[0];
+  assert.equal(first.pairKey, second.pairKey);
+  assert.match(first.pairKey, /^[a-f0-9]{64}$/);
+  assert.equal(first.errorCategory, 'http_server_error');
+  assert.equal(first.userId, undefined);
+  assert.equal(first.jobId, undefined);
+  assert.equal(first.cvVersionId, undefined);
+  assert.equal(first.candidateUrl, undefined);
+  assert.equal(first.error, undefined);
+  assert.doesNotMatch(JSON.stringify(first), /SECRET|private|11111111/);
+});

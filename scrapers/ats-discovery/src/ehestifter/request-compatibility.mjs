@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 function safeProgress(onProgress, current, total) {
   if (!onProgress) return;
   try {
@@ -59,6 +61,27 @@ export function buildCompatibilityPairs(importResults, discoveryUsers) {
   return pairs;
 }
 
+function safePair(item) {
+  // Keep a stable key for cross-run checks. Do not store the user ID or CV data.
+  const pairKey = createHash('sha256')
+    .update(`${item.jobId.toLowerCase()}:${item.userId.toLowerCase()}`)
+    .digest('hex');
+  return { pairKey, sourceProvider: item.sourceProvider ?? null };
+}
+
+function safeErrorCategory(error) {
+  const known = new Set([
+    'http_rate_limited', 'http_server_error', 'http_client_error',
+    'transport_timeout', 'transport_error', 'invalid_response',
+  ]);
+  if (known.has(error?.category)) return error.category;
+  if (Number.isInteger(error?.status)) {
+    if (error.status === 429) return 'http_rate_limited';
+    return error.status >= 500 ? 'http_server_error' : 'http_client_error';
+  }
+  return 'unexpected_client_error';
+}
+
 export async function requestCompatibilityForMatches({
   importResults,
   discoveryUsers,
@@ -82,23 +105,24 @@ export async function requestCompatibilityForMatches({
         );
         const decision = run?.decision ?? 'created';
         return {
-          ...item,
+          ...safePair(item),
           status: decision === 'created' ? 'requested' : `skipped_${decision}`,
           decisionReason: decision,
           requestedRun: {
             runId: run?.runId ?? null,
             status: run?.status ?? null,
-            cvVersionId: run?.cvVersionId ?? null,
           },
+          ...(run?.requestDiagnostics ? { requestDiagnostics: run.requestDiagnostics } : {}),
         };
       } catch (error) {
         return {
-          ...item,
+          ...safePair(item),
           status: 'error_request',
           httpStatus: Number.isInteger(error?.status) ? error.status : null,
           attempts: Number.isInteger(error?.attempts) ? error.attempts : null,
           retriesExhausted: error?.retriesExhausted === true,
-          error: error instanceof Error ? error.message : String(error),
+          errorCategory: safeErrorCategory(error),
+          ...(error?.requestDiagnostics ? { requestDiagnostics: error.requestDiagnostics } : {}),
         };
       }
     },
@@ -107,7 +131,7 @@ export async function requestCompatibilityForMatches({
   );
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     enricherType: config.enricherType,
     totalPairs: allPairs.length,
     evaluatedPairs: pairs.length,

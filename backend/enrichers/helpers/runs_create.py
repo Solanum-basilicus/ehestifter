@@ -8,6 +8,7 @@ import logging
 import requests
 
 from helpers.db import get_connection
+from helpers.compatibility_diagnostics import SubjectLockError, GatewayHTTPError
 from helpers.timing import gateway_response_timing
 
 def _utcnow() -> datetime:
@@ -116,7 +117,7 @@ def create_run_db(
         )
         lock_row = cur.fetchone()
         if lock_row is None or int(lock_row[0]) < 0:
-            raise RuntimeError("Could not lock enrichment subject")
+            raise SubjectLockError("Could not lock enrichment subject")
 
         cur.execute(
             "SELECT CVVersionId FROM dbo.UserPreferences WHERE UserId = ?",
@@ -287,10 +288,8 @@ def dispatch_via_gateway(run: Dict[str, Any], input_snapshot_blob_path: str, cor
         raise
     gateway_response_timing(r.headers.get("Server-Timing", ""), (perf_counter() - start) * 1000)
     if r.status_code >= 300:
-        raise Exception(
-            f"Gateway dispatch failed selected_gateway={gateway_kind} "
-            f"base_url={base_url} status={r.status_code}: {r.text}"
-        )
+        # Do not store the Gateway body, URL, or credentials in an error.
+        raise GatewayHTTPError(r.status_code, gateway_kind)
 
 
 def list_runs_by_status(status: str, limit: int = 100, offset: int = 0) -> tuple[int, list[Dict[str, Any]]]:

@@ -25,6 +25,55 @@ function countBy(items, keyFor) {
   );
 }
 
+export function compatibilityDiagnosticsSummary(compatibilityResults) {
+  const items = compatibilityResults?.results ?? [];
+  const measured = items.filter((item) => item.requestDiagnostics);
+  const attempts = measured.flatMap((item) => {
+    const request = item.requestDiagnostics;
+    const failures = request.failedAttempts ?? [];
+    return item.status === 'error_request'
+      ? failures
+      : [...failures, { httpStatus: request.httpStatus, category: 'http_success' }];
+  });
+  const errors = items.filter((item) => item.status === 'error_request');
+  const recovered = measured.filter((item) => (
+    item.status !== 'error_request'
+    && (item.requestDiagnostics.failedAttempts?.length ?? 0) > 0
+  ));
+  const serverFailures = measured.flatMap((item) => {
+    const request = item.requestDiagnostics;
+    return [
+      ...(request.failedAttempts ?? []).map((attempt) => attempt.serverFailure),
+      item.status === 'error_request' ? null : request.serverFailure,
+    ].filter(Boolean);
+  });
+  return {
+    path: '/enrichment/runs',
+    pairsWithDiagnostics: measured.length,
+    httpAttempts: attempts.length,
+    finalFailureRate: ratio(errors.length, items.length),
+    recoveredRetryPairs: recovered.length,
+    acceptedWithServerFailure: measured.filter((item) => (
+      item.status !== 'error_request' && item.requestDiagnostics.serverFailure
+    )).length,
+    byPathAndResult: countBy(items, (item) => (
+      `/enrichment/runs:${item.status === 'error_request'
+        ? item.errorCategory ?? 'unknown_error'
+        : item.requestDiagnostics?.serverFailure ? 'accepted_with_server_failure' : item.status}`
+    )),
+    httpAttemptsByStatus: countBy(attempts, (attempt) => (
+      attempt.httpStatus == null ? 'transport' : String(attempt.httpStatus)
+    )),
+    failedAttemptsByCategory: countBy(
+      attempts.filter((attempt) => attempt.category !== 'http_success'),
+      (attempt) => attempt.category,
+    ),
+    serverFailuresByStageAndCategory: countBy(
+      serverFailures, (failure) => `${failure.stage}:${failure.category}`,
+    ),
+  };
+}
+
 function importTenantDiagnostics(candidates) {
   const creates = candidates.filter((item) => ['user', 'shared'].includes(item.import?.admissionPool));
   const counts = new Map();
@@ -736,6 +785,7 @@ export function buildRunSummary({
     ),
     importErrors: count(evaluated, (job) => job.import?.status === 'error'),
 
+    compatibilityHttpDiagnostics: compatibilityDiagnosticsSummary(compatibilityResults),
     compatibilityPairs: compatibilityResults?.totalPairs ?? 0,
     compatibilityEvaluated: compatibilityResults?.evaluatedPairs ?? 0,
     compatibilityOmittedByPairLimit: compatibilityResults?.omittedPairs ?? 0,
