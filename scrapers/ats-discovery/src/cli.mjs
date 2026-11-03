@@ -236,12 +236,32 @@ async function runScan(args) {
   let runPublished = false;
   let publishedRunPath = null;
   const resourceMeasurements = {};
+  let previousResourceCpu = process.cpuUsage();
+  let previousResourceAt = Date.now();
   function sampleResource(stage) {
+    const mem = process.memoryUsage();
+    const cpu = process.cpuUsage();
+    const now = Date.now();
     resourceMeasurements[stage] = {
-      rssBytes: process.memoryUsage().rss,
+      rssBytes: mem.rss,
+      heapUsedBytes: mem.heapUsed,
+      heapTotalBytes: mem.heapTotal,
+      externalBytes: mem.external,
       peakRssKiB: process.resourceUsage().maxRSS,
-      elapsedMs: Date.now() - startedAt.getTime(),
+      cpuUserMicros: cpu.user,
+      cpuSystemMicros: cpu.system,
+      cpuSincePreviousUserMicros: cpu.user - previousResourceCpu.user,
+      cpuSincePreviousSystemMicros: cpu.system - previousResourceCpu.system,
+      wallSincePreviousMs: now - previousResourceAt,
+      elapsedMs: now - startedAt.getTime(),
     };
+    previousResourceCpu = cpu;
+    previousResourceAt = now;
+  }
+  function traceStage(stage) {
+    if (!scanMonitor) return;
+    scanMonitor.update({ stage });
+    scanMonitor.sample();
   }
   let failureStage = 'runtime_config_load';
   let prerequisiteFailure = false;
@@ -416,8 +436,7 @@ async function runScan(args) {
       },
       retainRejected: false,
     });
-    resourceMeasurements.providerScanLive = scanMonitor.stop();
-    scanMonitor = null;
+    resourceMeasurements.providerScanLive = scanMonitor.snapshot();
     sampleResource('providerScan');
     runJournal.recordMany('candidates', scanResult.candidates);
     await runJournal.checkpoint('provider_scan_complete', {
@@ -429,6 +448,7 @@ async function runScan(args) {
     let canaryDetailResults = null;
     if (scanResult.canaryCandidates.length > 0) {
       failureStage = 'provider_canary_details';
+      traceStage('provider_canary_details');
       progress.update({
         stage: 'details',
         current: 0,
@@ -441,10 +461,10 @@ async function runScan(args) {
           concurrency: config.scan.description.concurrency,
           timeoutMs: config.scan.description.timeoutMs,
           policy: planning.policy,
-          onProgress: (event) => progress.update({
-            ...event,
-            detail: 'provider canaries',
-          }),
+          onProgress: (event) => {
+            scanMonitor?.update({ detailsCompleted: event.current });
+            progress.update({ ...event, detail: 'provider canaries' });
+          },
           onResult: (request) => runJournal.record(
             'detail-requests',
             detailJournalRecord(request, 'provider_canary'),
@@ -454,6 +474,7 @@ async function runScan(args) {
       await runJournal.checkpoint('provider_canary_details_complete', {
         canaryDetailCandidates: scanResult.canaryCandidates.length,
       });
+      sampleResource('canaryDetails');
     }
     failureStage = 'provider_canary_evaluation';
     const hasCanaryTargets = planning.runtimeTargets.some(
@@ -470,6 +491,7 @@ async function runScan(args) {
 
     if (scanResult.preliminaryDiscoveryEligibility) {
       failureStage = 'preliminary_location_diagnostics';
+      traceStage('preliminary_location_diagnostics');
       const sample = scanResult.preliminarySample;
       const baseline = normalizeCandidateLocations(sample, {
         locationScopeFilter: null,
@@ -484,11 +506,13 @@ async function runScan(args) {
         counts: scanResult.preliminaryDiscoveryEligibility.counts,
         rejectedBeforeDetail: scanResult.preliminaryDiscoveryEligibility.rejectedBeforeDetail,
       });
+      sampleResource('preliminaryDiagnostics');
     }
 
     let client = null;
     if (args.mode === 'preflight' || args.mode === 'import') {
       failureStage = 'preflight';
+      traceStage('preflight');
       client = createJobsClient(config.jobsApi);
       progress.update({
         stage: 'preflight',
@@ -518,6 +542,7 @@ async function runScan(args) {
       && config.scan.description.fetchMissing
     ) {
       failureStage = 'detail_enrichment';
+      traceStage('detail_enrichment');
       const eligibleDetails = preflightResults.filter(candidateNeedsDetail).length;
       const detailTotal = eligibleDetails;
       progress.update({
@@ -529,7 +554,10 @@ async function runScan(args) {
         concurrency: config.scan.description.concurrency,
         timeoutMs: config.scan.description.timeoutMs,
         policy: planning.policy,
-        onProgress: (event) => progress.update(event),
+        onProgress: (event) => {
+          scanMonitor?.update({ detailsCompleted: event.current });
+          progress.update(event);
+        },
         onResult: (request) => runJournal.record(
           'detail-requests',
           detailJournalRecord(request, 'candidate'),
@@ -548,14 +576,22 @@ async function runScan(args) {
 
     if (args.mode === 'preflight' || args.mode === 'import') {
       failureStage = 'location_normalization';
-      locationResults = normalizeCandidateLocations(
-        detailResults ?? preflightResults,
-        {
-          locationScopeFilter: config.multiUser.enabled
-            ? null
-            : planning.portalConfig.location_scope_filter,
+      const geographyInput = detailResults ?? preflightResults;
+      traceStage('location_normalization');
+      progress.update({ stage: 'geography', current: 0, total: geographyInput.length });
+      locationResults = normalizeCandidateLocations(geographyInput, {
+        locationScopeFilter: config.multiUser.enabled
+          ? null
+          : planning.portalConfig.location_scope_filter,
+        onProgress: (event) => {
+          scanMonitor?.update({ geographyNormalized: event.current });
+          scanMonitor?.sample(); // The synchronous loop blocks periodic timers.
+          progress.update(event);
         },
-      );
+      });
+      sampleResource('locationNormalization');
+      traceStage('location_shadow');
+      progress.update({ stage: 'geo-shadow', current: 0, total: 1 });
       normalizedLocationResults = locationResults;
       const locationShadowIndices = selectLocationShadowIndices(
         detailResults ?? preflightResults, locationResults, { limit: 120 },
@@ -574,11 +610,20 @@ async function runScan(args) {
         shadowCurrent, locationBaseline, { population: locationResults.length },
       );
       locationLlmInputs = manualLlmReviewInputs(shadowCurrent, locationShadow.final);
+      progress.update({ stage: 'geo-shadow', current: 1, total: 1 });
+      sampleResource('locationShadow');
       if (config.multiUser.enabled && discoveryMatcher) {
         failureStage = 'discovery_location_filter';
+        traceStage('discovery_location_filter');
+        progress.update({ stage: 'geo-filter', current: 0, total: locationResults.length });
         const eligibilityResult = applyDiscoveryEligibility(
           locationResults,
           discoveryMatcher.users,
+          { onProgress: (event) => {
+            scanMonitor?.update({ geographyEvaluated: event.current });
+            scanMonitor?.sample(); // The synchronous loop blocks periodic timers.
+            progress.update({ ...event, stage: 'geo-filter' });
+          } },
         );
         locationResults = eligibilityResult.candidates;
         const finalGeography = [
@@ -619,6 +664,7 @@ async function runScan(args) {
           userCounts: eligibilityResult.userCounts,
           candidatesAfterGeography: eligibilityResult.candidates.length,
         };
+        sampleResource('geographyFilter');
       }
     }
 
@@ -635,6 +681,7 @@ async function runScan(args) {
     }
 
     failureStage = 'user_match_artifact';
+    traceStage('user_match_artifact');
     userMatchResults = discoveryMatcher
       ? buildUserMatchArtifact({
         discoveryMatcher,
@@ -642,9 +689,11 @@ async function runScan(args) {
         rejectionCounts: scanResult.rejectionCounts,
       })
       : null;
+    sampleResource('userMatchArtifact');
 
     if (args.mode === 'import') {
       failureStage = 'import';
+      traceStage('import');
       progress.update({
         stage: 'import',
         current: 0,
@@ -655,7 +704,10 @@ async function runScan(args) {
         sharedCreates: config.imports.sharedCreatesPerRun,
         eligibleUserIds: discoveryMatcher?.enabledUsers.map((user) => user.userId) ?? [],
         requireDescription: config.scan.requireDescriptionForCreate,
-        onProgress: (event) => progress.update(event),
+        onProgress: (event) => {
+          scanMonitor?.update({ importsCompleted: event.current });
+          progress.update(event);
+        },
         onResult: (candidate) => runJournal.record(
           'import-results',
           importJournalRecord(candidate),
@@ -674,6 +726,7 @@ async function runScan(args) {
       && discoveryMatcher != null
     ) {
       failureStage = 'compatibility';
+      traceStage('compatibility');
       const enrichmentClient = createEnrichmentClient(config.enrichmentApi);
       progress.update({
         stage: 'compatibility',
@@ -688,7 +741,10 @@ async function runScan(args) {
         discoveryUsers: discoveryMatcher.users,
         client: enrichmentClient,
         config: config.multiUser.compatibility,
-        onProgress: (event) => progress.update(event),
+        onProgress: (event) => {
+          scanMonitor?.update({ compatibilityCompleted: event.current });
+          progress.update(event);
+        },
         onResult: (result) => runJournal.record('compatibility-results', result),
       });
       sampleResource('compatibility');
@@ -708,6 +764,7 @@ async function runScan(args) {
     const finishedAt = new Date();
 
     failureStage = 'rate_observations';
+    traceStage('rate_observations');
     rateObservations = buildRateObservations({
       providerResults: scanResult.providerResults,
       breakerEvents: scanResult.breakerEvents,
@@ -738,7 +795,9 @@ async function runScan(args) {
       tenantStateChanges = transition.changes;
     }
 
+    sampleResource('postprocessing');
     failureStage = 'summary_build';
+    traceStage('summary_build');
     summary = buildRunSummary({
       runId,
       mode: args.mode,
@@ -766,7 +825,19 @@ async function runScan(args) {
 
     if (runJournal) await runJournal.flush();
     failureStage = 'artifact_publish';
+    traceStage('artifact_publish');
+    progress.update({ stage: 'publish', current: 0, total: 1 });
     const runPath = await writeRunArtifacts({
+      onBeforeSummary: () => {
+        scanMonitor?.sample();
+        resourceMeasurements.runLive = scanMonitor?.snapshot() ?? null;
+      },
+      onBeforeTraceCopy: () => {
+        if (scanMonitor) {
+          scanMonitor.stop();
+          scanMonitor = null;
+        }
+      },
       dataPath: config.paths.data,
       runId,
       metadata: {
@@ -831,6 +902,7 @@ async function runScan(args) {
     });
     runPublished = true;
     publishedRunPath = runPath;
+    progress.update({ stage: 'publish', current: 1, total: 1 });
 
     if (nextTenantState) {
       failureStage = 'tenant_state_persist';

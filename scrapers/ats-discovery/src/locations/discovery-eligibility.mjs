@@ -170,7 +170,7 @@ export function isDefinitePreliminaryGeographyMismatch(candidate) {
 export function applyDiscoveryEligibility(
   candidates,
   discoveryUsers,
-  { catalog = getDefaultLocationsV2Catalog() } = {},
+  { catalog = getDefaultLocationsV2Catalog(), onProgress = null } = {},
 ) {
   const userById = new Map(discoveryUsers.map((user) => [user.userId, user]));
   const warnings = [];
@@ -178,6 +178,7 @@ export function applyDiscoveryEligibility(
   const rejected = [];
   const postCounts = new Map();
 
+  let examined = 0;
   for (const candidate of candidates) {
     const matchedUserIds = [];
     const geography = [];
@@ -195,6 +196,14 @@ export function applyDiscoveryEligibility(
     candidate.matchedUserIds = matchedUserIds.sort();
     if (matchedUserIds.length > 0) retained.push(candidate);
     else rejected.push(candidate);
+    examined += 1;
+    if (onProgress && (examined % 128 === 0 || examined === candidates.length)) {
+      try {
+        onProgress({ stage: 'geography-filter', current: examined, total: candidates.length });
+      } catch {
+        // Progress callbacks must not affect geography decisions.
+      }
+    }
   }
 
   return {

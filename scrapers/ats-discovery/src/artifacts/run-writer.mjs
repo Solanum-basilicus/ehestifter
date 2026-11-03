@@ -171,6 +171,8 @@ export async function writeRunArtifacts({
   importResults,
   summary,
   resourceTracePath = null,
+  onBeforeSummary = null,
+  onBeforeTraceCopy = null,
 }) {
   const runsPath = path.join(dataPath, 'runs');
   const runPath = path.join(runsPath, runId);
@@ -182,12 +184,6 @@ export async function writeRunArtifacts({
   await mkdir(stagingPath, { recursive: false });
   try {
     await writeJsonArtifact(stagingPath, 'metadata.json', metadata);
-    if (resourceTracePath) {
-      await writeArtifact(
-        stagingPath, 'resource-progress.ndjson',
-        (destination) => copyFile(resourceTracePath, destination),
-      );
-    }
     if (failure) {
       await writeJsonArtifact(stagingPath, 'failure.json', failure);
     }
@@ -309,7 +305,16 @@ export async function writeRunArtifacts({
       importResults,
     );
     if (summary) {
+      if (onBeforeSummary) await onBeforeSummary();
       await writeJsonArtifact(stagingPath, 'summary.json', summary);
+    }
+    if (onBeforeTraceCopy) await onBeforeTraceCopy();
+    // Copy after other artifacts so the trace includes the publication stage.
+    if (resourceTracePath) {
+      await writeArtifact(
+        stagingPath, 'resource-progress.ndjson',
+        (destination) => copyFile(resourceTracePath, destination),
+      );
     }
     await rename(stagingPath, runPath);
     return runPath;

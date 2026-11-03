@@ -28,7 +28,7 @@
   },
   "imports": {
     "enabled": false,
-    "maxCreatesPerUserPerRun": 64,
+    "maxCreatesPerUserPerRun": 168,
     "sharedCreatesPerRun": 64
   },
   "liveCatalog": {

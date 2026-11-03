@@ -1159,15 +1159,36 @@ apply. Large responses from one target, the global duplicate URL set, the
 location catalog, and accepted candidate records still use memory. A future
 change can examine these remaining sources if memory is still too high.
 
-During a scan, `runs/<run-id>.partial/resource-progress.ndjson` records memory
-and progress every 30 seconds, and after every 100 processed target batches.
-Each record contains the UTC time, V8 heap used/total, RSS, external memory,
-completed provider fetches, processed batches, processed raw jobs, accepted
-candidates, and rejected jobs. The file uses synchronous small writes so it
-can survive a fatal V8 heap error. A successful run copies this file to
-`runs/<run-id>/resource-progress.ndjson`. Its sampled maximum values also
-appear under `resourceMeasurements.providerScanLive` in `summary.json`.
-These sampled maximum values are not guaranteed peak usage.
+During a scan, `runs/<run-id>.partial/resource-progress.ndjson` records
+resources every 30 seconds and at stage changes. Provider processing also
+samples after every 100 batches. Synchronous final geography loops sample
+and report progress after every 128 candidates, because they block the timer.
+The interactive progress bar now shows geography normalization, geography
+filtering, and a separate location-shadow stage after detail acquisition.
+
+Trace records include UTC time, stage, stage-specific work counters, V8 heap
+used/total, RSS, external memory, peak RSS reported by Node, cumulative CPU
+user/system time in microseconds, and CPU cores used during the last sample
+interval. The CPU-cores value measures process CPU time divided by wall time;
+it is not a host-wide utilization percentage.
+
+Disk fields count the logical byte size of files in this run's partial,
+staging, and published directories. `runBytes` includes these directories
+at the same time, to expose the extra disk use during publication.
+`filesystemAvailableBytes` reports free space on the runs filesystem. The
+monitor does not count other runs or unrelated files. Disk measurements are
+samples; they can miss short-lived temporary-file peaks. They are not
+allocated-block measurements. CPU usage and memory come from the Node process,
+not the entire host or container.
+
+The trace uses small independent synchronous writes, so samples can survive a
+fatal V8 heap error. Publication copies the final trace after the other
+artifacts. A successful run retains the trace at
+`runs/<run-id>/resource-progress.ndjson`. In `summary.json`,
+`resourceMeasurements.providerScanLive` describes provider acquisition,
+`resourceMeasurements.runLive` contains sampled whole-run peaks through
+publication before the summary file, and each stage records cumulative CPU
+and CPU/duration deltas. These are not exact whole-run peak measurements.
 
 The scanner waits for buffered rejection-journal writes after each 100 target
 batches. This prevents a large queue of pending journal writes. The partial

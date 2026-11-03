@@ -2073,12 +2073,13 @@ export function normalizeCandidateLocations(
     v2Catalog = getDefaultLocationsV2Catalog(),
     locationScopeFilter = null,
     locationPolicy = 'conservative',
+    onProgress = null,
   } = {},
 ) {
   const activeScopeFilter = locationScopeFilter?.enabled === false
     ? null
     : locationScopeFilter;
-  return candidates.map((candidate) => {
+  return candidates.map((candidate, index) => {
     const hasStructured = Array.isArray(candidate.locations) && candidate.locations.length > 0;
     const rawPrimary = normalizeRawLocation(candidate.rawLocation, {
       dictionary,
@@ -2333,7 +2334,7 @@ export function normalizeCandidateLocations(
       else finalNormalizationStatus = 'secondary_evidence_resolved';
     }
 
-    return {
+    const result = {
       ...candidate,
       remoteType,
       locations: finalLocations,
@@ -2366,5 +2367,13 @@ export function normalizeCandidateLocations(
       },
       workTimeConstraints,
     };
+    if (onProgress && ((index + 1) % 128 === 0 || index + 1 === candidates.length)) {
+      try {
+        onProgress({ stage: 'geography', current: index + 1, total: candidates.length });
+      } catch {
+        // Progress callbacks must not affect geography decisions.
+      }
+    }
+    return result;
   });
 }
