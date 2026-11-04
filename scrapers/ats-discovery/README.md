@@ -83,6 +83,16 @@ apply URL on the candidate. Normal Ashby candidates therefore do not need a
 second board request only to obtain description text; the existing detail
 fetcher remains available for older/incomplete candidate records and diagnostics.
 
+Softgarden first reads the public vacancies page. Table rows have separate
+location values. The fallback reads only complete list items or articles. The
+legacy widget reads only complete job elements with a `data-job-id` marker.
+When one element contains links to different job IDs, the adapter rejects that
+element. It does not infer a job location from text near an ungrouped job link.
+If the widget contains job links but returns no parsed jobs, the adapter reports
+a schema error instead of a healthy empty board. Provider telemetry records
+`acquisitionMode` as `vacancies-page` or `legacy-widget`. There is no location
+count limit or Softgarden tenant blocklist in this adapter.
+
 iCIMS has two acquisition modes. Classic `*.icims.com` portals keep the full
 portal host as the provider tenant because numeric job IDs are tenant-local. If
 AWS WAF returns its Human Verification CAPTCHA page, ATS Discovery reports

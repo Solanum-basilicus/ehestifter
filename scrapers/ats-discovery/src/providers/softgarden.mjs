@@ -15,6 +15,7 @@ export const sourceMeta = providerSourceMeta({
     'stable tenant derivation and source metadata',
     'parser hardening around duplicate ids and malformed links',
     'current vacancies-page parsing with legacy widget fallback and false-empty detection',
+    'job-boundary checks for widget and vacancies-page location claims',
   ],
 });
 
@@ -79,27 +80,72 @@ export function parseSoftgardenDate(raw) {
   return result;
 }
 
+// Only read a job from a complete HTML element. A marker on one job must not
+// collect locations from the next job when that job has no data-job-id marker.
+const HTML_TAG_RE = /<!--[\s\S]*?-->|<script\b[^>]*>[\s\S]*?<\/script\s*>|<style\b[^>]*>[\s\S]*?<\/style\s*>|<\/?([a-z][\w:-]*)\b(?:[^<>"']|"[^"]*"|'[^']*')*>/gi;
+const VOID_TAGS = new Set([
+  'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link',
+  'meta', 'param', 'source', 'track', 'wbr',
+]);
+
+function htmlAttribute(tag, name) {
+  const pattern = new RegExp(`\\s${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i');
+  const match = tag.match(pattern);
+  return match?.[1] ?? match?.[2] ?? match?.[3] ?? null;
+}
+
+function closedHtmlBlocks(html, select) {
+  const openedByTag = new Map();
+  const blocks = [];
+  for (const match of html.matchAll(HTML_TAG_RE)) {
+    if (!match[1]) continue;
+    const tag = match[1].toLowerCase();
+    if (match[0].startsWith('</')) {
+      const opened = openedByTag.get(tag)?.pop();
+      if (opened && select(opened.openingTag, tag)) {
+        blocks.push({
+          openingTag: opened.openingTag,
+          html: html.slice(opened.start, match.index + match[0].length),
+          start: opened.start,
+        });
+      }
+    } else if (!VOID_TAGS.has(tag) && !/\/\s*>$/.test(match[0])) {
+      if (!openedByTag.has(tag)) openedByTag.set(tag, []);
+      openedByTag.get(tag).push({ start: match.index, openingTag: match[0] });
+    }
+  }
+  return blocks.sort((left, right) => left.start - right.start);
+}
+
+function hasOtherJobLinks(block, expectedId) {
+  for (const anchor of block.matchAll(/<a\b[^>]*>/gi)) {
+    const href = htmlAttribute(anchor[0], 'href');
+    const id = href?.match(/\/job\/(\d+)(?:\/|[?#]|$)/i)?.[1];
+    if (id && id !== expectedId) return true;
+  }
+  return false;
+}
+
 export function parseSoftgardenWidget(html, widgetUrl) {
   if (typeof html !== 'string') return [];
   const base = widgetUrl instanceof URL ? widgetUrl : new URL(widgetUrl);
   const jobs = [];
   const seen = new Set();
-  const blocks = html.match(
-    /<(?=[^>]*\bdata-job-id="[^"]+")[^>]+>[\s\S]*?(?=<(?=[^>]*\bdata-job-id="[^"]+")[^>]+>|$)/gi,
-  ) ?? [];
+  const blocks = closedHtmlBlocks(
+    html,
+    (openingTag) => htmlAttribute(openingTag, 'data-job-id') !== null,
+  );
 
-  for (const block of blocks) {
-    const id = block.match(/\bdata-job-id="([^"\s]+)"/i)?.[1]
-      ?? block.match(/\/job\/(\d+)(?:\/|$)/i)?.[1]
-      ?? '';
-    if (!id || seen.has(id)) continue;
+  for (const { openingTag, html: block } of blocks) {
+    const id = htmlAttribute(openingTag, 'data-job-id') ?? '';
+    if (!id || seen.has(id) || hasOtherJobLinks(block, id)) continue;
 
     const links = [...block.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)];
     let selected = null;
     for (const link of links) {
-      const href = link[1].match(/\bhref="([^"]+)"/i)?.[1];
+      const href = htmlAttribute(link[1], 'href');
       if (!href) continue;
-      const className = link[1].match(/\bclass="([^"]+)"/i)?.[1] ?? '';
+      const className = htmlAttribute(link[1], 'class') ?? '';
       if (/job-title|jobTitle/i.test(className) || /\/job\//i.test(href)) {
         selected = { href, titleHtml: link[2] };
         break;
@@ -120,10 +166,10 @@ export function parseSoftgardenWidget(html, widgetUrl) {
 
     const locations = [];
     const locationSeen = new Set();
-    for (const match of block.matchAll(
-      /class="[^"]*\blocation-view-item\b[^"]*"[^>]*>([\s\S]*?)<\/span>/gi,
-    )) {
-      const location = clean(match[1]);
+    for (const match of block.matchAll(/<span\b([^>]*)>([\s\S]*?)<\/span>/gi)) {
+      const className = htmlAttribute(match[1], 'class') ?? '';
+      if (!/(?:^|\s)location-view-item(?:\s|$)/i.test(className)) continue;
+      const location = clean(match[2]);
       const key = location.toLowerCase();
       if (location && !locationSeen.has(key)) {
         locationSeen.add(key);
@@ -237,32 +283,25 @@ export function parseSoftgardenVacanciesPage(html, pageUrl) {
   const base = pageUrl instanceof URL ? pageUrl : new URL(pageUrl);
   const jobs = [];
   const seen = new Set();
-  const rows = html.match(/<tr\b[^>]*>[\s\S]*?<\/tr>/gi) ?? [];
-  for (const row of rows) {
+  const rows = closedHtmlBlocks(html, (_, tag) => tag === 'tr');
+  for (const { html: row } of rows) {
     const job = jobFromVacancyBlock(row, base);
-    if (!job || seen.has(job.id)) continue;
+    if (!job || seen.has(job.id) || hasOtherJobLinks(row, job.id)) continue;
     seen.add(job.id);
     jobs.push(job);
     if (jobs.length >= MAX_JOBS) return jobs;
   }
   if (jobs.length > 0) return jobs;
 
-  const linkRe = /<a\b[^>]*\bhref=["'][^"']*\/job\/(\d+)(?:\/[^"']*)?["'][^>]*>[\s\S]*?<\/a>/gi;
-  let match;
-  while ((match = linkRe.exec(html)) !== null) {
-    const start = Math.max(0, html.lastIndexOf('<li', match.index));
-    const articleStart = Math.max(0, html.lastIndexOf('<article', match.index));
-    const blockStart = Math.max(start, articleStart, match.index - 1500);
-    const rowEnd = html.indexOf('</li>', match.index);
-    const articleEnd = html.indexOf('</article>', match.index);
-    const candidates = [rowEnd, articleEnd]
-      .filter((value) => value >= match.index)
-      .map((value) => value + 12);
-    const blockEnd = candidates.length > 0
-      ? Math.min(...candidates)
-      : Math.min(html.length, match.index + 2500);
-    const job = jobFromVacancyBlock(html.slice(blockStart, blockEnd), base);
-    if (!job || seen.has(job.id)) continue;
+  // Use only closed list items and articles. A window around an anchor can
+  // include the locations of adjacent vacancies on a large tenant board.
+  const blocks = closedHtmlBlocks(
+    html,
+    (_, tag) => tag === 'li' || tag === 'article',
+  );
+  for (const { html: block } of blocks) {
+    const job = jobFromVacancyBlock(block, base);
+    if (!job || seen.has(job.id) || hasOtherJobLinks(block, job.id)) continue;
     seen.add(job.id);
     jobs.push(job);
     if (jobs.length >= MAX_JOBS) break;
@@ -327,6 +366,7 @@ export default {
         });
         const pageJobs = parseSoftgardenVacanciesPage(pageHtml, page);
         if (pageJobs.length > 0) {
+          ctx.reportProviderTelemetry?.({ acquisitionMode: 'vacancies-page' });
           return pageJobs.map((job) => ({ ...job, company: entry.name }));
         }
       } catch (error) {
@@ -334,11 +374,17 @@ export default {
       }
     }
 
+    ctx.reportProviderTelemetry?.({ acquisitionMode: 'legacy-widget' });
     const widgetHtml = await ctx.fetchText(widget, {
       redirect: 'error',
       headers: { accept: 'text/html' },
     });
     const widgetJobs = parseSoftgardenWidget(widgetHtml, widget);
+    if (widgetJobs.length === 0 && /\/job\/\d+/i.test(widgetHtml)) {
+      const error = new Error('softgarden: widget_schema_mismatch');
+      error.code = 'SOFTGARDEN_WIDGET_SCHEMA_MISMATCH';
+      throw error;
+    }
     if (widgetJobs.length === 0 && pageError) throw pageError;
     if (widgetJobs.length === 0 && /\/job\/\d+/i.test(pageHtml ?? '')) {
       const error = new Error('softgarden: listing_schema_mismatch');
