@@ -37,6 +37,7 @@ test('detail telemetry reports retries and rate limits by provider and phase', (
     skippedLimit: 0,
     skippedExisting: 0,
     unavailable: 0,
+    unavailableByReason: {},
     alreadyPresent: 0,
   });
   assert.deepEqual(
@@ -51,6 +52,7 @@ test('detail telemetry reports retries and rate limits by provider and phase', (
       alreadyPresent: 0,
       missingDescription: 0,
       unavailable: 0,
+      unavailableByReason: {},
       errors: 1,
       unsupported: 0,
       skippedExisting: 0,
@@ -60,4 +62,36 @@ test('detail telemetry reports retries and rate limits by provider and phase', (
   );
   assert.equal(telemetry.phases.candidates.find((item) => item.provider === 'paylocity').candidates, 2);
   assert.equal(telemetry.phases.canaries.find((item) => item.provider === 'paylocity').candidates, 1);
+});
+
+test('detail telemetry counts safe unavailable reasons across candidate and canary phases', () => {
+  const telemetry = buildDetailTelemetry({
+    candidateResults: [
+      detailResult('successfactors', 'unavailable', { reason: 'successfactors_external_preview_missing' }),
+      detailResult('successfactors', 'unavailable', { reason: 'successfactors_job_unavailable' }),
+      detailResult('workday', 'unavailable'),
+    ],
+    canaryResults: [
+      detailResult('successfactors', 'unavailable', { reason: 'successfactors_external_preview_missing' }),
+      detailResult('successfactors', 'unavailable', { reason: 'a page fragment with personal data' }),
+    ],
+  });
+
+  assert.equal(telemetry.totals.unavailable, 5);
+  assert.deepEqual(telemetry.totals.unavailableByReason, {
+    other: 2,
+    successfactors_external_preview_missing: 2,
+    successfactors_job_unavailable: 1,
+  });
+  assert.deepEqual(
+    telemetry.phases.candidates.find((item) => item.provider === 'successfactors')
+      .unavailableByReason,
+    { successfactors_external_preview_missing: 1, successfactors_job_unavailable: 1 },
+  );
+  assert.deepEqual(
+    telemetry.phases.canaries.find((item) => item.provider === 'successfactors')
+      .unavailableByReason,
+    { other: 1, successfactors_external_preview_missing: 1 },
+  );
+  assert.doesNotMatch(JSON.stringify(telemetry), /personal data/);
 });

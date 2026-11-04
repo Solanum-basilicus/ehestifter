@@ -162,6 +162,16 @@ server-rendered HTML. The HTML fallback recognizes schema.org microdata
 patterns. This covers RMK pages that expose the complete description without
 JSON-LD.
 
+When no usable description is present, a SuccessFactors page with the text
+"Click here to see the full Job Preview" has `detail.status = "unavailable"`,
+`detail.reason = "successfactors_external_preview_missing"`, and
+`detail.evidence = "external_preview_phrase"`. The check uses visible text after
+HTML entity decoding. It does not follow the preview link. A page that reports
+that the job is no longer available has the separate reason
+`successfactors_job_unavailable`. Unknown HTML stays a parser error. Complete
+JSON-LD or HTML descriptions still take priority. The importer keeps the reason
+in `import.reason` when it skips an unavailable job. No Jobs write takes place.
+
 ## Shared multi-user scan
 
 The scanner requests bounded discovery profiles from:
@@ -981,7 +991,14 @@ diagnosis, but it never updates `tenant-state.json` outside the normal persisten
 
 `summary.json` reports unavailable detail observations separately through
 `detailUnavailable` and reports their no-write import outcome through
-`importDetailUnavailableSkipped`.
+`importDetailUnavailableSkipped`. For missing external previews, the final
+candidate counts are `detailExternalPreviewMissing` and
+`importExternalPreviewSkipped`. `detailExternalPreviewMissingTotal` includes
+candidate and canary detail attempts. `detail-telemetry.json` contains
+`unavailableByReason` counts in its totals, provider, and phase records.
+Only fixed reason codes or `other` can occur in those metric keys. The scanner
+does not store preview page content in the new fields. The existing unavailable
+and parser-error totals keep their meaning.
 
 Provider error totals are explicit. `providerErrorsTotal` counts every provider
 error, `providerHealthErrors` counts errors that are provider-health signals,

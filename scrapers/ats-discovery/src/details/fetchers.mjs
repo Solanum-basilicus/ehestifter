@@ -18,6 +18,10 @@ import {
 } from '../providers/bamboohr.mjs';
 import { executeDetailRequests } from './provider-scheduler.mjs';
 import { parsePaylocityHtmlDetails } from './paylocity-html.mjs';
+import {
+  SUCCESSFACTORS_EXTERNAL_PREVIEW_MISSING,
+  SUCCESSFACTORS_JOB_UNAVAILABLE,
+} from './unavailable-reasons.mjs';
 
 const GREENHOUSE_HOST = 'boards-api.greenhouse.io';
 const ASHBY_HOST = 'api.ashbyhq.com';
@@ -32,11 +36,13 @@ const WORKDAY_SITE_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._~-]*$/;
 const MAX_DETAIL_BYTES = 5_000_000;
 
 class DetailUnavailableError extends Error {
-  constructor(message, { responseStatus = null } = {}) {
+  constructor(message, { responseStatus = null, reason = null, evidence = null } = {}) {
     super(message);
     this.name = 'DetailUnavailableError';
     this.code = 'DETAIL_UNAVAILABLE';
     this.responseStatus = responseStatus;
+    this.reason = reason;
+    this.evidence = evidence;
   }
 }
 
@@ -1051,15 +1057,22 @@ async function fetchSuccessFactorsDetails(candidate, context) {
     };
   }
   const page = parseSuccessFactorsHtmlDetails(html, endpoint);
-  if (!page) {
-    if (/You can(?:'|’)t view this job because it(?:'|’)s not available at this time\./i.test(html)) {
+  // A preview invitation alone is not a job description.
+  const previewOnly = page && /^(?:please\s+)?click\s+here\s+to\s+see\s+the\s+full\s+job\s+preview\.?$/iu
+    .test(page.description);
+  if (!page || previewOnly) {
+    const visibleText = htmlToPlainText(html);
+    if (/You\s+can(?:'|’)t\s+view\s+this\s+job\s+because\s+it(?:'|’)s\s+not\s+available\s+at\s+this\s+time\./iu.test(visibleText)) {
       throw new DetailUnavailableError(
         'SuccessFactors detail page reports that the job is unavailable',
+        { reason: SUCCESSFACTORS_JOB_UNAVAILABLE, evidence: 'not_available_phrase' },
       );
     }
-    const visibleText = html.replace(/<[^>]*>/gu, ' ').replace(/\s+/gu, ' ');
     if (/click\s+here\s+to\s+see\s+the\s+full\s+Job\s+Preview/iu.test(visibleText)) {
-      throw new DetailUnavailableError('successfactors_external_preview_missing');
+      throw new DetailUnavailableError(SUCCESSFACTORS_EXTERNAL_PREVIEW_MISSING, {
+        reason: SUCCESSFACTORS_EXTERNAL_PREVIEW_MISSING,
+        evidence: 'external_preview_phrase',
+      });
     }
     throw new Error('Detail page contains neither JobPosting JSON-LD nor a parseable SuccessFactors job description');
   }
@@ -1254,6 +1267,8 @@ export async function enrichCandidateDetails(
           status: 'unavailable',
           provider,
           error: error instanceof Error ? error.message : String(error),
+          reason: error.reason ?? null,
+          evidence: error.evidence ?? null,
           responseStatus: Number.isInteger(error?.responseStatus)
             ? error.responseStatus
             : null,

@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { writeRunArtifacts } from '../src/artifacts/run-writer.mjs';
 import { writeJsonAtomic } from '../src/io/atomic-json.mjs';
 import { buildRunSummary } from '../src/run-summary.mjs';
+import { buildDetailTelemetry } from '../src/details/telemetry.mjs';
 
 async function withTempDir(worker) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'run-artifacts-'));
@@ -542,7 +543,21 @@ test('run summary separates unavailable details and their safe import skips', ()
     preflight: { status: 'ok', exists: false },
     detail: { status: 'unavailable', responseStatus: 404 },
     import: { status: 'skipped_detail_unavailable', responseStatus: 404 },
+  }, {
+    sourceMode: 'priority',
+    sourceProvider: 'successfactors',
+    description: '',
+    preflight: { status: 'ok', exists: false },
+    detail: { status: 'unavailable', reason: 'successfactors_external_preview_missing' },
+    import: { status: 'skipped_detail_unavailable', reason: 'successfactors_external_preview_missing' },
   }];
+  const detailTelemetry = buildDetailTelemetry({
+    candidateResults: evaluated,
+    canaryResults: [{
+      sourceProvider: 'successfactors',
+      detail: { status: 'unavailable', reason: 'successfactors_external_preview_missing' },
+    }],
+  });
   const summary = buildRunSummary({
     runId: 'workday-unavailable',
     mode: 'import',
@@ -575,15 +590,19 @@ test('run summary separates unavailable details and their safe import skips', ()
       providerResults: [],
     },
     evaluated,
+    detailTelemetry,
     tenantStateChanges: { tenantChanges: [], providerChanges: [] },
     rateObservations: { providers: [] },
   });
 
-  assert.equal(summary.detailUnavailable, 1);
+  assert.equal(summary.detailUnavailable, 2);
+  assert.equal(summary.detailExternalPreviewMissing, 1);
+  assert.equal(summary.detailExternalPreviewMissingTotal, 2);
   assert.equal(summary.detailErrors, 0);
   assert.equal(summary.missingDescriptionsForImport, 0);
-  assert.equal(summary.importDetailUnavailableSkipped, 1);
-  assert.equal(summary.importSkipped, 1);
+  assert.equal(summary.importDetailUnavailableSkipped, 2);
+  assert.equal(summary.importExternalPreviewSkipped, 1);
+  assert.equal(summary.importSkipped, 2);
 });
 
 test('run summary separates whole detail phase limit and unsupported totals from final candidates', () => {

@@ -614,6 +614,128 @@ test('SuccessFactors external preview shell is not a parser failure', async () =
   });
   assert.equal(result.detail.status, 'unavailable');
   assert.equal(result.detail.error, 'successfactors_external_preview_missing');
+  assert.equal(result.detail.reason, 'successfactors_external_preview_missing');
+  assert.equal(result.detail.evidence, 'external_preview_phrase');
+  assert.equal(result.detail.responseStatus, null);
+});
+
+test('SuccessFactors detects encoded external preview links without following them', async () => {
+  const source = candidate({
+    sourceProvider: 'successfactors',
+    sourceTenant: 'jobs.example.com',
+    url: 'https://jobs.example.com/job/Role/42-en_US',
+    provenance: { providerNativeId: '42', sourceOrigin: 'https://jobs.example.com' },
+  });
+  for (const space of ['&nbsp;', '&#160;', '&#xA0;', '<span> </span>', ' ']) {
+    const requests = [];
+    const [result] = await enrichCandidateDetails([source], {
+      concurrency: 1, maxFetches: 1, timeoutMs: 1000,
+      async fetchImpl(url) {
+        requests.push(String(url));
+        return response(`<main><h1>Role</h1><p>Please click <a href="https://preview.example.org/42">here</a>${space}to see the full Job Preview.</p></main>`);
+      },
+    });
+    assert.equal(result.detail.status, 'unavailable', `space: ${space}`);
+    assert.equal(result.detail.reason, 'successfactors_external_preview_missing');
+    assert.equal(result.detail.evidence, 'external_preview_phrase');
+    assert.equal(result.description, '');
+    assert.deepEqual(requests, ['https://jobs.example.com/', source.url]);
+  }
+});
+
+test('SuccessFactors treats a marked description with only a preview link as unavailable', async () => {
+  const source = candidate({
+    sourceProvider: 'successfactors',
+    url: 'https://jobs.example.com/job/Role/42-en_US',
+    provenance: { providerNativeId: '42', sourceOrigin: 'https://jobs.example.com' },
+  });
+  const [result] = await enrichCandidateDetails([source], {
+    concurrency: 1, maxFetches: 1, timeoutMs: 1000,
+    async fetchImpl() {
+      return response('<div class="job-description">Please click <a href="https://preview.example.org/42">here</a>&nbsp;to see the full Job Preview.</div>');
+    },
+  });
+  assert.equal(result.detail.status, 'unavailable');
+  assert.equal(result.detail.reason, 'successfactors_external_preview_missing');
+  assert.equal(result.description, '');
+});
+
+test('SuccessFactors keeps valid descriptions when the page also mentions a preview', async () => {
+  const source = candidate({
+    sourceProvider: 'successfactors',
+    url: 'https://jobs.example.com/job/Role/42-en_US',
+    provenance: { providerNativeId: '42', sourceOrigin: 'https://jobs.example.com' },
+  });
+  for (const html of [
+    `<script type="application/ld+json">${JSON.stringify({
+      '@type': 'JobPosting',
+      description: '<p>Maintain data services.</p>',
+    })}</script><p>Click here to see the full Job Preview</p>`,
+    '<div class="job-description">Maintain data services.</div><p>Click here to see the full Job Preview</p>',
+  ]) {
+    const [result] = await enrichCandidateDetails([source], {
+      concurrency: 1, maxFetches: 1, timeoutMs: 1000,
+      async fetchImpl() { return response(html); },
+    });
+    assert.equal(result.detail.status, 'ok');
+    assert.match(result.description, /Maintain data services/);
+  }
+});
+
+test('SuccessFactors keeps unknown HTML and unrelated preview links as errors', async () => {
+  const source = candidate({
+    sourceProvider: 'successfactors',
+    url: 'https://jobs.example.com/job/Role/42-en_US',
+    provenance: { providerNativeId: '42', sourceOrigin: 'https://jobs.example.com' },
+  });
+  for (const html of [
+    '<main><h1>Role</h1><p>No details were provided.</p></main>',
+    '<main><p>Click here to see related jobs</p></main>',
+    '<script type="application/ld+json">{not valid JSON</script><main>No details.</main>',
+  ]) {
+    const [result] = await enrichCandidateDetails([source], {
+      concurrency: 1, maxFetches: 1, timeoutMs: 1000,
+      async fetchImpl() { return response(html); },
+    });
+    assert.equal(result.detail.status, 'error');
+    assert.match(result.detail.error, /neither JobPosting JSON-LD nor a parseable/);
+  }
+});
+
+test('SuccessFactors keeps HTTP failures separate from preview omissions', async () => {
+  const source = candidate({
+    sourceProvider: 'successfactors',
+    url: 'https://jobs.example.com/job/Role/42-en_US',
+    provenance: { providerNativeId: '42', sourceOrigin: 'https://jobs.example.com' },
+  });
+  const [result] = await enrichCandidateDetails([source], {
+    concurrency: 1, maxFetches: 1, timeoutMs: 1000,
+    async fetchImpl(url) {
+      return response('Service unavailable', {
+        status: String(url) === source.url ? 503 : 200,
+      });
+    },
+  });
+  assert.equal(result.detail.status, 'error');
+  assert.equal(result.detail.responseStatus, 503);
+  assert.equal(result.detail.reason, undefined);
+});
+
+test('SuccessFactors gives withdrawn jobs a reason that differs from external previews', async () => {
+  const source = candidate({
+    sourceProvider: 'successfactors',
+    url: 'https://jobs.example.com/job/Role/42-en_US',
+    provenance: { providerNativeId: '42', sourceOrigin: 'https://jobs.example.com' },
+  });
+  const [result] = await enrichCandidateDetails([source], {
+    concurrency: 1, maxFetches: 1, timeoutMs: 1000,
+    async fetchImpl() {
+      return response('<main>You can&#39;t view this job because it&#39;s not available at this time.</main>');
+    },
+  });
+  assert.equal(result.detail.status, 'unavailable');
+  assert.equal(result.detail.reason, 'successfactors_job_unavailable');
+  assert.equal(result.detail.evidence, 'not_available_phrase');
 });
 
 test('BambooHR detail uses the public job detail endpoint', async () => {

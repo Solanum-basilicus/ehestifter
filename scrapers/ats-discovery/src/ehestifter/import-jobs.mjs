@@ -102,6 +102,7 @@ export async function importCandidates(candidates, client, {
       state = {
         status: 'skipped_detail_unavailable',
         jobId: null,
+        reason: candidate.detail.reason ?? null,
         responseStatus: candidate.detail.responseStatus ?? null,
       };
     } else if (candidate.locationEligibility?.status === 'ineligible') {

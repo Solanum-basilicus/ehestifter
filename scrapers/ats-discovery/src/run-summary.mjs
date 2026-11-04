@@ -3,6 +3,7 @@ import { CATALOG_PROVIDER_IDS } from './catalogs/provider-catalog.mjs';
 import { getProviderPolicy } from './policy/discovery-policy.mjs';
 import { isDurableProviderResult, isTransientProviderResult } from './scan/provider-errors.mjs';
 import { isProviderHealthSignificantResult } from './scan/provider-health.mjs';
+import { SUCCESSFACTORS_EXTERNAL_PREVIEW_MISSING } from './details/unavailable-reasons.mjs';
 
 function count(items, predicate) {
   return items.filter(predicate).length;
@@ -768,6 +769,13 @@ export function buildRunSummary({
       evaluated,
       (job) => job.detail?.status === 'unavailable',
     ),
+    detailExternalPreviewMissing: count(
+      evaluated,
+      (job) => job.detail?.status === 'unavailable'
+        && job.detail.reason === SUCCESSFACTORS_EXTERNAL_PREVIEW_MISSING,
+    ),
+    detailExternalPreviewMissingTotal: detailTelemetry?.totals?.unavailableByReason
+      ?.[SUCCESSFACTORS_EXTERNAL_PREVIEW_MISSING] ?? 0,
     // Compatibility alias for errors in the final evaluated candidate set.
     detailErrors: count(evaluated, (job) => job.detail?.status === 'error'),
     finalCandidateDetailErrors: count(
@@ -831,6 +839,11 @@ export function buildRunSummary({
     importDetailUnavailableSkipped: count(
       evaluated,
       (job) => job.import?.status === 'skipped_detail_unavailable',
+    ),
+    importExternalPreviewSkipped: count(
+      evaluated,
+      (job) => job.import?.status === 'skipped_detail_unavailable'
+        && job.import.reason === SUCCESSFACTORS_EXTERNAL_PREVIEW_MISSING,
     ),
     importSkipped: count(
       evaluated,

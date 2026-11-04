@@ -1,3 +1,5 @@
+import { unavailableReasonKey } from './unavailable-reasons.mjs';
+
 function providerFor(job) {
   return job?.detail?.provider
     ?? job?.sourceProvider
@@ -16,6 +18,7 @@ function emptyStats(provider) {
     alreadyPresent: 0,
     missingDescription: 0,
     unavailable: 0,
+    unavailableByReason: {},
     errors: 0,
     unsupported: 0,
     skippedExisting: 0,
@@ -40,7 +43,11 @@ function accumulate(target, jobs) {
     if (detail.status === 'ok') stats.ok += 1;
     else if (detail.status === 'already_present') stats.alreadyPresent += 1;
     else if (detail.status === 'missing_description') stats.missingDescription += 1;
-    else if (detail.status === 'unavailable') stats.unavailable += 1;
+    else if (detail.status === 'unavailable') {
+      stats.unavailable += 1;
+      const reason = unavailableReasonKey(detail.reason);
+      stats.unavailableByReason[reason] = (stats.unavailableByReason[reason] ?? 0) + 1;
+    }
     else if (detail.status === 'error') stats.errors += 1;
     else if (detail.status === 'unsupported_provider') stats.unsupported += 1;
     else if (detail.status === 'skipped_existing') stats.skippedExisting += 1;
@@ -50,7 +57,27 @@ function accumulate(target, jobs) {
 }
 
 function sortedStats(map) {
-  return [...map.values()].sort((left, right) => left.provider.localeCompare(right.provider));
+  return [...map.values()]
+    .sort((left, right) => left.provider.localeCompare(right.provider))
+    .map((stats) => ({
+      ...stats,
+      unavailableByReason: Object.fromEntries(
+        Object.entries(stats.unavailableByReason)
+          .sort(([left], [right]) => left.localeCompare(right)),
+      ),
+    }));
+}
+
+function unavailableTotals(providers) {
+  const counts = {};
+  for (const provider of providers) {
+    for (const [reason, value] of Object.entries(provider.unavailableByReason)) {
+      counts[reason] = (counts[reason] ?? 0) + value;
+    }
+  }
+  return Object.fromEntries(
+    Object.entries(counts).sort(([left], [right]) => left.localeCompare(right)),
+  );
 }
 
 export function buildDetailTelemetry({ candidateResults = [], canaryResults = [] } = {}) {
@@ -73,6 +100,7 @@ export function buildDetailTelemetry({ candidateResults = [], canaryResults = []
       skippedLimit: providers.reduce((sum, item) => sum + item.skippedLimit, 0),
       skippedExisting: providers.reduce((sum, item) => sum + item.skippedExisting, 0),
       unavailable: providers.reduce((sum, item) => sum + item.unavailable, 0),
+      unavailableByReason: unavailableTotals(providers),
       alreadyPresent: providers.reduce((sum, item) => sum + item.alreadyPresent, 0),
     },
     providers,

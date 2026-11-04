@@ -317,7 +317,28 @@ test('importCandidates safely skips detail-unavailable postings before descripti
 
   assert.equal(createCalls, 0);
   assert.equal(result.import.status, 'skipped_detail_unavailable');
+  assert.equal(result.import.reason, null);
   assert.equal(result.import.responseStatus, 404);
+});
+
+test('importCandidates keeps the external preview reason and does not create a job', async () => {
+  const [result] = await importCandidates(
+    [candidate({
+      sourceProvider: 'successfactors',
+      description: '',
+      detail: {
+        status: 'unavailable',
+        provider: 'successfactors',
+        reason: 'successfactors_external_preview_missing',
+        responseStatus: null,
+      },
+    })],
+    { async createJob() { throw new Error('Must not create a job'); } },
+    { maxCreatesPerUser: 1, requireDescription: true },
+  );
+  assert.equal(result.import.status, 'skipped_detail_unavailable');
+  assert.equal(result.import.reason, 'successfactors_external_preview_missing');
+  assert.equal(result.import.jobId, null);
 });
 
 test('createJob reconciles an ambiguous POST through explicit identity', async () => {
