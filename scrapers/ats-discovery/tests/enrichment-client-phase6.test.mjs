@@ -279,3 +279,28 @@ test('transport diagnostics copy only known network codes', async () => {
     return true;
   });
 });
+
+test('Enrichers pool metrics use fixed fields and do not copy private labels', async () => {
+  const client = createEnrichmentClient({
+    baseUrl: 'https://enrichers.example/api', functionKey: 'secret',
+    timeoutMs: 1000, retryCount: 0,
+  }, {
+    fetchImpl: async () => new Response(JSON.stringify({ runId: 'run-1', status: 'Queued' }), {
+      status: 201,
+      headers: { 'Server-Timing': 'app;dur=22.40, sql;dur=9.10, dbconn;dur=0.02, '
+        + 'db_open;dur=0.00, db_validate;dur=0.00, db_pool_wait;dur=0.00, '
+        + 'db_pool;desc="hit", db_pool_hit;desc="3", db_pool_new;desc="1", '
+        + 'db_pool_replaced;desc="0", db_pool_disabled;desc="0", '
+        + 'password;desc="private", unwanted;dur=900' },
+    }),
+  });
+  const result = await client.createRun(JOB, USER, 'compatibility.v1');
+  assert.equal(result.requestDiagnostics.poolAction, 'hit');
+  assert.deepEqual(result.requestDiagnostics.poolLeases, {
+    hit: 3, new: 1, replaced: 0, disabled: 0,
+  });
+  assert.deepEqual(result.requestDiagnostics.timingMs, {
+    app: 22.4, sql: 9.1, dbconn: 0.02, db_open: 0, db_validate: 0, db_pool_wait: 0,
+  });
+  assert.doesNotMatch(JSON.stringify(result.requestDiagnostics), /private|unwanted|password/);
+});

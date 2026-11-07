@@ -104,17 +104,25 @@ def create_run_db(
 
         # Lock manual and automatic requests for the same subject.
         # Keep the transaction lock until commit or rollback.
-        cur.execute(
-            """
-            SET NOCOUNT ON;
-            DECLARE @lock_result int;
-            EXEC @lock_result = sp_getapplock
-                @Resource = ?, @LockMode = 'Exclusive',
-                @LockOwner = 'Transaction', @LockTimeout = 10000;
-            SELECT @lock_result;
-            """,
-            f"enrichment:{enricher_type}:{subject_key}",
-        )
+        try:
+            cur.execute(
+                """
+                SET NOCOUNT ON;
+                DECLARE @lock_result int;
+                EXEC @lock_result = sp_getapplock
+                    @Resource = ?, @LockMode = 'Exclusive',
+                    @LockOwner = 'Transaction', @LockTimeout = 10000;
+                SELECT @lock_result;
+                SET NOCOUNT OFF;
+                """,
+                f"enrichment:{enricher_type}:{subject_key}",
+            )
+        except Exception:
+            # The batch might fail before it restores NOCOUNT OFF.
+            # Do not let the next SQL caller inherit that setting.
+            if hasattr(conn, "invalidate"):
+                conn.invalidate()
+            raise
         lock_row = cur.fetchone()
         if lock_row is None or int(lock_row[0]) < 0:
             raise SubjectLockError("Could not lock enrichment subject")

@@ -144,63 +144,48 @@ def _deliver_one(dispatch_row, max_attempts: int) -> tuple[str, str | None]:
 
     try:
         if target_domain != "jobs":
-            return ("deadletter", f"Unsupported target domain: {target_domain}")
+            return ("deadletter", "unsupported_target_domain")
 
         if projection_type != "job-list.compatibility-score.v1":
-            return ("deadletter", f"Unsupported projection type: {projection_type}")
+            return ("deadletter", "unsupported_projection_type")
 
         resp = _post_jobs_projection(payload_json)
 
         if 200 <= resp.status_code < 300:
-            logging.info(
-                "dispatch_projections: jobs API success status=%s body=%s",
-                resp.status_code,
-                resp.text[:1000],
-            )
             return ("delivered", None)
 
         logging.warning(
-            "dispatch_projections: jobs API failure status=%s body=%s",
+            "dispatch_projections: jobs API failure status=%s",
             resp.status_code,
-            resp.text[:1000],
         )
 
         if resp.status_code in (408, 409, 425, 429, 500, 502, 503, 504):
-            msg = f"Jobs API transient failure {resp.status_code}: {resp.text[:1000]}"
+            msg = f"jobs_http_{resp.status_code}"
             if attempt_count + 1 >= max_attempts:
                 return ("deadletter", msg)
             return ("retry", msg)
 
-        return ("deadletter", f"Jobs API non-retryable failure {resp.status_code}: {resp.text[:1000]}")
+        return ("deadletter", f"jobs_http_{resp.status_code}")
 
-    except requests.RequestException as ex:
-        msg = f"HTTP error: {type(ex).__name__}: {str(ex)}"
+    except requests.RequestException:
+        msg = "jobs_transport_error"
         if attempt_count + 1 >= max_attempts:
             return ("deadletter", msg)
         return ("retry", msg)
 
-    except Exception as ex:
-        msg = f"Unexpected error: {type(ex).__name__}: {str(ex)}"
+    except Exception:
+        msg = "dispatch_unexpected_error"
         if attempt_count + 1 >= max_attempts:
             return ("deadletter", msg)
         return ("retry", msg)
 
 
-def main(mytimer: func.TimerRequest) -> None:
-    logging.info("dispatch_projections INVOKED past_due=%s", getattr(mytimer, "past_due", None))
-    now = _utcnow()
-
-    if mytimer.past_due:
-        logging.warning("dispatch_projections timer is past due!")
-
-    batch_size = _env_int("ENRICHERS_PROJECTION_DISPATCH_BATCH_SIZE", 50)
-    max_attempts = _env_int("ENRICHERS_PROJECTION_DISPATCH_MAX_ATTEMPTS", 8)
-
+def _select_locked_batch(now, batch_size):
+    """Release the SQL lock and its connection before network calls."""
     conn = get_connection()
     try:
         conn.autocommit = False
         cur = conn.cursor()
-
         cur.execute(
             """
             DECLARE @res INT;
@@ -213,17 +198,32 @@ def main(mytimer: func.TimerRequest) -> None:
             """
         )
         lock_result = cur.fetchone()[0]
-
         if lock_result < 0:
-            logging.warning("dispatch_projections: could not acquire applock (result=%s), exiting", lock_result)
+            logging.warning("dispatch_projections: lock_not_acquired code=%s", lock_result)
             conn.rollback()
-            return
-
+            return None
         rows = _select_due_dispatches(cur, now, batch_size)
-        conn.commit()  # release applock sooner; selection done
+        conn.commit()
+        return rows
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
-        logging.info("dispatch_projections: picked %s rows", len(rows))
 
+def main(mytimer: func.TimerRequest) -> None:
+    now = _utcnow()
+    if mytimer.past_due:
+        logging.warning("dispatch_projections timer is past due")
+
+    batch_size = _env_int("ENRICHERS_PROJECTION_DISPATCH_BATCH_SIZE", 50)
+    max_attempts = _env_int("ENRICHERS_PROJECTION_DISPATCH_MAX_ATTEMPTS", 8)
+
+    try:
+        rows = _select_locked_batch(now, batch_size)
+        if rows is None:
+            return
         delivered = 0
         retried = 0
         deadlettered = 0
@@ -233,22 +233,11 @@ def main(mytimer: func.TimerRequest) -> None:
             status, error = _deliver_one(row, max_attempts)
             step_now = _utcnow()
 
-            logging.info(
-                "dispatch_projections: dispatch_id=%s run_id=%s projection_type=%s target_domain=%s attempt_count=%s outcome=%s error=%s",
-                str(row.DispatchId),
-                str(row.RunId),
-                row.ProjectionType,
-                row.TargetDomain,
-                int(row.AttemptCount or 0),
-                status,
-                error,
-            )
-
+            # Acquire only for the status update, after the HTTP call.
             inner = get_connection()
             try:
                 inner.autocommit = False
                 icur = inner.cursor()
-
                 if status == "delivered":
                     _mark_delivered(icur, dispatch_id, step_now)
                     delivered += 1
@@ -259,27 +248,20 @@ def main(mytimer: func.TimerRequest) -> None:
                 else:
                     _mark_deadletter(icur, dispatch_id, step_now, error or "deadletter")
                     deadlettered += 1
-
                 inner.commit()
             except Exception:
                 inner.rollback()
-                logging.exception("dispatch_projections: failed updating dispatch row %s", dispatch_id)
                 raise
             finally:
                 inner.close()
 
         logging.info(
             "dispatch_projections done delivered=%s retried=%s deadlettered=%s",
-            delivered, retried, deadlettered
+            delivered, retried, deadlettered,
         )
-
-    except Exception:
-        conn.rollback()
-        logging.exception("dispatch_projections failed")
+    except Exception as exc:
+        # Do not include SQL errors, response bodies, or identifiers.
+        from helpers.db import sql_state, DatabaseConnectionError
+        state = exc.sql_state if isinstance(exc, DatabaseConnectionError) else sql_state(exc)
+        logging.error("dispatch_projections_failed sqlState=%s", state or "none")
         raise
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-        

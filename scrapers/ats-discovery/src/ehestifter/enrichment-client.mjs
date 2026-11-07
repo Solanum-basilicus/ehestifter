@@ -4,11 +4,12 @@ const PATH = '/enrichment/runs';
 const SERVER_STAGES = new Set([
   'run_create', 'run_readback', 'analytics', 'job_snapshot', 'cv_snapshot',
   'snapshot_validate', 'blob_upload', 'snapshot_path_update',
-  'gateway_dispatch', 'mark_queued',
+  'gateway_dispatch', 'mark_queued', 'db_acquire', 'db_query', 'db_transaction',
 ]);
 const SERVER_CATEGORIES = new Set([
   'db_connection_interface', 'db_connection_operational',
-  'db_connection_unexpected', 'db_subject_lock', 'db_sql', 'db_operation',
+  'db_connection_unexpected', 'db_connection_pool_wait', 'pool_wait_timeout',
+  'db_query_failed', 'db_transaction_failed', 'db_subject_lock', 'db_sql', 'db_operation',
   'upstream_timeout', 'upstream_http_5xx', 'upstream_http_4xx',
   'upstream_transport', 'invalid_snapshot', 'snapshot_storage',
   'gateway_dispatch', 'gateway_http_5xx', 'gateway_http_4xx',
@@ -51,6 +52,7 @@ const TIMING_KEYS = new Set([
   'step_analytics', 'step_job_snapshot', 'step_cv_snapshot',
   'step_snapshot_validate', 'step_blob_upload', 'step_snapshot_path_update',
   'step_gateway_dispatch', 'step_mark_queued', 'users_http', 'gateway_http',
+  'sql', 'dbconn', 'db_open', 'db_validate', 'db_pool_wait',
 ]);
 
 function safeServerTiming(response) {
@@ -58,18 +60,27 @@ function safeServerTiming(response) {
   if (typeof header !== 'string' || header.length > 4096) return null;
   const timingMs = {};
   let processFirst = null;
-  for (const part of header.split(',').slice(0, 32)) {
+  let poolAction = null;
+  const poolLeases = {};
+  for (const part of header.split(',').slice(0, 64)) {
     const value = part.trim();
     if (value === 'process_first;desc="1"') processFirst = true;
     if (value === 'process_first;desc="0"') processFirst = false;
+    const pool = /^db_pool;desc="(hit|new|replaced|disabled)"$/.exec(value);
+    if (pool) poolAction = pool[1];
+    const lease = /^db_pool_(hit|new|replaced|disabled);desc="(\d{1,5})"$/.exec(value);
+    if (lease) poolLeases[lease[1]] = Number(lease[2]);
     const match = /^([a-z][a-z0-9_]*);dur=(\d+(?:\.\d{1,2})?)$/.exec(value);
     if (!match || !TIMING_KEYS.has(match[1])) continue;
     const ms = Number(match[2]);
     if (Number.isFinite(ms) && ms <= 600000) timingMs[match[1]] = ms;
   }
-  if (!Object.keys(timingMs).length && processFirst === null) return null;
+  if (!Object.keys(timingMs).length && processFirst === null
+      && poolAction === null && !Object.keys(poolLeases).length) return null;
   return { ...(Object.keys(timingMs).length ? { timingMs } : {}),
-    ...(processFirst !== null ? { processFirst } : {}) };
+    ...(processFirst !== null ? { processFirst } : {}),
+    ...(poolAction !== null ? { poolAction } : {}),
+    ...(Object.keys(poolLeases).length ? { poolLeases } : {}) };
 }
 
 async function discardFailureBody(response) {
@@ -119,6 +130,13 @@ function requestDiagnostics({ correlationId, status, attempts, started, failures
     // Only failures are stored per attempt. Normal traffic has one ID.
     failedAttempts: failures,
     ...(serverFailure ? { serverFailure } : {}),
+    // Keep only pool metrics for successful requests in plaintext artifacts.
+    ...(serverTiming?.poolAction ? { poolAction: serverTiming.poolAction } : {}),
+    ...(serverTiming?.poolLeases ? { poolLeases: serverTiming.poolLeases } : {}),
+    ...(serverTiming?.timingMs ? { timingMs: Object.fromEntries(
+      Object.entries(serverTiming.timingMs).filter(([key]) =>
+        ['app', 'sql', 'dbconn', 'db_open', 'db_validate', 'db_pool_wait'].includes(key)),
+    ) } : {}),
     ...(serverFailure && serverTiming ? { serverTiming } : {}),
   };
 }
@@ -207,13 +225,15 @@ export function createEnrichmentClient(config, { fetchImpl = fetch } = {}) {
         attempt: attemptNumber, correlationId, httpStatus: response.status,
         category, durationMs: elapsed(attemptStarted),
         ...(serverFailure ? { serverFailure } : {}),
+        ...(serverTiming?.poolAction ? { poolAction: serverTiming.poolAction } : {}),
+        ...(serverTiming?.poolLeases ? { poolLeases: serverTiming.poolLeases } : {}),
         ...(serverTiming ? { serverTiming } : {}),
       });
       if ((response.status !== 429 && response.status < 500)
           || attempt === config.retryCount) {
         throw safeError(category, response.status, requestDiagnostics({
           correlationId, status: response.status, attempts: attemptNumber,
-          started, failures: failedAttempts, serverFailure,
+          started, failures: failedAttempts, serverFailure, serverTiming,
         }), attempt === config.retryCount);
       }
       await sleep(Math.min(500 * 2 ** attempt, 4000));

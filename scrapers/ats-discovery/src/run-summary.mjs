@@ -87,7 +87,8 @@ export function compatibilityDiagnosticsSummary(compatibilityResults) {
     const failures = request.failedAttempts ?? [];
     return item.status === 'error_request'
       ? failures
-      : [...failures, { httpStatus: request.httpStatus, category: 'http_success' }];
+      : [...failures, { httpStatus: request.httpStatus, category: 'http_success',
+        poolAction: request.poolAction, poolLeases: request.poolLeases }];
   });
   const errors = items.filter((item) => item.status === 'error_request');
   const recovered = measured.filter((item) => (
@@ -124,6 +125,27 @@ export function compatibilityDiagnosticsSummary(compatibilityResults) {
     ),
     serverFailuresByStageAndCategory: countBy(
       serverFailures, (failure) => `${failure.stage}:${failure.category}`,
+    ),
+    sqlStateCounts: countBy(serverFailures, (failure) => failure.sqlState),
+    // poolActions is the last checkout in each HTTP attempt. poolLeases counts
+    // every SQL checkout, including several checkouts in one request.
+    poolActions: countBy(attempts, (attempt) => attempt.poolAction),
+    poolLeases: Object.fromEntries(
+      ['hit', 'new', 'replaced', 'disabled'].map((action) => [action,
+        attempts.reduce((sum, attempt) => {
+          const leases = attempt.poolLeases ?? attempt.serverTiming?.poolLeases;
+          return sum + (Number.isInteger(leases?.[action]) ? leases[action] : 0);
+        }, 0),
+      ]),
+    ),
+    successfulRequestTiming: Object.fromEntries(
+      ['app', 'sql', 'dbconn', 'db_open', 'db_validate', 'db_pool_wait'].map((key) => {
+        const values = measured.filter((item) => item.status !== 'error_request')
+          .map((item) => item.requestDiagnostics.timingMs?.[key])
+          .filter((value) => Number.isFinite(value));
+        return [key, { count: values.length, p50Ms: percentile(values, 0.5),
+          p95Ms: percentile(values, 0.95) }];
+      }),
     ),
   };
 }

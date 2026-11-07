@@ -260,3 +260,24 @@ If a failure has no server diagnostic fields, it may have occurred in the
 Functions gateway or before Python started. Do not infer its SQL cause.
 Do not compare different scanner populations as a controlled before-and-after
 measurement. See `backend/jobs/README.md` for settings and scope.
+
+## Enrichers SQL pool diagnostics (follow-up to issues #41 and #50)
+
+Enrichers uses a process-local SQL pool. It reports only allowlisted
+`Server-Timing` metrics on normal HTTP responses. It does not write a trace for
+successful SQL checkouts. `dbconn` includes waiting, opening, and validation.
+`db_pool` is the last checkout for that HTTP request. **Use** the
+`db_pool_hit`, `db_pool_new`, `db_pool_replaced`, and `db_pool_disabled` counters
+for the complete number of SQL checkouts. One Enrichment run request can use
+several SQL connections in sequence. The scanner aggregates these counters in
+`summary.json.compatibilityHttpDiagnostics.poolLeases`. The same summary has
+`successfulRequestTiming` p50/p95 in milliseconds and bounded SQLSTATE counts.
+
+The scanner reads only fixed timing keys and fixed pool actions. Success data
+is kept in local JSON artifacts, not sent to Application Insights. Do not add
+HTTP bodies, SQL statements, full error messages, credentials, user IDs, CV
+text, or other unbounded request fields to these diagnostics.
+
+SQL pool settings, fallback, and validation steps are in
+`backend/enrichers/README.md`. A timer does not return Server-Timing; its
+connections still use the same worker-local pool and the explicit close path.
