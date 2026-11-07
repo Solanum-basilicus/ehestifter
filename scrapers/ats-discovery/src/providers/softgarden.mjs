@@ -16,6 +16,7 @@ export const sourceMeta = providerSourceMeta({
     'parser hardening around duplicate ids and malformed links',
     'current vacancies-page parsing with legacy widget fallback and false-empty detection',
     'job-boundary checks for widget and vacancies-page location claims',
+    'anchor-only fallback without unverified locations for changed HTML layouts',
   ],
 });
 
@@ -126,6 +127,36 @@ function hasOtherJobLinks(block, expectedId) {
   return false;
 }
 
+// When no safe job block exists, keep only the job link and its visible title.
+// Do not infer a work location from adjacent page text or other job links.
+function anchorOnlyJobs(html, base, acquisitionMode) {
+  const visibleHtml = html
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, '');
+  const jobs = [];
+  const seen = new Set();
+  for (const anchor of visibleHtml.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a\s*>/gi)) {
+    const href = htmlAttribute(anchor[1], 'href');
+    if (!href) continue;
+    let url;
+    try {
+      url = new URL(decodeHtmlEntities(href), base);
+    } catch {
+      continue;
+    }
+    if (!sameSoftgardenOrigin(url, base)) continue;
+    const id = url.pathname.match(/^\/job\/(\d+)(?:\/|$)/i)?.[1];
+    if (!id || seen.has(id)) continue;
+    const title = clean(anchor[2]);
+    if (!title) continue;
+    jobs.push({ id, title, url: url.href, company: '', location: '', acquisitionMode });
+    seen.add(id);
+    if (jobs.length >= MAX_JOBS) break;
+  }
+  return jobs;
+}
+
 export function parseSoftgardenWidget(html, widgetUrl) {
   if (typeof html !== 'string') return [];
   const base = widgetUrl instanceof URL ? widgetUrl : new URL(widgetUrl);
@@ -195,7 +226,9 @@ export function parseSoftgardenWidget(html, widgetUrl) {
     seen.add(id);
     if (jobs.length >= MAX_JOBS) break;
   }
-  return jobs;
+  // Real widget markup can contain incomplete or changed job containers.
+  // A missing close tag must not remove an otherwise valid job link.
+  return jobs.length > 0 ? jobs : anchorOnlyJobs(html, base, 'legacy-widget-anchors');
 }
 
 
@@ -306,7 +339,9 @@ export function parseSoftgardenVacanciesPage(html, pageUrl) {
     jobs.push(job);
     if (jobs.length >= MAX_JOBS) break;
   }
-  return jobs;
+  // Use links only if no row, list item, or article has a safe boundary.
+  // An ungrouped link provides no reliable listing-level location.
+  return jobs.length > 0 ? jobs : anchorOnlyJobs(html, base, 'vacancies-page-anchors');
 }
 
 function resolveSoftgardenPage(entry) {
@@ -366,7 +401,7 @@ export default {
         });
         const pageJobs = parseSoftgardenVacanciesPage(pageHtml, page);
         if (pageJobs.length > 0) {
-          ctx.reportProviderTelemetry?.({ acquisitionMode: 'vacancies-page' });
+          ctx.reportProviderTelemetry?.({ acquisitionMode: pageJobs[0].acquisitionMode ?? 'vacancies-page' });
           return pageJobs.map((job) => ({ ...job, company: entry.name }));
         }
       } catch (error) {
@@ -380,6 +415,9 @@ export default {
       headers: { accept: 'text/html' },
     });
     const widgetJobs = parseSoftgardenWidget(widgetHtml, widget);
+    if (widgetJobs[0]?.acquisitionMode) {
+      ctx.reportProviderTelemetry?.({ acquisitionMode: widgetJobs[0].acquisitionMode });
+    }
     if (widgetJobs.length === 0 && /\/job\/\d+/i.test(widgetHtml)) {
       const error = new Error('softgarden: widget_schema_mismatch');
       error.code = 'SOFTGARDEN_WIDGET_SCHEMA_MISMATCH';

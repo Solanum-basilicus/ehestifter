@@ -224,17 +224,20 @@ test('Softgarden widget keeps multiple valid locations in nested elements', () =
   assert.equal(jobs[0].location, 'Berlin / Hamburg');
 });
 
-test('Softgarden widget drops an unclosed job container', () => {
+test('Softgarden widget recovers the job link from an unclosed container without locations', () => {
   const jobs = parseSoftgardenWidget(`
     <div data-job-id="501"><a href="/job/501/first">First</a>
       <span class="location-view-item">Berlin</span>
     <div class="job-list-content"><a href="/job/502/second">Second</a>
       <span class="location-view-item">Hamburg</span></div>
   `, 'https://acme.softgarden.io/de/widgets/jobs');
-  assert.deepEqual(jobs, []);
+  assert.deepEqual(jobs.map(({ id, location }) => ({ id, location })), [
+    { id: '501', location: '' },
+    { id: '502', location: '' },
+  ]);
 });
 
-test('Softgarden widget drops a mixed job container', () => {
+test('Softgarden widget recovers mixed job links without joining their locations', () => {
   const jobs = parseSoftgardenWidget(`
     <div data-job-id="601">
       <a href="/job/601/first">First</a>
@@ -242,7 +245,10 @@ test('Softgarden widget drops a mixed job container', () => {
       <a href="/job/602/second">Second</a>
       <span class="location-view-item">Hamburg</span>
     </div>`, 'https://acme.softgarden.io/de/widgets/jobs');
-  assert.deepEqual(jobs, []);
+  assert.deepEqual(jobs.map(({ id, location }) => ({ id, location })), [
+    { id: '601', location: '' },
+    { id: '602', location: '' },
+  ]);
 });
 
 test('Softgarden vacancies fallback keeps list item locations separate', () => {
@@ -269,14 +275,17 @@ test('Softgarden vacancies fallback keeps article locations separate', () => {
   ]);
 });
 
-test('Softgarden vacancies fallback does not scan text near an ungrouped job link', () => {
+test('Softgarden vacancies fallback keeps ungrouped jobs but drops uncertain locations', () => {
   const jobs = parseSoftgardenVacanciesPage(`
     <a href="/job/801/first">First</a>
     <span class="location-view-item">Berlin</span>
     <a href="/job/802/second">Second</a>
     <span class="location-view-item">Hamburg</span>`,
   'https://acme.softgarden.io/de/vacancies');
-  assert.deepEqual(jobs, []);
+  assert.deepEqual(jobs.map(({ id, location }) => ({ id, location })), [
+    { id: '801', location: '' },
+    { id: '802', location: '' },
+  ]);
 });
 
 test('Softgarden fetch reports the vacancies-page path', async () => {
@@ -313,7 +322,7 @@ test('Softgarden fetch reports widget fallback and keeps job boundaries', async 
   assert.deepEqual(telemetry, [{ acquisitionMode: 'legacy-widget' }]);
 });
 
-test('Softgarden reports widget path on a fallback schema error', async () => {
+test('Softgarden reports a listing error when no link has a usable title', async () => {
   const telemetry = [];
   await assert.rejects(
     () => softgarden.fetch(
@@ -323,7 +332,7 @@ test('Softgarden reports widget path on a fallback schema error', async () => {
         async fetchText(url) {
           return String(url).includes('widgets/jobs')
             ? '<html>Empty widget</html>'
-            : '<a href="/job/801/first">First</a>';
+            : '<a href="/job/801/first"><span></span></a>';
         },
       },
     ),
@@ -333,21 +342,24 @@ test('Softgarden reports widget path on a fallback schema error', async () => {
 });
 
 
-test('Softgarden widget with unparsed job links is not a healthy empty board', async () => {
+test('Softgarden widget recovers job links when no complete block exists', async () => {
   const telemetry = [];
-  await assert.rejects(
-    () => softgarden.fetch(
-      { name: 'Acme', api: 'https://acme.softgarden.io/de/widgets/jobs' },
-      {
-        reportProviderTelemetry(value) { telemetry.push(value); },
-        async fetchText() {
-          return '<div data-job-id="901"><a href="/job/901/first">First</a>';
-        },
+  const jobs = await softgarden.fetch(
+    { name: 'Acme', api: 'https://acme.softgarden.io/de/widgets/jobs' },
+    {
+      reportProviderTelemetry(value) { telemetry.push(value); },
+      async fetchText() {
+        return '<div data-job-id="901"><a href="/job/901/first">First</a>';
       },
-    ),
-    /widget_schema_mismatch/,
+    },
   );
-  assert.deepEqual(telemetry, [{ acquisitionMode: 'legacy-widget' }]);
+  assert.deepEqual(jobs.map(({ id, location }) => ({ id, location })), [
+    { id: '901', location: '' },
+  ]);
+  assert.deepEqual(telemetry, [
+    { acquisitionMode: 'legacy-widget' },
+    { acquisitionMode: 'legacy-widget-anchors' },
+  ]);
 });
 
 
@@ -373,4 +385,53 @@ test('Softgarden widget ignores job markup in comments and scripts', () => {
   assert.deepEqual(jobs.map(({ id, location }) => ({ id, location })), [
     { id: '2003', location: 'Berlin' },
   ]);
+});
+
+// Representative markup for a board that uses div cards instead of table rows.
+// This is a reconstructed fixture, not a captured provider response.
+test('Softgarden fetch recovers valid listing links from a div-only board', async () => {
+  let calls = 0;
+  const telemetry = [];
+  const jobs = await softgarden.fetch(
+    { name: 'NECT', careers_url: 'https://nect.softgarden.io/en/vacancies' },
+    {
+      reportProviderTelemetry(value) { telemetry.push(value); },
+      async fetchText() {
+        calls += 1;
+        return `<section class="vacancies">
+          <div class="vacancy"><a href="/job/64378008/partner-manager">Partner Manager</a>
+            <span class="location-view-item">Hamburg</span></div>
+          <div class="vacancy"><a href="/job/64716454/engineer">Engineer</a>
+            <span class="location-view-item">Berlin</span></div>
+        </section>`;
+      },
+    },
+  );
+  assert.equal(calls, 1);
+  assert.deepEqual(jobs.map(({ id, location }) => ({ id, location })), [
+    { id: '64378008', location: '' },
+    { id: '64716454', location: '' },
+  ]);
+  assert.deepEqual(telemetry, [{ acquisitionMode: 'vacancies-page-anchors' }]);
+});
+
+test('Softgarden anchor recovery skips scripts, foreign links, and duplicate ids', () => {
+  const html = `<script><a href="/job/100/false">False</a></script>
+    <!-- <a href="/job/101/false">False</a> -->
+    <a href="https://example.org/job/102/foreign">Foreign</a>
+    <div><a href="/job/103/first">First</a></div>
+    <div><a href="/job/103/duplicate">Duplicate</a></div>
+    <div><a href="/job/104/second">Second</a></div>`;
+  const jobs = parseSoftgardenVacanciesPage(html, 'https://nect.softgarden.io/en/vacancies');
+  assert.deepEqual(jobs.map(({ id, location }) => ({ id, location })), [
+    { id: '103', location: '' },
+    { id: '104', location: '' },
+  ]);
+});
+
+test('Softgarden empty widget with job-like text still reports a schema mismatch', async () => {
+  await assert.rejects(() => softgarden.fetch(
+    { name: 'Acme', api: 'https://acme.softgarden.io/en/widgets/jobs' },
+    { async fetchText() { return '<p>See /job/901/ later</p>'; } },
+  ), /widget_schema_mismatch/);
 });

@@ -1046,6 +1046,21 @@ async function fetchSuccessFactorsDetailHtml(candidate, endpoint, context) {
   }
 }
 
+// These invitations lead to external content. They are not job descriptions.
+const SUCCESSFACTORS_PREVIEW_EN = /(?:please\s+)?click\s+here\s+to\s+see\s+the\s+full\s+job\s+preview\.?/iu;
+const SUCCESSFACTORS_PREVIEW_DE = /bitte\s+hier\s+klicken\s*,\s*um\s+die\s+stelle\s+anzeigen\s+zu\s+lassen\.?/iu;
+
+function isSuccessFactorsPreviewInvitation(text, onlyInvitation = false) {
+  const patterns = [SUCCESSFACTORS_PREVIEW_EN, SUCCESSFACTORS_PREVIEW_DE];
+  return patterns.some((pattern) => {
+    if (onlyInvitation) {
+      const match = pattern.exec(text);
+      return match?.[0].length === text.length;
+    }
+    return pattern.test(text);
+  });
+}
+
 async function fetchSuccessFactorsDetails(candidate, context) {
   const endpoint = assertJsonLdSource(candidate);
   const html = await fetchSuccessFactorsDetailHtml(candidate, endpoint, context);
@@ -1058,8 +1073,7 @@ async function fetchSuccessFactorsDetails(candidate, context) {
   }
   const page = parseSuccessFactorsHtmlDetails(html, endpoint);
   // A preview invitation alone is not a job description.
-  const previewOnly = page && /^(?:please\s+)?click\s+here\s+to\s+see\s+the\s+full\s+job\s+preview\.?$/iu
-    .test(page.description);
+  const previewOnly = page && isSuccessFactorsPreviewInvitation(page.description, true);
   if (!page || previewOnly) {
     const visibleText = htmlToPlainText(html);
     if (/You\s+can(?:'|’)t\s+view\s+this\s+job\s+because\s+it(?:'|’)s\s+not\s+available\s+at\s+this\s+time\./iu.test(visibleText)) {
@@ -1068,7 +1082,7 @@ async function fetchSuccessFactorsDetails(candidate, context) {
         { reason: SUCCESSFACTORS_JOB_UNAVAILABLE, evidence: 'not_available_phrase' },
       );
     }
-    if (/click\s+here\s+to\s+see\s+the\s+full\s+Job\s+Preview/iu.test(visibleText)) {
+    if (isSuccessFactorsPreviewInvitation(visibleText)) {
       throw new DetailUnavailableError(SUCCESSFACTORS_EXTERNAL_PREVIEW_MISSING, {
         reason: SUCCESSFACTORS_EXTERNAL_PREVIEW_MISSING,
         evidence: 'external_preview_phrase',

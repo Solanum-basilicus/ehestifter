@@ -643,6 +643,33 @@ test('SuccessFactors detects encoded external preview links without following th
   }
 });
 
+test('SuccessFactors detects German external-preview invitations without following links', async () => {
+  const source = candidate({
+    sourceProvider: 'successfactors',
+    sourceTenant: 'jobs.example.com',
+    url: 'https://jobs.example.com/job/Hamburg-Role/1442435133/',
+    provenance: { providerNativeId: '1442435133', sourceOrigin: 'https://jobs.example.com' },
+  });
+  for (const html of [
+    '<main><p>Bitte <a href="https://www.example.org/details">hier</a>&nbsp;klicken, um die Stelle anzeigen zu lassen.</p></main>',
+    '<div class="job-description">Bitte <a href="https://www.example.org/details">hier</a>&#160;klicken, um die Stelle anzeigen zu lassen.</div>',
+  ]) {
+    const requests = [];
+    const [result] = await enrichCandidateDetails([source], {
+      concurrency: 1, maxFetches: 1, timeoutMs: 1000,
+      async fetchImpl(url) {
+        requests.push(String(url));
+        return response(html);
+      },
+    });
+    assert.equal(result.detail.status, 'unavailable');
+    assert.equal(result.detail.reason, 'successfactors_external_preview_missing');
+    assert.equal(result.detail.evidence, 'external_preview_phrase');
+    assert.equal(result.description, '');
+    assert.deepEqual(requests, ['https://jobs.example.com/', source.url]);
+  }
+});
+
 test('SuccessFactors treats a marked description with only a preview link as unavailable', async () => {
   const source = candidate({
     sourceProvider: 'successfactors',
@@ -672,6 +699,7 @@ test('SuccessFactors keeps valid descriptions when the page also mentions a prev
       description: '<p>Maintain data services.</p>',
     })}</script><p>Click here to see the full Job Preview</p>`,
     '<div class="job-description">Maintain data services.</div><p>Click here to see the full Job Preview</p>',
+    '<div class="job-description">Maintain data services.</div><p>Bitte hier klicken, um die Stelle anzeigen zu lassen.</p>',
   ]) {
     const [result] = await enrichCandidateDetails([source], {
       concurrency: 1, maxFetches: 1, timeoutMs: 1000,
@@ -691,6 +719,7 @@ test('SuccessFactors keeps unknown HTML and unrelated preview links as errors', 
   for (const html of [
     '<main><h1>Role</h1><p>No details were provided.</p></main>',
     '<main><p>Click here to see related jobs</p></main>',
+    '<main><p>Bitte hier klicken, um ähnliche Stellen zu sehen.</p></main>',
     '<script type="application/ld+json">{not valid JSON</script><main>No details.</main>',
   ]) {
     const [result] = await enrichCandidateDetails([source], {

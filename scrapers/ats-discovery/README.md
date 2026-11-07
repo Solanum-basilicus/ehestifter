@@ -84,13 +84,16 @@ second board request only to obtain description text; the existing detail
 fetcher remains available for older/incomplete candidate records and diagnostics.
 
 Softgarden first reads the public vacancies page. Table rows have separate
-location values. The fallback reads only complete list items or articles. The
-legacy widget reads only complete job elements with a `data-job-id` marker.
+location values. The adapter also reads complete list items and articles. The
+legacy widget reads complete job elements with a `data-job-id` marker.
 When one element contains links to different job IDs, the adapter rejects that
-element. It does not infer a job location from text near an ungrouped job link.
-If the widget contains job links but returns no parsed jobs, the adapter reports
-a schema error instead of a healthy empty board. Provider telemetry records
-`acquisitionMode` as `vacancies-page` or `legacy-widget`. There is no location
+element. If no safe job block was parsed, both paths can recover job IDs, titles,
+and URLs from visible same-origin links. These recovered jobs have an empty
+listing location. The adapter does not assign locations from nearby jobs or
+unverified page text. When markup contains job-like links but no valid job
+can be parsed, the adapter reports a schema error, not a healthy empty board. Provider telemetry reports `vacancies-page` or
+`legacy-widget` for the normal paths, and `vacancies-page-anchors` or
+`legacy-widget-anchors` when anchor-only recovery is used. There is no location
 count limit or Softgarden tenant blocklist in this adapter.
 
 iCIMS has two acquisition modes. Classic `*.icims.com` portals keep the full
@@ -163,7 +166,9 @@ patterns. This covers RMK pages that expose the complete description without
 JSON-LD.
 
 When no usable description is present, a SuccessFactors page with the text
-"Click here to see the full Job Preview" has `detail.status = "unavailable"`,
+"Click here to see the full Job Preview" or
+"Bitte hier klicken, um die Stelle anzeigen zu lassen" has
+`detail.status = "unavailable"`,
 `detail.reason = "successfactors_external_preview_missing"`, and
 `detail.evidence = "external_preview_phrase"`. The check uses visible text after
 HTML entity decoding. It does not follow the preview link. A page that reports
