@@ -994,6 +994,15 @@ complete when the error occurred. Missing files therefore mean "stage not comple
 not "empty result". A partial run may include proposed tenant-state changes for
 diagnosis, but it never updates `tenant-state.json` outside the normal persistence boundary.
 
+For a listing provider scheduler stall, inspect `failure.json`.
+`error.chain[0].code` is `PROVIDER_SCHEDULER_STALLED` or
+`PROVIDER_RESULT_WINDOW_STALLED`. The error message includes the group
+(priority or normal), next target sequence, circuit state of that target,
+result window counts, and pending target and circuit counts. Use
+`nextSequence` to find the target in `target-plan.json`. These counts describe
+only the current group. They are not a complete provider health report.
+No new artifact is necessary.
+
 `summary.json` reports unavailable detail observations separately through
 `detailUnavailable` and reports their no-write import outcome through
 `importDetailUnavailableSkipped`. For missing external previews, the final
@@ -1206,7 +1215,9 @@ limits the number of provider job arrays kept at the same time. It does not
 limit accepted jobs, detail requests, imports, or compatibility pairs.
 
 The window can delay some provider requests while a slow earlier target is
-active. Provider request intervals, concurrency, and circuit breakers still
+active. A skipped result from an open circuit also uses a slot in the window.
+The scheduler drains ready results and checks open circuits again before it
+reports a stall. Provider request intervals, concurrency, and circuit breakers still
 apply. Large responses from one target, the global duplicate URL set, the
 location catalog, and accepted candidate records still use memory. A future
 change can examine these remaining sources if memory is still too high.

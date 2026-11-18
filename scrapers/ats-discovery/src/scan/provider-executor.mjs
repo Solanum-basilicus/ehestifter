@@ -392,12 +392,44 @@ async function executeReadyGroup({
     }
   }
 
+  function stallError(message, code) {
+    let pendingTargets = 0;
+    let pendingOpenTargets = 0;
+    let openPartitions = 0;
+    for (const queue of queues.values()) {
+      pendingTargets += queue.targets.length;
+      if (queue.guard.open) {
+        openPartitions += 1;
+        pendingOpenTargets += queue.targets.length;
+      }
+    }
+    const head = ordered[next];
+    const diagnostic = [
+      `group=${ordered[0].targetClass === 'priority' ? 'priority' : 'normal'}`,
+      `nextIndex=${next}`,
+      `nextSequence=${Number.isSafeInteger(head.sequence) ? head.sequence : 'unknown'}`,
+      `nextCircuitOpen=${guardFor(head).open}`,
+      `groupTargets=${ordered.length}`,
+      `active=${active.size}`,
+      `completed=${completed.size}`,
+      `outstanding=${outstanding}`,
+      `windowLimit=${Number.isFinite(maxOutstanding) ? maxOutstanding : 'unbounded'}`,
+      `pendingTargets=${pendingTargets}`,
+      `pendingOpenTargets=${pendingOpenTargets}`,
+      `openPartitions=${openPartitions}`,
+      `partitions=${queues.size}`,
+    ].join(', ');
+    return Object.assign(new Error(`${message} (${diagnostic})`), { code });
+  }
+
   try {
     while (next < ordered.length) {
       await drainReady();
-      flushOpenCircuits();
-      await drainReady();
       if (next === ordered.length) break;
+      flushOpenCircuits();
+      // If the next result is ready, drain it before checking for a stall.
+      // This can make space for more targets in open circuits.
+      if (completed.has(ordered[next])) continue;
 
       let launched = false;
       while (active.size < globalConcurrency && outstanding < maxOutstanding) {
@@ -410,12 +442,12 @@ async function executeReadyGroup({
       // A full window waits for its earliest pending result. This is
       // backpressure, not a candidate admission limit.
       if (outstanding >= maxOutstanding && active.size === 0) {
-        throw new Error('provider result window stalled');
+        throw stallError('provider result window stalled', 'PROVIDER_RESULT_WINDOW_STALLED');
       }
       const waitMs = earliestWaitMs();
       if (active.size === 0) {
         if (!Number.isFinite(waitMs)) {
-          throw new Error('provider scheduler stalled with pending targets');
+          throw stallError('provider scheduler stalled with pending targets', 'PROVIDER_SCHEDULER_STALLED');
         }
         if (waitMs > 0) await sleep(waitMs);
       } else if (Number.isFinite(waitMs) && waitMs > 0 && active.size < globalConcurrency
