@@ -554,6 +554,49 @@
             <button class="btn" id="compat-inspect" disabled aria-disabled="true">🔎 inspect</button>
           </div>
         </div>
+        <!-- User-specific history. Load only after the job details are ready. -->
+        <div class="card private-block" style="padding:12px;" id="company-applications-card">
+          <div class="flex-between">
+            <div style="font-weight:600;">Applications to this company</div>
+            <span class="chip-private">🔒 Only you</span>
+          </div>
+          <div class="muted" style="font-size:12px; margin-top:8px;"
+               x-cloak x-show="!companyApplications.loaded && !companyApplications.loading && !companyApplications.error">
+            Waiting for job details…
+          </div>
+          <div class="muted" style="font-size:12px; margin-top:8px;" x-cloak x-show="companyApplications.loading">
+            Loading applications…
+          </div>
+          <div class="muted" style="font-size:12px; margin-top:8px;" x-cloak x-show="companyApplications.error">
+            Could not load applications.
+            <button class="btn" @click="loadCompanyApplications()">Retry</button>
+          </div>
+          <div x-cloak x-show="companyApplications.loaded && !companyApplications.loading && !companyApplications.error">
+            <div class="muted" style="font-size:12px; margin-top:8px;"
+                 x-cloak x-show="!companyApplications.available">
+              Company is unknown. Counts are not available.
+            </div>
+            <div x-cloak x-show="companyApplications.available">
+              <div class="muted" style="font-size:12px; margin-top:6px; overflow-wrap:anywhere;"
+                   x-text="companyApplications.companyName"></div>
+              <div class="flex-between" style="margin-top:10px;">
+                <div>
+                  <div style="font-family:monospace; font-size:20px; font-weight:600;"
+                       x-text="companyApplications.last90Days"></div>
+                  <div class="muted" style="font-size:12px;">Last 90 days</div>
+                </div>
+                <div>
+                  <div style="font-family:monospace; font-size:20px; font-weight:600;"
+                       x-text="companyApplications.last365Days"></div>
+                  <div class="muted" style="font-size:12px;">Last 365 days</div>
+                </div>
+              </div>
+              <div class="muted" style="font-size:11px; margin-top:10px;">
+                Recorded applications to active jobs with this company name.
+              </div>
+            </div>
+          </div>
+        </div>
         <!-- Simple modal -->
         <div id="compat-modal">
           <div style="background:#fff; padding:16px; border-radius:12px;">
@@ -719,6 +762,11 @@
       app:{ state:"New", changedAtUtc:null },
       safeDescription:"", descLoaded:false,
       history:{ items:[], nextCursor:null, loaded:false, loadingMore:false, error:"" },
+      companyApplications: {
+        loading:false, loaded:false, error:"", available:false,
+        companyName:null, last90Days:null, last365Days:null
+      },
+      _companyApplicationsRequestId: 0,
       createdByUserId: null,
       canEdit: false,
       // delete modal state
@@ -745,12 +793,17 @@
         }catch(e){
           this.safeDescription = `<p class="muted">Unable to load description right now.</p>`;
           this.descLoaded = true;
+          this.companyApplications.error = "Job details are not available.";
         }
         await this.$nextTick();
         window.ehPerf?.pageFinish("details", detailsOk ? "ok" : "error");
+        if (detailsOk) this.loadCompanyApplications();
         this.loadHistory(10, true);
         window.addEventListener('job-history-refresh', (e) => {
-          if (!e.detail || e.detail.jobId === this.jobId) this.loadHistory();
+          if (!e.detail || e.detail.jobId === this.jobId) {
+            this.loadHistory();
+            if (detailsOk) this.loadCompanyApplications();
+          }
         });
 
         // Pick up CURRENT_USER_ID if base already hydrated it
@@ -766,6 +819,37 @@
         });
         // In case user bar hasn't fetched yet, politely request it
         try { window.initUser && window.initUser(); } catch(_) {}        
+      },
+
+      async loadCompanyApplications(){
+        const requestId = ++this._companyApplicationsRequestId;
+        this.companyApplications.loading = true;
+        this.companyApplications.error = "";
+        try {
+          const response = await fetch(`/ui/jobs/${this.jobId}/company-application-summary`, {
+            credentials: 'same-origin'
+          });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const summary = await response.json();
+          if (typeof summary.available !== 'boolean' ||
+              (summary.available && (
+                typeof summary.companyName !== 'string' || !summary.companyName ||
+                !Number.isInteger(summary.last90Days) || summary.last90Days < 0 ||
+                !Number.isInteger(summary.last365Days) || summary.last365Days < summary.last90Days))) {
+            throw new Error('Invalid company application summary');
+          }
+          if (requestId !== this._companyApplicationsRequestId) return;
+          this.companyApplications = {
+            loading:false, loaded:true, error:"", available:summary.available,
+            companyName:summary.companyName, last90Days:summary.last90Days,
+            last365Days:summary.last365Days
+          };
+        } catch (error) {
+          if (requestId !== this._companyApplicationsRequestId) return;
+          this.companyApplications.error = "Could not load company application summary";
+          this.companyApplications.loaded = false;
+          this.companyApplications.loading = false;
+        }
       },
 
       get(obj, keys){ for (const k of keys) if (obj && obj[k] != null) return obj[k]; },

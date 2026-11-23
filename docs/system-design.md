@@ -598,11 +598,13 @@ Purpose:
 - stores per-user status progression for jobs.
 
 Current behavior:
-- a new row is added on each status change,
-- Jobs domain derives current status from latest relevant entry.
+- one row stores the current status for each `(JobOfferingId, UserId)` pair,
+- Jobs updates this row when the user changes the status,
+- Jobs appends a `status_changed` event to `JobOfferingHistory` for each status write.
 
 Modeling implication:
-- status is not a single mutable field on the job; it is a per-user timeline.
+- `UserJobStatus` is current state, not a timeline. Read `JobOfferingHistory`
+  when application dates or previous statuses are required.
 
 #### `dbo.JobOfferingLocations`
 
@@ -1074,11 +1076,27 @@ A user may have:
 | `GET /jobs/{id:guid}` | detailed job view |
 | `PUT /jobs/{jobId}/status` | update current user status |
 | `GET /jobs/{jobId}/history` | get job history relevant to current user |
+| `GET /jobs/{jobId}/company-application-summary` | count current user's recorded applications at the job's company |
 | `POST /jobs/compatibility` | get compatibility scores for list rendering |
 | `POST /jobs/locations` | get active-model locations for list hydration |
 | `POST /jobs/status` | get statuses for list rendering |
 | `GET /jobs/reports/status` | CSV report of user statuses |
 | `POST /jobs/{jobId}/history` | mostly test helper / possible future enrichment journaling hook |
+
+Company application summary (issue #56):
+- Match by the trimmed hiring company name. If it is empty or `Unknown`
+  (case-insensitive), use the posting company name instead.
+- If neither is valid, return `available: false` and null counts, not zero.
+- Only active jobs (`IsDeleted = 0`) can be the target or contribute to counts.
+- Count one application per job using the first recorded qualifying status event
+  from `JobOfferingHistory` for the authenticated user. `Ignored`, `Unset`,
+  and `New` do not indicate an application. Later status updates do not move
+  the first application date. Both windows are rolling 90 and 365 days.
+- Company names are compared without case or outer whitespace. This does not
+  identify legal entities or merge different names. Counts are based on
+  recorded status events, not verified applications to an employer.
+- The response includes `available`, `companyName`, `matchBasis`, `last90Days`,
+  `last365Days`, and `asOfUtc`. The endpoint does not cache user-specific data.
 
 ### 10.7 Internal enrichment contract: job snapshot
 
@@ -1176,6 +1194,9 @@ Current characteristics:
 ### 11.4 Details page behavior
 
 `job.html` includes notable enrichment-related UX:
+- a private company application card below the right-rail compatibility score,
+  loaded after job details. It uses `GET /ui/jobs/{jobId}/company-application-summary`
+  through an authenticated, uncached Core proxy. A status write refreshes the card,
 - enricher widget,
 - modal/history inspection flow,
 - history of enrichments accessible via inspect flow,
@@ -2070,9 +2091,9 @@ Selected provider implementations are derived from pinned Career-Ops sources und
 
 1. User selects new status for a job.
 2. Core proxy sends to `PUT /jobs/{jobId}/status`.
-3. Jobs appends new status entry in `UserJobStatus`.
-4. Current visible status for that user is derived from latest entry.
-5. History relevant to that user can later show the change.
+3. Jobs updates the current row in `UserJobStatus`.
+4. Jobs appends a `status_changed` event to `JobOfferingHistory`.
+5. The visible status comes from `UserJobStatus`; history shows past changes.
 
 ### 15.5 Telegram link flow
 
