@@ -557,8 +557,8 @@
         <!-- User-specific history. Load only after the job details are ready. -->
         <div class="card private-block" style="padding:12px;" id="company-applications-card">
           <div class="flex-between">
-            <div style="font-weight:600;">Applications to this company</div>
-            <span class="chip-private">🔒 Only you</span>
+            <div style="font-weight:600;">Company insights</div>
+            <div class="flex" style="gap:.5rem;"><span class="chip-private" style="white-space:nowrap;">🔒 Only you</span></div>
           </div>
           <div class="muted" style="font-size:12px; margin-top:8px;"
                x-cloak x-show="!companyApplications.loaded && !companyApplications.loading && !companyApplications.error">
@@ -577,22 +577,19 @@
               Company is unknown. Counts are not available.
             </div>
             <div x-cloak x-show="companyApplications.available">
-              <div class="muted" style="font-size:12px; margin-top:6px; overflow-wrap:anywhere;"
-                   x-text="companyApplications.companyName"></div>
-              <div class="flex-between" style="margin-top:10px;">
-                <div>
-                  <div style="font-family:monospace; font-size:20px; font-weight:600;"
-                       x-text="companyApplications.last90Days"></div>
-                  <div class="muted" style="font-size:12px;">Last 90 days</div>
-                </div>
-                <div>
-                  <div style="font-family:monospace; font-size:20px; font-weight:600;"
-                       x-text="companyApplications.last365Days"></div>
-                  <div class="muted" style="font-size:12px;">Last 365 days</div>
-                </div>
+              <div style="font-size:13px; margin-top:8px; overflow-wrap:anywhere;">
+                Your applications to <span style="font-weight:600;" x-text="companyApplications.companyName"></span>:
+              </div>
+              <div style="font-size:14px; margin-top:8px;">
+                <strong x-text="companyApplications.last90Days"></strong>
+                <span x-text="companyApplications.last90Days === 1 ? 'time' : 'times'"></span> in the last 90 days
+              </div>
+              <div style="font-size:14px; margin-top:4px;">
+                <strong x-text="companyApplications.last365Days"></strong>
+                <span x-text="companyApplications.last365Days === 1 ? 'time' : 'times'"></span> in the last year (365 days)
               </div>
               <div class="muted" style="font-size:11px; margin-top:10px;">
-                Recorded applications to active jobs with this company name.
+                Only matching company names count (not similar names). Deleted jobs are excluded.
               </div>
             </div>
           </div>
@@ -802,7 +799,6 @@
         window.addEventListener('job-history-refresh', (e) => {
           if (!e.detail || e.detail.jobId === this.jobId) {
             this.loadHistory();
-            if (detailsOk) this.loadCompanyApplications();
           }
         });
 
@@ -823,12 +819,14 @@
 
       async loadCompanyApplications(){
         const requestId = ++this._companyApplicationsRequestId;
+        const metric = window.ehPerf?.action('job.company_insights.load');
         this.companyApplications.loading = true;
         this.companyApplications.error = "";
         try {
           const response = await fetch(`/ui/jobs/${this.jobId}/company-application-summary`, {
             credentials: 'same-origin'
           });
+          metric?.response(response);
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           const summary = await response.json();
           if (typeof summary.available !== 'boolean' ||
@@ -838,6 +836,7 @@
                 !Number.isInteger(summary.last365Days) || summary.last365Days < summary.last90Days))) {
             throw new Error('Invalid company application summary');
           }
+          metric?.finish('ok');
           if (requestId !== this._companyApplicationsRequestId) return;
           this.companyApplications = {
             loading:false, loaded:true, error:"", available:summary.available,
@@ -845,6 +844,7 @@
             last365Days:summary.last365Days
           };
         } catch (error) {
+          metric?.finish('error');
           if (requestId !== this._companyApplicationsRequestId) return;
           this.companyApplications.error = "Could not load company application summary";
           this.companyApplications.loaded = false;

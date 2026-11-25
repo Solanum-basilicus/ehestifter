@@ -6,11 +6,12 @@ const vm = require('node:vm');
 
 const template = fs.readFileSync(path.join(__dirname, '..', 'templates', 'job.html'), 'utf8');
 
-function makePage({ fetchResponse } = {}) {
+function makePage({ fetchResponse, perf } = {}) {
   const factories = new Map();
   const events = new Map();
   const context = {
     window: {
+      ehPerf: perf,
       __relativeFromLocal: (value) => `relative:${value}`,
       addEventListener(name, callback) { events.set(name, callback); },
     },
@@ -102,16 +103,25 @@ test('job actions use no column when edit is not available', () => {
 });
 
 
-test('company application card stays in the right rail below compatibility', () => {
+test('company insights uses the private right-rail card and a vertical count layout', () => {
   const rail = template.indexOf('<!-- Right rail: Enrichers -->');
   const score = template.indexOf('id="compat-card"');
   const applications = template.indexOf('id="company-applications-card"');
   assert.ok(rail >= 0 && rail < score && score < applications);
-  assert.match(template, /id="company-applications-card"[\s\S]*?🔒 Only you/);
-  assert.match(template, /@click="loadCompanyApplications\(\)"/);
+  const card = template.slice(applications, template.indexOf('<!-- Simple modal -->', applications));
+  assert.match(card, /Company insights/);
+  assert.match(card, /class="chip-private" style="white-space:nowrap;">🔒 Only you/);
+  assert.match(card, /Your applications to/);
+  assert.match(card, /companyApplications\.companyName/);
+  assert.ok(card.indexOf('last90Days') < card.indexOf('last365Days'));
+  assert.match(card, /=== 1 \? 'time' : 'times'/);
+  assert.match(card, /in the last 90 days/);
+  assert.match(card, /in the last year \(365 days\)/);
+  assert.match(card, /Deleted jobs are excluded/);
+  assert.match(card, /@click="loadCompanyApplications\(\)"/);
 });
 
-test('company application request starts only after job details succeed', async () => {
+test('company insights loads after details and not after status changes', async () => {
   let completeDetails;
   const urls = [];
   const { page, events } = makePage({
@@ -143,8 +153,44 @@ test('company application request starts only after job details succeed', async 
   events.get('job-history-refresh')({ detail: { jobId: 'other-job' } });
   assert.equal(urls.length, 2);
   events.get('job-history-refresh')({ detail: { jobId: 'job-1' } });
+  events.get('job-history-refresh')({ detail: { jobId: 'job-1' } });
+  await page.init();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(urls.length, 3);
+  assert.equal(urls.length, 2);
+});
+
+test('company insights records request time and response timing separately', async () => {
+  const measured = [];
+  const perf = {
+    action(name) {
+      const record = { name, state: 'running' };
+      measured.push(record);
+      return {
+        response(response) { record.response = response; },
+        finish(state) { record.state = state; },
+      };
+    },
+  };
+  let count = 0;
+  const { page } = makePage({
+    perf,
+    fetchResponse: async () => {
+      count += 1;
+      if (count === 1) return { ok: false, status: 503 };
+      return { ok: true, status: 200, headers: { get: () => 'core;dur=12' }, json: async () => ({
+        available: true, companyName: 'Agency', last90Days: 1, last365Days: 4,
+      }) };
+    },
+  });
+  await page.loadCompanyApplications();
+  assert.equal(measured[0].name, 'job.company_insights.load');
+  assert.equal(measured[0].response.status, 503);
+  assert.equal(measured[0].state, 'error');
+  await page.loadCompanyApplications();
+  assert.equal(measured[1].name, 'job.company_insights.load');
+  assert.equal(measured[1].response.status, 200);
+  assert.equal(measured[1].state, 'ok');
+  assert.equal(page.companyApplications.last90Days, 1);
 });
 
 test('company summary error can be retried without showing a false zero', async () => {
